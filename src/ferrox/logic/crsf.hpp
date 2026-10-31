@@ -372,6 +372,47 @@ constexpr bool parse_telemetry(uint8_t type, std::span<const uint8_t> p, Telemet
     }
 }
 
+inline constexpr uint8_t kAddrBroadcast = 0x00;
+inline constexpr uint8_t kTypeDevicePing = 0x28;
+inline constexpr uint8_t kTypeDeviceInfo = 0x29;
+inline constexpr uint8_t kTypeParamEntry = 0x2B;
+inline constexpr uint8_t kTypeParamRead = 0x2C;
+inline constexpr uint8_t kTypeParamWrite = 0x2D;
+
+/// Device ping (0x28) to all devices. Returns 6 bytes.
+constexpr std::size_t build_ping(std::array<uint8_t, 6>& out) {
+    out = {kSyncByte, 4, kTypeDevicePing, kAddrBroadcast, kAddrRadioTransmitter, 0};
+    out[5] = crc8(std::span<const uint8_t>(out.data() + 2, 3));
+    return out.size();
+}
+
+/// Extended parameter read/write frame with a single value or chunk byte. Returns 8 bytes.
+constexpr std::size_t build_param_ext(uint8_t target, uint8_t type, uint8_t param, uint8_t value,
+                                      std::array<uint8_t, 8>& out) {
+    out = {kSyncByte, 6, type, target, kAddrRadioTransmitter, param, value, 0};
+    out[7] = crc8(std::span<const uint8_t>(out.data() + 2, 5));
+    return out.size();
+}
+
+/// Parameter write with an arbitrary payload. Returns the frame length.
+constexpr std::size_t build_param_write_multi(uint8_t target, uint8_t param,
+                                              std::span<const uint8_t> payload,
+                                              std::array<uint8_t, 16>& out) {
+    out = {};
+    out[0] = kSyncByte;
+    out[1] = static_cast<uint8_t>(5 + payload.size());
+    out[2] = kTypeParamWrite;
+    out[3] = target;
+    out[4] = kAddrRadioTransmitter;
+    out[5] = param;
+    for (std::size_t i = 0; i < payload.size(); ++i) {
+        out[6 + i] = payload[i];
+    }
+    const std::size_t end = 6 + payload.size();
+    out[end] = crc8(std::span<const uint8_t>(out.data() + 2, end - 2));
+    return end + 1;
+}
+
 /// Byte-wise CRSF frame assembler. Accepts frames with sync bytes 0xC8/0xEA/0xEC/0xEE
 /// and drops frames with a bad CRC. The returned span points into the internal buffer
 /// and stays valid until the next call to push().
