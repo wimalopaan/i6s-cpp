@@ -18,7 +18,9 @@ Ported so far:
 
 - Storage: external I2C EEPROM driver (I2C2, PB10/PB11, probes 0x50..0x57), A/B radio slots with CRC-16 and fallback, model slots, sanitize rules, and legacy v1–v4 migration. Logic in `logic/storage.hpp` (host-tested, layout checked with static_asserts), driver in `hw/eeprom.hpp`. Loaded at boot in `main.cpp`. Saves are not yet triggered from a UI. Not tested on hardware.
 
-Not yet ported: LCD/UI, buzzer, USB, mixer, trainer.
+- Mixer (pure logic, host-tested): channel constants, switch model, trim offsets (`logic/trim.hpp`), and the full channel pipeline with 32 matrix lines, wing/tail templates, dual rates and expo, dynamic weights from pots/GVars, heli/arm lockout, timers, and channel reversing (`logic/mixer.hpp`). Not yet wired into the RC output because input reading is not ported. Not tested on hardware.
+
+Not yet ported: LCD/UI, buzzer, USB, trainer, switch/ADC input reading, trim key state machine, throttle curve, flight timer state machine.
 
 ## Build
 

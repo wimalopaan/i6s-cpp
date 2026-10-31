@@ -6,8 +6,11 @@
 #include "ferrox/logic/brr.hpp"
 #include "ferrox/logic/crsf.hpp"
 #include "ferrox/logic/crsf_menu.hpp"
+#include "ferrox/logic/mixer.hpp"
 #include "ferrox/logic/power.hpp"
 #include "ferrox/logic/storage.hpp"
+#include "ferrox/logic/switches.hpp"
+#include "ferrox/logic/trim.hpp"
 #include "ferrox/util/ring.hpp"
 
 using namespace ferrox;
@@ -309,6 +312,187 @@ void storage_test() {
           "legacy v2-v4 slot must migrate");
 }
 
+// Compile-time checks of the pure mixer math.
+static_assert(logic::mixer::apply_dr_expo(1000, 100, 50) == 1000);
+static_assert(logic::mixer::apply_dr_expo(-1000, 100, -50) == -1000);
+static_assert(logic::trim::apply(1500, 10) == 1540);
+static_assert(logic::trim::apply(990, -25) == logic::kChannelMinUs);
+
+void mixer_test() {
+    namespace mx = logic::mixer;
+    using logic::Switches;
+    using logic::SwitchPos;
+    using logic::storage::default_model_config;
+    using logic::storage::MixLine;
+    using logic::storage::ModelConfig;
+
+    const logic::trim::TrimValues no_trim{};
+    const std::array<int16_t, 2> pots0{0, 0};
+    const Switches sw_default{};
+
+    auto run = [&](int16_t roll, int16_t pitch, uint16_t thr, int16_t yaw, std::span<const int16_t> pots,
+                   const Switches& sw, const ModelConfig& m) {
+        return mx::compute_channels(roll, pitch, thr, yaw, pots, sw, m, no_trim, 0);
+    };
+
+    // Dual rates and expo.
+    check(mx::apply_dr_expo(0, 100, 0) == 0 && mx::apply_dr_expo(500, 100, 0) == 500, "linear identity");
+    check(mx::apply_dr_expo(1000, 50, 0) == 500 && mx::apply_dr_expo(-1000, 50, 0) == -500, "50% rate");
+    check(mx::apply_dr_expo(1000, 10, 0) == 300, "rate clamps to 30");
+    check(mx::apply_dr_expo(1000, 120, 0) == 1000, "rate clamps to 100");
+    check(mx::apply_dr_expo(500, 100, 50) < 500, "positive expo softens center");
+    check(mx::apply_dr_expo(500, 100, -50) > 500, "negative expo sharpens center");
+
+    // Switch conditions.
+    Switches sw{};
+    sw.sa = SwitchPos::Up;
+    sw.sb = SwitchPos::Mid;
+    sw.sc = SwitchPos::Down;
+    sw.sd = SwitchPos::Up;
+    check(mx::is_switch_active(0, sw) && mx::is_switch_active(1, sw) && !mx::is_switch_active(2, sw),
+          "SA conditions");
+    check(mx::is_switch_active(4, sw) && !mx::is_switch_active(5, sw), "SB mid/down");
+    check(mx::is_switch_active(8, sw) && !mx::is_switch_active(7, sw), "SC down/mid");
+    check(!mx::eval_arm_switch(0, sw) && !mx::eval_arm_switch(23, sw), "arm switch bounds");
+
+    // Centered and full-deflection output.
+    ModelConfig base = default_model_config(0);
+    auto centered = run(0, 0, 500, 0, pots0, sw_default, base);
+    check(centered[0] == 1500 && centered[1] == 1500 && centered[2] == 1500 && centered[3] == 1500,
+          "neutral sticks must center CH1..CH4");
+    auto full = run(1000, 0, 0, 0, pots0, sw_default, base);
+    check(full[0] == logic::kChannelMaxUs && full[2] == logic::kChannelMinUs, "full deflection bounds");
+    auto neg = run(-1000, 0, 1000, 0, pots0, sw_default, base);
+    check(neg[0] == logic::kChannelMinUs && neg[2] == logic::kChannelMaxUs, "negative deflection bounds");
+
+    // Wing/tail templates.
+    ModelConfig elevon = base;
+    elevon.wing_tail_mix = 1;
+    auto e1 = run(0, 1000, 0, 0, pots0, sw_default, elevon);
+    check(e1[0] == 1756 && e1[1] == 1756, "elevon pitch-up at 50%");
+    auto e2 = run(1000, 1000, 0, 0, pots0, sw_default, elevon);
+    check(e2[0] == 1500 && e2[1] == logic::kChannelMaxUs, "elevon corner without clipping");
+    elevon.template_diff = 50;
+    auto e3 = run(1000, 0, 0, 0, pots0, sw_default, elevon);
+    check(e3[1] == 1756 && e3[0] == 1372, "elevon differential attenuates down side");
+
+    ModelConfig vtail = base;
+    vtail.wing_tail_mix = 2;
+    auto v1 = run(0, 1000, 0, 0, pots0, sw_default, vtail);
+    check(v1[1] == 1756 && v1[3] == 1756, "V-tail pitch-up at 50%");
+    auto v2 = run(0, 1000, 0, 1000, pots0, sw_default, vtail);
+    check(v2[1] == logic::kChannelMaxUs && v2[3] == 1500, "V-tail corner");
+
+    // Unipolar throttle source used as compensation.
+    ModelConfig uni = base;
+    uni.mixes[0] = MixLine{.target_ch = 2, .source = 30, .weight_src = 0, .weight = -20, .offset = 0,
+                           .switch_sel = 0, .mode = 0, .reserved = 0};
+    check(run(0, 0, 0, 0, pots0, sw_default, uni)[1] == 1500, "elevator neutral at idle throttle");
+    check(run(0, 0, 1000, 0, pots0, sw_default, uni)[1] == 1398, "elevator compensation at full throttle");
+
+    // Aux channels 15..18 mapped to switches, CH18 reversed.
+    ModelConfig aux = base;
+    aux.aux_channels[10] = 7;
+    aux.aux_channels[11] = 8;
+    aux.aux_channels[12] = 9;
+    aux.aux_channels[13] = 10;
+    aux.channel_reverse = 1u << 17;
+    Switches sw18{};
+    sw18.sa = SwitchPos::Down;
+    sw18.sb = SwitchPos::Mid;
+    sw18.sc = SwitchPos::Up;
+    sw18.sd = SwitchPos::Down;
+    auto c18 = run(0, 0, 500, 0, pots0, sw18, aux);
+    check(c18[14] == logic::kChannelMaxUs && c18[15] == 1500 && c18[16] == logic::kChannelMinUs &&
+              c18[17] == logic::kChannelMinUs,
+          "aux switch mapping with reversal on CH18");
+
+    // Channel reversing.
+    ModelConfig rev = base;
+    rev.channel_reverse = 1;
+    check(run(1000, 0, 0, 0, pots0, sw_default, rev)[0] == logic::kChannelMinUs, "CH1 reversed");
+
+    // Matrix mixer ADD and REPLACE.
+    ModelConfig matrix = base;
+    matrix.aux_channels[0] = 0;
+    matrix.mixes[0] = MixLine{.target_ch = 5, .source = 1, .weight_src = 0, .weight = 50, .offset = 0,
+                              .switch_sel = 0, .mode = 0, .reserved = 0};
+    check(run(1000, 0, 0, 0, pots0, sw_default, matrix)[4] == 1756, "matrix ADD 50%");
+    matrix.mixes[0].mode = 2;
+    matrix.mixes[0].weight = 100;
+    check(run(1000, 0, 0, 0, pots0, sw_default, matrix)[4] == logic::kChannelMaxUs, "matrix REPLACE 100%");
+
+    // Dynamic weight modulation from pot VRA (CH5).
+    ModelConfig dyn = base;
+    dyn.aux_channels[0] = 5;
+    dyn.aux_channels[1] = 0;
+    dyn.mixes[0] = MixLine{.target_ch = 6, .source = 1, .weight_src = 5, .weight = 100, .offset = 0,
+                           .switch_sel = 0, .mode = 0, .reserved = 0};
+    const std::array<int16_t, 2> pot_full{1000, 0};
+    const std::array<int16_t, 2> pot_neg{-500, 0};
+    check(run(1000, 0, 0, 0, pot_full, sw_default, dyn)[5] == logic::kChannelMaxUs, "VRA +100% weight");
+    check(run(1000, 0, 0, 0, pots0, sw_default, dyn)[5] == 1500, "VRA 0% weight");
+    check(run(1000, 0, 0, 0, pot_neg, sw_default, dyn)[5] == 1244, "VRA -50% weight inverts");
+
+    // Gvars as source and as weight modulator.
+    ModelConfig gv = base;
+    gv.gvars[0] = 500;
+    gv.gvars[1] = -800;
+    gv.mixes[0] = MixLine{.target_ch = 6, .source = 41, .weight_src = 0, .weight = 100, .offset = 0,
+                          .switch_sel = 0, .mode = 2, .reserved = 0};
+    check(run(0, 0, 0, 0, pots0, sw_default, gv)[5] == 1756, "GV1 as source");
+    gv.mixes[0] = MixLine{.target_ch = 6, .source = 1, .weight_src = 38, .weight = 100, .offset = 0,
+                          .switch_sel = 0, .mode = 2, .reserved = 0};
+    check(run(1000, 0, 0, 0, pots0, sw_default, gv)[5] == 1091, "GV2 modulates roll weight");
+
+    // All 32 mix lines execute in order.
+    ModelConfig cascade = base;
+    for (auto& m : cascade.mixes) {
+        m = MixLine{.target_ch = 18, .source = 11, .weight_src = 0, .weight = 1, .offset = 0,
+                    .switch_sel = 0, .mode = 0, .reserved = 0};
+    }
+    check(run(0, 0, 0, 0, pots0, sw_default, cascade)[17] == 1663, "32 cascading mixes");
+
+    // Switch-based source, 3-position mapping.
+    ModelConfig sa_map = base;
+    sa_map.aux_channels[0] = 7;
+    Switches s3{};
+    s3.sa = SwitchPos::Up;
+    check(run(0, 0, 500, 0, pots0, s3, sa_map)[4] == logic::kChannelMinUs, "SA Up -> 988");
+    s3.sa = SwitchPos::Mid;
+    check(run(0, 0, 500, 0, pots0, s3, sa_map)[4] == 1500, "SA Mid -> 1500");
+    s3.sa = SwitchPos::Down;
+    check(run(0, 0, 500, 0, pots0, s3, sa_map)[4] == logic::kChannelMaxUs, "SA Down -> 2012");
+
+    // Heli throttle hold and arm-switch lockout.
+    ModelConfig heli = base;
+    heli.model_type = static_cast<uint8_t>(mx::ModelType::Heli);
+    Switches hold{};
+    hold.sa = SwitchPos::Down;
+    check(run(0, 0, 1000, 0, pots0, hold, heli)[2] == logic::kChannelMinUs, "heli throttle hold");
+    Switches flight{};
+    flight.sa = SwitchPos::Up;
+    check(run(0, 0, 1000, 0, pots0, flight, heli)[2] == logic::kChannelMaxUs, "heli flight throttle");
+
+    ModelConfig armed = base;
+    armed.arm_switch = 1;
+    check(run(0, 0, 1000, 0, pots0, hold, armed)[2] == logic::kChannelMinUs, "disarmed throttle lockout");
+    check(run(0, 0, 1000, 0, pots0, flight, armed)[2] == logic::kChannelMaxUs, "armed throttle output");
+
+    // Flight timer trigger modes.
+    bool latched = false;
+    check(!mx::is_timer_active(0, 500, latched, sw_default, true), "timer off");
+    check(!mx::is_timer_active(1, -950, latched, sw_default, true) &&
+              mx::is_timer_active(1, -850, latched, sw_default, true),
+          "THs threshold");
+    latched = false;
+    check(!mx::is_timer_active(2, -1000, latched, sw_default, true), "THt idle not latched");
+    check(mx::is_timer_active(2, -500, latched, sw_default, true), "THt latches on throttle");
+    check(mx::is_timer_active(2, -1000, latched, sw_default, true), "THt keeps running at idle");
+    check(mx::is_timer_active(3, -1000, latched, sw_default, true), "timer always on");
+    check(!mx::is_timer_active(3, 0, latched, sw_default, false), "timer inhibited when disarmed");
+}
+
 }  // namespace
 
 int main() {
@@ -316,6 +500,7 @@ int main() {
     crsf_framer_test();
     crsf_menu_test();
     storage_test();
+    mixer_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }
