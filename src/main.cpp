@@ -1,5 +1,6 @@
 #include <array>
 #include <cstdint>
+#include <string_view>
 
 #include "ferrox/chip/mcu.hpp"
 #include "ferrox/chip/watchdog.hpp"
@@ -8,13 +9,16 @@
 #include "ferrox/hw/eeprom.hpp"
 #include "ferrox/hw/gpio.hpp"
 #include "ferrox/hw/keys.hpp"
+#include "ferrox/hw/st7567.hpp"
 #include "ferrox/logic/brr.hpp"
 #include "ferrox/logic/flight.hpp"
+#include "ferrox/logic/framebuffer.hpp"
 #include "ferrox/logic/input.hpp"
 #include "ferrox/logic/mixer.hpp"
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
 #include "ferrox/logic/trim.hpp"
+#include "ferrox/logic/widgets.hpp"
 #include "ferrox/time/systick.hpp"
 
 namespace {
@@ -28,6 +32,23 @@ ferrox::logic::storage::RadioStorage g_storage{};
 
 // Calibration and filter state derived from g_storage.radio.
 ferrox::logic::input::Calibration g_calib{};
+
+// Display content is rendered into this buffer and flushed to the ST7567.
+ferrox::logic::display::Framebuffer g_fb{};
+
+// Temporary raw-stick debug screen until the LCD UI is ported.
+void draw_debug_screen(const ferrox::logic::input::InputState& in) {
+    using namespace ferrox::logic;
+    g_fb.clear();
+    widgets::draw_header(g_fb, "FS-i6X");
+    constexpr std::array<std::string_view, 4> kLabels{"CH1", "CH2", "CH3", "CH4"};
+    for (std::size_t i = 0; i < kLabels.size(); ++i) {
+        const uint16_t raw = in.raw[i];
+        const int fill = static_cast<int>(raw) * 40 / 4096;
+        widgets::draw_gauge_row(g_fb, 14 + static_cast<int>(i) * 12, kLabels[i], fill, raw);
+    }
+    ferrox::hw::lcd::flush(g_fb);
+}
 
 ferrox::logic::input::BoardSwitches read_board_switches() {
     using ferrox::hw::Pin;
@@ -109,12 +130,16 @@ int main() {
     const uint8_t baud_idx = model.crsf_baud < logic::kBaudRates.size() ? model.crsf_baud : logic::kDefaultBaudIndex;
     hw::crsf::set_enabled(true, baud_idx, model.crsf_half_duplex != 0);
 
+    hw::lcd::init();
+    hw::lcd::set_backlight_level(100);
+
     if (!was_watchdog_reset) {
         run_preflight(model);
     }
 
     const auto stick_mode = logic::safety::stick_mode_from(g_storage.radio.stick_mode);
     const logic::trim::TrimValues no_trim{};
+    uint32_t last_draw_ms = 0;
 
     for (;;) {
         chip::watchdog::feed();
@@ -124,6 +149,10 @@ int main() {
         g_keys = hw::keys::scan_keys();
 
         const uint32_t now = time::millis();
+        if (now - last_draw_ms >= 100) {
+            draw_debug_screen(input);
+            last_draw_ms = now;
+        }
         if (model.rf_protocol == 1) {
             const bool armed = logic::flight::is_armed(model.arm_switch, input.switches);
             const auto channels =

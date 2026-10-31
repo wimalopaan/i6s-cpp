@@ -4,7 +4,7 @@ C++26 port of the FlySky FS-i6X firmware (originally `ferrox-rc/flysky-i6x-rs`, 
 
 Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static polymorphism only (no virtual), no heap, no exceptions/RTTI.
 
-## Status: foundation, CRSF, storage, mixer, input, RC output
+## Status: foundation, CRSF, storage, mixer, input, RC output, LCD
 
 Ported so far:
 - Chip/CMSIS: system clock (48 MHz), reset flags, DFU entry and jump, UID
@@ -23,8 +23,9 @@ Ported so far:
 - Input (pure logic, host-tested): stick and pot filtering and normalization with detent and Hall deadbands, ADC mode resolution, 2/3/6-position switch decoding, SE/SF pin decoding, extended ADC switches, and battery EMA filter (`logic/input.hpp`). Calibration comes from the radio storage. Wired into `main.cpp` (PC12/PC15 read as board switches). Not tested on hardware.
 
 - RC output (pure logic, host-tested): startup preflight (throttle position per model type, heli throttle hold, safe switches, cancel key), safe-idle failsafe pulses, stick mode mapping, and the mixer call for RC channels with arm lockout (`logic/safety.hpp`, `logic/flight.hpp`). Wired into `main.cpp`: preflight runs at boot unless the watchdog reset, CRSF uses the model baud rate, and channels are sent when `rf_protocol == 1`. Not tested on hardware.
+- LCD (ST7567 128x64, 6800-style bus on GPIOE data bus): CMSIS-only driver with init, backlight PWM (TIM3 CH4) and page flush (`hw/st7567.hpp`). Framebuffer primitives, 4x6 and 6x10 fonts (verified byte-for-byte against the Rust tables), and header, footer, list, gauge, progress and scrollbar widgets are constexpr and host-tested (`logic/framebuffer.hpp`, `logic/fonts.hpp`, `logic/widgets.hpp`). `main.cpp` shows a temporary raw-stick debug screen. Not tested on hardware.
 
-Not yet ported: LCD/UI, buzzer, USB, trainer, trim key state machine, throttle curve (linear pass-through for now), flight timer state machine and arm chimes, AFHDS2A RF (models with `rf_protocol == 0` do not transmit).
+Not yet ported: LCD UI screens (dashboard, menus, splash, icon row), buzzer, USB, trainer, trim key state machine, throttle curve (linear pass-through for now), flight timer state machine and arm chimes, AFHDS2A RF (models with `rf_protocol == 0` do not transmit).
 
 ## Build
 

@@ -7,6 +7,7 @@
 #include "ferrox/logic/crsf.hpp"
 #include "ferrox/logic/crsf_menu.hpp"
 #include "ferrox/logic/flight.hpp"
+#include "ferrox/logic/framebuffer.hpp"
 #include "ferrox/logic/input.hpp"
 #include "ferrox/logic/mixer.hpp"
 #include "ferrox/logic/power.hpp"
@@ -14,6 +15,7 @@
 #include "ferrox/logic/storage.hpp"
 #include "ferrox/logic/switches.hpp"
 #include "ferrox/logic/trim.hpp"
+#include "ferrox/logic/widgets.hpp"
 #include "ferrox/util/ring.hpp"
 
 using namespace ferrox;
@@ -674,6 +676,86 @@ void safety_test() {
     check(thr_ch[2] > 1500 && thr_ch[2] <= 2012, "throttle stick up raises throttle");
 }
 
+int lit_pixels(const ferrox::logic::display::Framebuffer& fb) {
+    int n = 0;
+    for (uint8_t b : fb.data()) {
+        for (int i = 0; i < 8; ++i) {
+            n += (b >> i) & 1;
+        }
+    }
+    return n;
+}
+
+void display_test() {
+    using ferrox::logic::display::Framebuffer;
+    using namespace ferrox::logic;
+
+    Framebuffer fb;
+    fb.set_pixel(5, 9, true);
+    check(fb.data()[1 * 128 + 5] == 0x02 && lit_pixels(fb) == 1, "set_pixel page/bit placement");
+    fb.set_pixel(-1, 0, true);
+    fb.set_pixel(128, 0, true);
+    fb.set_pixel(0, 64, true);
+    check(lit_pixels(fb) == 1, "set_pixel ignores out-of-bounds");
+
+    fb.clear();
+    fb.fill_rect(-5, -5, 10, 10, true);
+    check(lit_pixels(fb) == 25, "fill_rect clips to the screen");
+
+    fb.clear();
+    fb.draw_rect(0, 0, 10, 6, true);
+    check(lit_pixels(fb) == 28, "draw_rect outline pixel count");
+
+    fb.clear();
+    fb.draw_char_4x6(0, 0, 'A', false);
+    check(lit_pixels(fb) == 10 && (fb.data()[0] & 0x02) != 0, "4x6 'A' glyph");
+
+    fb.fill_rect(0, 0, 4, 6, true);
+    fb.draw_char_4x6(0, 0, 'A', true);
+    check(lit_pixels(fb) == 14, "inverted glyph clears lit pixels only");
+
+    fb.clear();
+    fb.draw_char_4x6(0, 0, '\x7f', false);
+    fb.draw_char_6x10(0, 0, '\t', false);
+    check(lit_pixels(fb) == 0, "non-printable characters are skipped");
+
+    fb.clear();
+    fb.draw_char_6x10(0, 0, 'I', false);
+    check(lit_pixels(fb) == 11, "6x10 'I' glyph");
+
+    fb.clear();
+    widgets::draw_header(fb, "AB");
+    check((fb.data()[1 * 128 + 0] & 0x08) != 0 && (fb.data()[1 * 128 + 127] & 0x08) != 0,
+          "header divider spans full width at y=11");
+
+    fb.clear();
+    widgets::draw_footer(fb, "X");
+    check((fb.data()[6 * 128 + 0] & 0x80) != 0 && (fb.data()[6 * 128 + 127] & 0x80) != 0,
+          "footer divider at y=55");
+
+    fb.clear();
+    widgets::draw_list_row(fb, 1, true, "A", "", 0);
+    check((fb.data()[2 * 128 + 2] & 0x80) != 0 && (fb.data()[3 * 128 + 125] & 0x80) != 0 &&
+              (fb.data()[2 * 128 + 126] & 0x80) == 0 && (fb.data()[4 * 128 + 2] & 0x01) == 0,
+          "selected list row highlight 2..125 x 23..31");
+
+    fb.clear();
+    widgets::draw_scrollbar(fb, 0, 4, 14, 40);
+    check((fb.data()[1 * 128 + 126] & 0x40) != 0 && (fb.data()[1 * 128 + 125] & 0x40) != 0 &&
+              (fb.data()[5 * 128 + 125] & 0x10) == 0,
+          "scrollbar track and thumb at top");
+
+    fb.clear();
+    widgets::draw_progress_bar(fb, 0, 0, 102, 8, 0, 0);
+    check((fb.data()[0 * 128 + 50] & 0x10) != 0 && (fb.data()[0 * 128 + 51] & 0x10) == 0,
+          "progress bar fill at mid-scale");
+
+    const auto d = widgets::format_u16_4(42);
+    const auto max = widgets::format_u16_4(65535);
+    check(d[0] == '0' && d[1] == '0' && d[2] == '4' && d[3] == '2', "gauge value zero-padded");
+    check(max[0] == '9' && max[3] == '9', "gauge value clamped to 9999");
+}
+
 }  // namespace
 
 int main() {
@@ -684,6 +766,7 @@ int main() {
     mixer_test();
     input_test();
     safety_test();
+    display_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }
