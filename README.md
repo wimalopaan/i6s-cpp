@@ -4,7 +4,7 @@ C++26 port of the FlySky FS-i6X firmware (originally `ferrox-rc/flysky-i6x-rs`, 
 
 Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static polymorphism only (no virtual), no heap, no exceptions/RTTI.
 
-## Status: foundation only
+## Status: foundation + CRSF link layer
 
 Ported so far:
 - Chip/CMSIS: system clock (48 MHz), reset flags, DFU entry and jump, UID
@@ -12,8 +12,9 @@ Ported so far:
 - SysTick millisecond timer
 - GPIO helpers, ADC scan (DMA), USART2 with BRR logic, keys matrix and DFU check
 - Pure constexpr logic (BRR, battery voltage, key bits, SPSC ring) with host tests
+- CRSF: CRC-8, channel scaling and RC frame (16 ch, optional ELRS arm flag), byte framer, telemetry parser (link stats, battery, vario, baro, cells, GPS, RPM, temp, attitude, flight mode), 100 Hz TX pacing, 1 s telemetry timeout. Logic in `logic/crsf.hpp` (host-tested), USART/power glue in `hw/crsf.hpp`. Not yet wired into `main.cpp`. Not tested on hardware.
 
-Not yet ported: storage, LCD/UI, buzzer, CRSF/RF protocol, USB, mixer, trainer.
+Not yet ported: CRSF parameter menu (device discovery, parameter read/write), storage, LCD/UI, buzzer, USB, mixer, trainer.
 
 ## Build
 
@@ -32,7 +33,7 @@ Host tests (clang-20 required for C++26):
 
 - `src/ferrox/arch/`: CMSIS include, critical section
 - `src/ferrox/chip/`: clock, reset, DFU, watchdog
-- `src/ferrox/hw/`: GPIO, ADC, UART, keys
+- `src/ferrox/hw/`: GPIO, ADC, UART, keys, CRSF link
 - `src/ferrox/time/`: SysTick millis
 - `src/ferrox/logic/`, `src/ferrox/util/`: pure logic and ring buffer (host-testable)
 - `third_party/cmsis/`: ARM CMSIS_5 core and ST CMSIS device files (Apache-2.0)
