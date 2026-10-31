@@ -3,6 +3,7 @@
 #include "ferrox/chip/mcu.hpp"
 #include "ferrox/chip/watchdog.hpp"
 #include "ferrox/hw/adc.hpp"
+#include "ferrox/hw/crsf.hpp"
 #include "ferrox/hw/keys.hpp"
 #include "ferrox/logic/power.hpp"
 #include "ferrox/time/systick.hpp"
@@ -38,12 +39,18 @@ int main() {
 
     hw::adc::wait_first_conversion();
 
+    // RC channel output stays off until the mixer and storage are ported.
+    // Telemetry and the parameter menu run from the default ELRS baud rate.
+    hw::crsf::set_enabled(true, logic::kDefaultBaudIndex, false);
+
     for (;;) {
         chip::watchdog::feed();
 
         const auto raw = hw::adc::read_raw();
         g_battery_mv = logic::battery_mv(raw[10]);
         g_keys = hw::keys::scan_keys();
+
+        hw::crsf::poll_telemetry(time::millis());
 
         __WFI();
     }
