@@ -16,7 +16,9 @@ Ported so far:
 
 - CRSF parameter menu (API only, no LCD UI): device discovery via ping and device info, parameter loading in folder order with chunks, retries and timeouts, value write (clamped, select cycling), folder navigation, and command state machine. Engine in `logic/crsf_menu.hpp` (host-tested, Loader ~4.8 KB RAM), glue in `hw/crsf.hpp`. Not tested on hardware.
 
-Not yet ported: storage, LCD/UI, buzzer, USB, mixer, trainer.
+- Storage: external I2C EEPROM driver (I2C2, PB10/PB11, probes 0x50..0x57), A/B radio slots with CRC-16 and fallback, model slots, sanitize rules, and legacy v1–v4 migration. Logic in `logic/storage.hpp` (host-tested, layout checked with static_asserts), driver in `hw/eeprom.hpp`. Loaded at boot in `main.cpp`. Saves are not yet triggered from a UI. Not tested on hardware.
+
+Not yet ported: LCD/UI, buzzer, USB, mixer, trainer.
 
 ## Build
 

@@ -4,8 +4,10 @@
 #include "ferrox/chip/watchdog.hpp"
 #include "ferrox/hw/adc.hpp"
 #include "ferrox/hw/crsf.hpp"
+#include "ferrox/hw/eeprom.hpp"
 #include "ferrox/hw/keys.hpp"
 #include "ferrox/logic/power.hpp"
+#include "ferrox/logic/storage.hpp"
 #include "ferrox/time/systick.hpp"
 
 namespace {
@@ -13,6 +15,9 @@ namespace {
 // Latest measurements, updated by the main loop (read by later UI/RF code).
 volatile uint16_t g_battery_mv = 0;
 volatile uint16_t g_keys = 0;
+
+// Radio and active model settings loaded from the external EEPROM.
+ferrox::logic::storage::RadioStorage g_storage{};
 
 }  // namespace
 
@@ -33,8 +38,13 @@ int main() {
 
     chip::watchdog::start();
 
-    // Storage (ext_adc flag) is not ported yet, so the 11-channel scan is used.
-    hw::adc::init(false);
+    if (hw::I2c2Eeprom::init()) {
+        logic::storage::load_storage<hw::I2c2Eeprom>(g_storage);
+    } else {
+        g_storage = logic::storage::default_storage();
+    }
+
+    hw::adc::init(g_storage.radio.ext_adc != 0);
     chip::watchdog::feed();
 
     hw::adc::wait_first_conversion();
