@@ -5,8 +5,9 @@
 #include "ferrox/hw/adc.hpp"
 #include "ferrox/hw/crsf.hpp"
 #include "ferrox/hw/eeprom.hpp"
+#include "ferrox/hw/gpio.hpp"
 #include "ferrox/hw/keys.hpp"
-#include "ferrox/logic/power.hpp"
+#include "ferrox/logic/input.hpp"
 #include "ferrox/logic/storage.hpp"
 #include "ferrox/time/systick.hpp"
 
@@ -18,6 +19,19 @@ volatile uint16_t g_keys = 0;
 
 // Radio and active model settings loaded from the external EEPROM.
 ferrox::logic::storage::RadioStorage g_storage{};
+
+// Calibration and filter state derived from g_storage.radio.
+ferrox::logic::input::Calibration g_calib{};
+
+ferrox::logic::input::BoardSwitches read_board_switches() {
+    using ferrox::hw::Pin;
+    using ferrox::hw::Port;
+    return {.se_high = Pin<Port::C, 12>::read(), .sf_high = Pin<Port::C, 15>::read()};
+}
+
+ferrox::logic::input::InputState sample_inputs() {
+    return ferrox::logic::input::process(ferrox::hw::adc::read_raw(), read_board_switches(), g_calib);
+}
 
 }  // namespace
 
@@ -49,15 +63,21 @@ int main() {
 
     hw::adc::wait_first_conversion();
 
-    // RC channel output stays off until the mixer and storage are ported.
-    // Telemetry and the parameter menu run from the default ELRS baud rate.
+    logic::input::apply_calibration(g_storage.radio, g_calib);
+    // Prime the jitter and battery filters before the first real sample.
+    for (int i = 0; i < 16; ++i) {
+        (void)sample_inputs();
+    }
+
+    // RC channel output stays off: the arm, safety and idle logic of the Rust firmware
+    // is not ported yet. Telemetry and the parameter menu run from the default ELRS baud rate.
     hw::crsf::set_enabled(true, logic::kDefaultBaudIndex, false);
 
     for (;;) {
         chip::watchdog::feed();
 
-        const auto raw = hw::adc::read_raw();
-        g_battery_mv = logic::battery_mv(raw[10]);
+        const auto input = sample_inputs();
+        g_battery_mv = input.battery_mv;
         g_keys = hw::keys::scan_keys();
 
         hw::crsf::poll_telemetry(time::millis());

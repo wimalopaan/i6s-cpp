@@ -6,6 +6,7 @@
 #include "ferrox/logic/brr.hpp"
 #include "ferrox/logic/crsf.hpp"
 #include "ferrox/logic/crsf_menu.hpp"
+#include "ferrox/logic/input.hpp"
 #include "ferrox/logic/mixer.hpp"
 #include "ferrox/logic/power.hpp"
 #include "ferrox/logic/storage.hpp"
@@ -493,6 +494,96 @@ void mixer_test() {
     check(!mx::is_timer_active(3, 0, latched, sw_default, false), "timer inhibited when disarmed");
 }
 
+void input_test() {
+    namespace in = logic::input;
+    namespace storage = logic::storage;
+    using logic::SwitchPos;
+
+    check(logic::battery_mv(0) <= 200, "battery empty");
+    check(logic::battery_mv(2048) > 4500 && logic::battery_mv(2048) < 5500, "battery half scale");
+    check(logic::battery_mv(4095) > 9500 && logic::battery_mv(4095) < 10500, "battery full scale");
+
+    // Detent pots: solid zero in the window, full travel outside.
+    in::AxisCalib detent{};
+    detent.min = 1000;
+    detent.center = 2048;
+    detent.max = 3000;
+    check(detent.normalize_detent(2048, in::kDetentDeadband) == 0, "detent center is zero");
+    check(detent.normalize_detent(2048 - 15, in::kDetentDeadband) == 0, "detent low edge is zero");
+    check(detent.normalize_detent(2048 + 15, in::kDetentDeadband) == 0, "detent high edge is zero");
+    check(detent.normalize_detent(1000, in::kDetentDeadband) == -1000, "detent min is -1000");
+    check(detent.normalize_detent(3000, in::kDetentDeadband) == 1000, "detent max is +1000");
+
+    check(in::decode_switch_6pos(100) == 1 && in::decode_switch_6pos(1000) == 2 &&
+              in::decode_switch_6pos(1700) == 3 && in::decode_switch_6pos(2400) == 4 &&
+              in::decode_switch_6pos(3100) == 5 && in::decode_switch_6pos(3800) == 6,
+          "6-pos steps");
+    check(in::aux_index_to_raw(0) == 4 && in::aux_index_to_raw(2) == 8 && in::aux_index_to_raw(4) == 6 &&
+              in::aux_index_to_raw(6) == 11 && in::aux_index_to_raw(9) == 14,
+          "aux to raw ADC mapping");
+
+    // Hall gimbals: deadband and inversion.
+    in::AxisCalib hall{};
+    hall.min = 1000;
+    hall.center = 2048;
+    hall.max = 3000;
+    hall.deadband = 3;
+    check(hall.normalize(2048) == 0 && hall.normalize(2049) == 0 && hall.normalize(2051) == 0 &&
+              hall.normalize(2045) == 0,
+          "hall deadband is zero");
+    check(hall.normalize(2060) > 0 && hall.normalize(2030) < 0, "hall moves outside deadband");
+    in::AxisCalib inv{};
+    inv.min = 1000;
+    inv.center = 2048;
+    inv.max = 3000;
+    inv.deadband = 3;
+    inv.invert = true;
+    check(inv.normalize(2060) < 0 && inv.normalize(2030) > 0, "inverted axis");
+
+    // Calibration from radio config: gimbal inversion mask and hall deadband.
+    auto cfg = storage::default_storage().radio;
+    cfg.gimbal_type = 1;
+    cfg.stick_invert_mask = 0b0000'1001;
+    in::Calibration calib{};
+    in::apply_calibration(cfg, calib);
+    check(calib.rh.invert && !calib.rv.invert && !calib.lv.invert && calib.lh.invert, "stick inversion mask");
+    check(calib.rh.deadband == in::kHallDeadband, "hall stick deadband");
+
+    // Extended ADC: 2-pos, 3-pos, 6-pos and pot on VRC..VRF.
+    auto ext = storage::default_storage().radio;
+    ext.ext_adc = 1;
+    ext.adc_modes[6] = 1;
+    ext.adc_modes[7] = 2;
+    ext.adc_modes[8] = 3;
+    ext.adc_modes[9] = 4;
+    in::Calibration ecal{};
+    in::apply_calibration(ext, ecal);
+    in::Raw adc_frame{};
+    adc_frame.fill(2048);
+    adc_frame[11] = 3500;
+    adc_frame[12] = 2048;
+    adc_frame[13] = 2500;
+    adc_frame[14] = 4095;
+    const auto st = in::process(adc_frame, in::BoardSwitches{}, ecal);
+    check(st.switches.swi == SwitchPos::Down, "ext 2-pos switch down");
+    check(st.switches.swj == SwitchPos::Mid, "ext 3-pos switch mid");
+    check(st.aux_pots[8] == 200, "ext 6-pos step 4");
+    check(st.aux_pots[9] == 1000, "ext pot at max");
+    check(st.pots.vr3 == st.aux_pots[6], "pots mirror aux channels");
+
+    // Board switches SE/SF on PC12/PC15 (low = Down) only when external switches are enabled.
+    auto sw_cfg = storage::default_storage().radio;
+    sw_cfg.ext_switches = 1;
+    in::Calibration scal{};
+    in::apply_calibration(sw_cfg, scal);
+    const auto sw_st = in::process(in::Raw{}, in::BoardSwitches{.se_high = false, .sf_high = true}, scal);
+    check(sw_st.switches.se == SwitchPos::Down && sw_st.switches.sf == SwitchPos::Up, "SE/SF pin decode");
+    in::Calibration off{};
+    in::apply_calibration(storage::default_storage().radio, off);
+    const auto off_st = in::process(in::Raw{}, in::BoardSwitches{.se_high = false, .sf_high = false}, off);
+    check(off_st.switches.se == SwitchPos::Up && off_st.switches.sf == SwitchPos::Up, "SE/SF disabled");
+}
+
 }  // namespace
 
 int main() {
@@ -501,6 +592,7 @@ int main() {
     crsf_menu_test();
     storage_test();
     mixer_test();
+    input_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }
