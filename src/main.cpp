@@ -15,6 +15,7 @@
 #include "ferrox/logic/flight.hpp"
 #include "ferrox/logic/framebuffer.hpp"
 #include "ferrox/logic/input.hpp"
+#include "ferrox/logic/menu.hpp"
 #include "ferrox/logic/mixer.hpp"
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
@@ -44,6 +45,42 @@ ferrox::logic::input::BoardSwitches read_board_switches() {
 
 ferrox::logic::input::InputState sample_inputs() {
     return ferrox::logic::input::process(ferrox::hw::adc::read_raw(), read_board_switches(), g_calib);
+}
+
+// Holding OK this long on the dashboard opens the menu.
+constexpr uint32_t kMenuHoldMs = 1200;
+
+// Model names shown in the model list, filled from EEPROM when the list is opened.
+ferrox::logic::menu::ModelNames g_model_names{};
+
+void apply_crsf_config() {
+    using namespace ferrox;
+    const auto& model = g_storage.active_model;
+    const uint8_t baud_idx = model.crsf_baud < logic::kBaudRates.size() ? model.crsf_baud : logic::kDefaultBaudIndex;
+    hw::crsf::set_enabled(true, baud_idx, model.crsf_half_duplex != 0);
+}
+
+void refresh_model_names() {
+    using namespace ferrox;
+    for (std::size_t i = 0; i < logic::storage::kNumModels; ++i) {
+        g_model_names[i].fill(' ');
+        logic::storage::ModelConfig model{};
+        const auto addr = logic::storage::model_slot_addr(i);
+        if (addr && logic::storage::load_slot<hw::I2c2Eeprom>(*addr, model) == logic::storage::Status::Ok) {
+            g_model_names[i] = model.name;
+        }
+        chip::watchdog::feed();
+    }
+}
+
+// Stores the current model, then loads the model at `index` as the active one.
+void switch_model(uint8_t index) {
+    using namespace ferrox::logic::storage;
+    using Dev = ferrox::hw::I2c2Eeprom;
+    save_active_model<Dev>(g_storage);
+    g_storage.radio.active_model = index;
+    save_radio_config<Dev>(g_storage);
+    load_active_model<Dev>(g_storage);
 }
 
 // Blocks until sticks and switches are safe (or the cancel key is pressed), sending failsafe pulses meanwhile.
@@ -113,8 +150,7 @@ int main() {
     }
 
     const auto& model = g_storage.active_model;
-    const uint8_t baud_idx = model.crsf_baud < logic::kBaudRates.size() ? model.crsf_baud : logic::kDefaultBaudIndex;
-    hw::crsf::set_enabled(true, baud_idx, model.crsf_half_duplex != 0);
+    apply_crsf_config();
 
     hw::lcd::init();
     hw::lcd::set_backlight_level(100);
@@ -136,9 +172,11 @@ int main() {
 
     const auto stick_mode = logic::safety::stick_mode_from(g_storage.radio.stick_mode);
     const logic::trim::TrimValues no_trim{};
-    const bool crsf = model.rf_protocol == 1;
     uint32_t last_draw_ms = 0;
     uint16_t prev_keys = 0;
+    logic::menu::State menu_state{};
+    bool ok_armed = false;
+    uint32_t ok_press_ms = 0;
 
     for (;;) {
         chip::watchdog::feed();
@@ -149,11 +187,38 @@ int main() {
 
         const uint16_t pressed = static_cast<uint16_t>(g_keys & ~prev_keys);
         prev_keys = g_keys;
-        handle_keys(page_state, pressed);
-
         const uint32_t now = time::millis();
+
+        if (menu_state.screen == logic::menu::Screen::Closed) {
+            handle_keys(page_state, pressed);
+            if ((g_keys & logic::kKeyOk) == 0) {
+                ok_armed = true;
+            } else if ((pressed & logic::kKeyOk) != 0) {
+                ok_press_ms = now;
+            }
+            if (ok_armed && (g_keys & logic::kKeyOk) != 0 && now - ok_press_ms >= kMenuHoldMs) {
+                logic::menu::open(menu_state);
+                ok_armed = false;
+            }
+        } else {
+            const auto ev = logic::menu::update(menu_state, logic::menu::Input{pressed, g_keys, now}, g_storage);
+            switch (ev.action) {
+                case logic::menu::Action::EnterModelSelect: refresh_model_names(); break;
+                case logic::menu::Action::SwitchModel:
+                    switch_model(ev.index);
+                    apply_crsf_config();
+                    break;
+                case logic::menu::Action::SaveActiveModel:
+                    logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage);
+                    break;
+                case logic::menu::Action::CloseMenu:
+                case logic::menu::Action::None: break;
+            }
+        }
+
         const auto channels =
             logic::flight::rf_channels(input, stick_mode, model, no_trim, g_storage.radio.throttle_trim);
+        const bool crsf = model.rf_protocol == 1;
         if (crsf) {
             const bool armed = logic::flight::is_armed(model.arm_switch, input.switches);
             hw::crsf::update_channels(now, channels, model.crsf_arm_mode != 0, armed);
@@ -162,7 +227,11 @@ int main() {
 
         if (now - last_draw_ms >= 100) {
             g_fb.clear();
-            render(g_fb, page_state, View{input, g_storage, no_trim, channels, crsf});
+            if (menu_state.screen == logic::menu::Screen::Closed) {
+                render(g_fb, page_state, View{input, g_storage, no_trim, channels, crsf});
+            } else {
+                logic::menu::render(g_fb, menu_state, g_model_names, g_storage);
+            }
             hw::lcd::flush(g_fb);
             last_draw_ms = now;
         }

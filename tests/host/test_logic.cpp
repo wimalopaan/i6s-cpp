@@ -12,6 +12,8 @@
 #include "ferrox/logic/framebuffer.hpp"
 #include "ferrox/logic/glyphs.hpp"
 #include "ferrox/logic/input.hpp"
+#include "ferrox/logic/labels.hpp"
+#include "ferrox/logic/menu.hpp"
 #include "ferrox/logic/mixer.hpp"
 #include "ferrox/logic/power.hpp"
 #include "ferrox/logic/safety.hpp"
@@ -840,6 +842,152 @@ void dashboard_test() {
 
 }  // namespace
 
+void menu_test() {
+    namespace mn = logic::menu;
+    using mn::Action;
+    using mn::Event;
+    using mn::Screen;
+
+    auto st = logic::storage::default_storage();
+    st.radio.active_model = 2;
+    st.active_model.model_type = 0;
+    st.active_model.arm_switch = 0;
+    st.active_model.timer_secs = 0;
+
+    mn::State s{};
+    auto tick = [&](uint16_t pressed, uint16_t held, uint32_t now) {
+        return mn::update(s, mn::Input{pressed, held, now}, st);
+    };
+    auto press = [&](uint16_t key, uint32_t now) {
+        const Event e = tick(key, key, now);
+        tick(0, 0, now + 1);
+        return e;
+    };
+
+    // Keys held when the menu opens must be released before they count.
+    mn::open(s);
+    check(s.screen == Screen::Main && s.waiting_release, "open must enter main menu and wait for release");
+    tick(mn::kKeyDown, mn::kKeyDown, 0);
+    check(s.main.selected == 0, "held key must not navigate while waiting for release");
+    tick(0, 0, 10);
+    check(!s.waiting_release, "release must clear waiting state");
+
+    press(mn::kKeyDown, 20);
+    check(s.main.selected == 1, "down must move selection");
+    press(mn::kKeyUp, 40);
+    press(mn::kKeyUp, 60);
+    check(s.main.selected == 11 && s.main.scroll == 9, "up from top must wrap to last item with scroll window");
+    press(mn::kKeyDown, 80);
+    check(s.main.selected == 0 && s.main.scroll == 0, "down from last item must wrap to first");
+
+    mn::ListPos p{};
+    for (int i = 0; i < 3; ++i) {
+        mn::step_list(p, 12, mn::kMainVisible, true);
+    }
+    check(p.selected == 3 && p.scroll == 1, "scroll must follow selection past the visible window");
+
+    // Key repeat: immediate on press, then after 300 ms every 70 ms while held.
+    mn::Repeat r{};
+    check(mn::repeat_step(r, true, true, 0), "press must step immediately");
+    check(!mn::repeat_step(r, false, true, 299), "no repeat before 300 ms");
+    check(mn::repeat_step(r, false, true, 300), "first repeat at 300 ms");
+    check(!mn::repeat_step(r, false, true, 369), "no repeat before 70 ms interval");
+    check(mn::repeat_step(r, false, true, 370), "repeat at 70 ms interval");
+    check(!mn::repeat_step(r, false, false, 400) && !r.active, "release must stop repeat");
+
+    // Model select: open from item 0, navigate, load a model.
+    press(mn::kKeyUp, 100);    // wraps to item 11
+    press(mn::kKeyDown, 120);  // back to item 0
+    const Event enter = press(mn::kKeyOk, 140);
+    check(enter.action == Action::EnterModelSelect && s.screen == Screen::ModelSelect,
+          "OK on Model Select must open the model list");
+    check(s.models.selected == 2, "model list must start on the active model");
+    press(mn::kKeyDown, 160);
+    const Event sw = press(mn::kKeyOk, 180);
+    check(sw.action == Action::SwitchModel && sw.index == 3, "OK must switch to the selected model");
+    check(s.screen == Screen::Main && s.main.selected == 0, "switch must return to main menu");
+
+    // Model setup: type cycling, name editing, arm switch and timer.
+    press(mn::kKeyDown, 200);
+    press(mn::kKeyOk, 220);
+    check(s.screen == Screen::ModelSetup, "OK on Model Setup must open setup");
+
+    press(mn::kKeyDown, 230);  // row 0 (Name) -> row 1 (Type)
+    const Event type_ev = press(mn::kKeyOk, 240);
+    check(type_ev.action == Action::SaveActiveModel && st.active_model.model_type == 1,
+          "OK on Type must cycle to next type and request save");
+    for (int i = 0; i < 4; ++i) {
+        press(mn::kKeyOk, 260 + i * 10);
+    }
+    check(st.active_model.model_type == 0, "type must wrap back to first type");
+
+    press(mn::kKeyDown, 300);  // -> Arm Sw
+    press(mn::kKeyOk, 320);    // edit arm switch
+    press(mn::kKeyDown, 330);
+    check(st.active_model.arm_switch == 22, "arm switch down from 0 must wrap to last condition");
+    press(mn::kKeyUp, 340);
+    press(mn::kKeyUp, 350);
+    check(st.active_model.arm_switch == 1, "arm switch up must step through conditions");
+    const Event arm_done = press(mn::kKeyOk, 370);
+    check(arm_done.action == Action::SaveActiveModel && !s.editing, "OK must finish arm switch edit");
+
+    press(mn::kKeyDown, 380);  // -> Timer
+    press(mn::kKeyOk, 390);    // edit timer
+    press(mn::kKeyUp, 400);
+    press(mn::kKeyUp, 410);
+    press(mn::kKeyDown, 420);
+    check(st.active_model.timer_secs == 30, "timer must step by 30 s");
+    press(mn::kKeyCancel, 430);
+    check(!s.editing && s.screen == Screen::ModelSetup, "cancel must finish timer edit only");
+
+    press(mn::kKeyUp, 440);    // -> Arm Sw
+    press(mn::kKeyUp, 450);    // -> Type
+    press(mn::kKeyUp, 460);    // -> Name
+    press(mn::kKeyOk, 470);    // edit name
+    check(s.editing && s.name_cursor == 0, "OK on Name must start editing at first character");
+    st.active_model.name = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '};
+    press(mn::kKeyUp, 480);
+    check(st.active_model.name[0] == 'A', "up on space must give 'A'");
+    press(mn::kKeyUp, 490);
+    press(mn::kKeyDown, 500);
+    check(st.active_model.name[0] == 'A', "up then down must return to same character");
+    press(mn::kKeyOk, 510);
+    check(s.name_cursor == 1 && s.editing, "OK must advance the name cursor");
+    const Event name_done = press(mn::kKeyCancel, 520);
+    check(name_done.action == Action::SaveActiveModel && !s.editing && s.name_cursor == 0,
+          "cancel must end name edit and request save");
+
+    press(mn::kKeyCancel, 530);
+    check(s.screen == Screen::Main, "cancel in setup must return to main menu");
+    check(s.main.selected == 1, "main menu position must be kept");
+
+    press(mn::kKeyCancel, 540);
+    check(s.screen == Screen::Closed, "cancel in main menu must close the menu");
+
+    // Every screen must render without faulting.
+    logic::display::Framebuffer fb{};
+    const mn::ModelNames names{};
+    mn::open(s);
+    for (const Screen screen : {Screen::Main, Screen::ModelSelect, Screen::ModelSetup}) {
+        s.screen = screen;
+        fb.clear();
+        mn::render(fb, s, names, st);
+    }
+
+    check(logic::labels::switch_cond_label(22) == "SWJv", "arm switch label 22");
+    check(logic::labels::switch_cond_label(99) == "ON", "out-of-range switch label falls back to ON");
+    check(mn::next_ascii('Z') == '0' && mn::next_ascii('9') == '-' && mn::next_ascii('_') == ' ',
+          "next_ascii wrap points");
+    check(mn::prev_ascii('0') == 'Z' && mn::prev_ascii('A') == ' ', "prev_ascii wrap points");
+    check(mn::prev_ascii(mn::next_ascii('M')) == 'M', "prev must invert next");
+    check(mn::timer_text(3570).view() == std::string_view{"59:30"}, "timer text must format mm:ss");
+    check(mn::timer_text(30).view() == std::string_view{"00:30"}, "timer text must pad seconds");
+
+    const mn::ModelName named{'A', 'B', 'C', 0, 0, 0, 0, 0, 0, 0};
+    check(mn::model_row_text(0, named, true).view() == std::string_view{"M01:ABC*"}, "active model row label");
+    check(mn::model_row_text(9, named, false).view() == std::string_view{"M10:ABC"}, "two-digit model row label");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -850,6 +998,7 @@ int main() {
     safety_test();
     display_test();
     dashboard_test();
+    menu_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

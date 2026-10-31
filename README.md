@@ -4,7 +4,7 @@ C++26 port of the FlySky FS-i6X firmware (originally `ferrox-rc/flysky-i6x-rs`, 
 
 Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static polymorphism only (no virtual), no heap, no exceptions/RTTI.
 
-## Status: foundation, CRSF, storage, mixer, input, RC output, LCD, dashboard
+## Status: foundation, CRSF, storage, mixer, input, RC output, LCD, dashboard, menus
 
 Ported so far:
 - Chip/CMSIS: system clock (48 MHz), reset flags, DFU entry and jump, UID
@@ -26,7 +26,9 @@ Ported so far:
 - LCD (ST7567 128x64, 6800-style bus on GPIOE data bus): CMSIS-only driver with init, backlight PWM (TIM3 CH4) and page flush (`hw/st7567.hpp`). Framebuffer primitives, 4x6 and 6x10 fonts (verified byte-for-byte against the Rust tables), and header, footer, list, gauge, progress and scrollbar widgets are constexpr and host-tested (`logic/framebuffer.hpp`, `logic/fonts.hpp`, `logic/widgets.hpp`). Glyphs, logo, and number formatting (`logic/glyphs.hpp`, `logic/format.hpp`) are host-tested. Pot and channel-gauge widgets are added to `logic/widgets.hpp`.
 - Dashboard (pure logic, host-tested): status bar (model name, CRSF/no-RF, battery gauge with low-battery blink), page paging with keys (5 pages), gimbals page P1 (general and aircraft variants, default and adaptive switch/pot layout), channel monitor P2/P3, model page P4, splash (`logic/dashboard.hpp`). `main.cpp` shows the splash for 1.2 s, then renders at 10 Hz. Not tested on hardware.
 
-Not yet ported: LCD menus, telemetry page P5 (placeholder only), AFHDS2A RF status and model page line, buzzer, USB, trainer, trim key state machine and trim footers, throttle curve (linear pass-through for now), flight timer state machine and arm chimes, bind footer.
+- Menus (pure logic, host-tested): hold OK for 1.2 s on the dashboard to open the menu. Main menu with 3-row scrolling list, model select (20 models, names read from EEPROM on entry, OK loads a model and reconfigures CRSF), and model setup for name (char editing), type, arm switch and timer. Cancel saves and steps back. Key repeat after 300 ms, every 70 ms. Logic in `logic/menu.hpp`, shared labels in `logic/labels.hpp` (host-tested). Wired into `main.cpp`. Not tested on hardware.
+
+Not yet ported: main-menu items after "Model Setup" (dual rate, throttle curve, mixer, aux, channel reverse, radio setup, monitor, calibration, diagnostics, system info), model setup rows copy, vario, telemetry, protocol and reset, menu icons, bind, telemetry page P5 (placeholder only), AFHDS2A RF status and model page line, buzzer, USB, trainer, trim key state machine and trim footers, throttle curve (linear pass-through for now), flight timer state machine and arm chimes, bind footer.
 
 ## Build
 

@@ -10,6 +10,7 @@
 #include "ferrox/logic/channels.hpp"
 #include "ferrox/logic/flight.hpp"
 #include "ferrox/logic/format.hpp"
+#include "ferrox/logic/labels.hpp"
 #include "ferrox/logic/framebuffer.hpp"
 #include "ferrox/logic/glyphs.hpp"
 #include "ferrox/logic/input.hpp"
@@ -57,17 +58,8 @@ struct View {
     bool crsf;
 };
 
-// Model name up to the first NUL, without surrounding spaces.
-constexpr format::Text<10> model_name(const storage::ModelConfig& m) {
-    format::Text<10> t;
-    for (const uint8_t c : m.name) {
-        if (c == 0) {
-            break;
-        }
-        t.push(static_cast<char>(c));
-    }
-    return t;
-}
+using labels::model_name;
+using labels::model_type_label;
 
 constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st, uint16_t battery_mv, bool crsf,
                                uint8_t blink_phase) {
@@ -374,17 +366,6 @@ constexpr void draw_channel_page(Framebuffer& fb, const std::array<uint16_t, kNu
     } else {
         widgets::draw_footer_split(fb, "P2/5", "CH 1-10 MONITOR");
     }
-}
-
-constexpr std::string_view model_type_label(uint8_t type) {
-    switch (static_cast<mixer::ModelType>(type)) {
-        case mixer::ModelType::Airplane: return "AIRPLANE";
-        case mixer::ModelType::Glider: return "GLIDER";
-        case mixer::ModelType::Heli: return "HELICOPTER";
-        case mixer::ModelType::Quad: return "MULTI / QUAD";
-        case mixer::ModelType::General: return "GENERAL";
-    }
-    return "GENERAL";
 }
 
 constexpr void draw_model_page(Framebuffer& fb, const storage::RadioStorage& st, bool crsf) {
