@@ -1,3 +1,4 @@
+#include <array>
 #include <cstdint>
 
 #include "ferrox/chip/mcu.hpp"
@@ -7,8 +8,13 @@
 #include "ferrox/hw/eeprom.hpp"
 #include "ferrox/hw/gpio.hpp"
 #include "ferrox/hw/keys.hpp"
+#include "ferrox/logic/brr.hpp"
+#include "ferrox/logic/flight.hpp"
 #include "ferrox/logic/input.hpp"
+#include "ferrox/logic/mixer.hpp"
+#include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
+#include "ferrox/logic/trim.hpp"
 #include "ferrox/time/systick.hpp"
 
 namespace {
@@ -31,6 +37,36 @@ ferrox::logic::input::BoardSwitches read_board_switches() {
 
 ferrox::logic::input::InputState sample_inputs() {
     return ferrox::logic::input::process(ferrox::hw::adc::read_raw(), read_board_switches(), g_calib);
+}
+
+// Blocks until sticks and switches are safe (or the cancel key is pressed), sending failsafe pulses meanwhile.
+void run_preflight(const ferrox::logic::storage::ModelConfig& model) {
+    using namespace ferrox;
+    using namespace logic;
+    std::array<safety::ChannelCalibration, 4> cals{};
+    for (std::size_t i = 0; i < cals.size(); ++i) {
+        cals[i] = safety::ChannelCalibration::from(g_storage.radio.sticks[i]);
+    }
+    const auto sm = safety::stick_mode_from(g_storage.radio.stick_mode);
+    const auto mt = static_cast<mixer::ModelType>(model.model_type);
+
+    for (;;) {
+        chip::watchdog::feed();
+
+        const auto in = sample_inputs();
+        const std::array<uint16_t, 4> raw{in.raw[0], in.raw[1], in.raw[2], in.raw[3]};
+        const bool hold = in.switches.sa == SwitchPos::Down;
+        const bool ready = safety::check_preflight_throttle(raw, cals, sm, mt, hold) == safety::Preflight::Ok &&
+                           safety::switches_safe(in.switches, mt);
+        g_keys = hw::keys::scan_keys();
+        if (ready || (g_keys & safety::kKeyCancel) != 0) {
+            return;
+        }
+
+        hw::crsf::update_channels(time::millis(), safety::kSafeIdleChannels, model.crsf_arm_mode != 0, false);
+        hw::crsf::poll_telemetry(time::millis());
+        __WFI();
+    }
 }
 
 }  // namespace
@@ -69,9 +105,16 @@ int main() {
         (void)sample_inputs();
     }
 
-    // RC channel output stays off: the arm, safety and idle logic of the Rust firmware
-    // is not ported yet. Telemetry and the parameter menu run from the default ELRS baud rate.
-    hw::crsf::set_enabled(true, logic::kDefaultBaudIndex, false);
+    const auto& model = g_storage.active_model;
+    const uint8_t baud_idx = model.crsf_baud < logic::kBaudRates.size() ? model.crsf_baud : logic::kDefaultBaudIndex;
+    hw::crsf::set_enabled(true, baud_idx, model.crsf_half_duplex != 0);
+
+    if (!was_watchdog_reset) {
+        run_preflight(model);
+    }
+
+    const auto stick_mode = logic::safety::stick_mode_from(g_storage.radio.stick_mode);
+    const logic::trim::TrimValues no_trim{};
 
     for (;;) {
         chip::watchdog::feed();
@@ -80,7 +123,14 @@ int main() {
         g_battery_mv = input.battery_mv;
         g_keys = hw::keys::scan_keys();
 
-        hw::crsf::poll_telemetry(time::millis());
+        const uint32_t now = time::millis();
+        if (model.rf_protocol == 1) {
+            const bool armed = logic::flight::is_armed(model.arm_switch, input.switches);
+            const auto channels =
+                logic::flight::rf_channels(input, stick_mode, model, no_trim, g_storage.radio.throttle_trim);
+            hw::crsf::update_channels(now, channels, model.crsf_arm_mode != 0, armed);
+        }
+        hw::crsf::poll_telemetry(now);
 
         __WFI();
     }

@@ -6,9 +6,11 @@
 #include "ferrox/logic/brr.hpp"
 #include "ferrox/logic/crsf.hpp"
 #include "ferrox/logic/crsf_menu.hpp"
+#include "ferrox/logic/flight.hpp"
 #include "ferrox/logic/input.hpp"
 #include "ferrox/logic/mixer.hpp"
 #include "ferrox/logic/power.hpp"
+#include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
 #include "ferrox/logic/switches.hpp"
 #include "ferrox/logic/trim.hpp"
@@ -584,6 +586,94 @@ void input_test() {
     check(off_st.switches.se == SwitchPos::Up && off_st.switches.sf == SwitchPos::Up, "SE/SF disabled");
 }
 
+void safety_test() {
+    namespace sf = logic::safety;
+    namespace fl = logic::flight;
+    using logic::Switches;
+    using logic::SwitchPos;
+    using logic::input::Gimbals;
+    using logic::input::InputState;
+    using logic::mixer::ModelType;
+    using logic::storage::default_model_config;
+
+    check(sf::stick_mode_from(0) == sf::StickMode::Mode1 && sf::stick_mode_from(9) == sf::StickMode::Mode2,
+          "stick mode fallback to Mode2");
+    check(sf::throttle_raw_index(sf::StickMode::Mode1) == 1 && sf::throttle_raw_index(sf::StickMode::Mode2) == 2,
+          "throttle raw index per mode");
+
+    const sf::ChannelCalibration cal{};
+    check(cal.normalize_unipolar(800) == 0 && cal.normalize_unipolar(3300) == 1000, "unipolar endpoints");
+    check(cal.normalize_bipolar(2048) == 0 && cal.normalize_bipolar(3300) == 1000 &&
+              cal.normalize_bipolar(800) == -1000,
+          "bipolar endpoints");
+    logic::storage::ChannelCalib bad{};
+    bad.min = 0;
+    bad.center = 0;
+    bad.max = 0;
+    const auto fallback = sf::ChannelCalibration::from(bad);
+    check(fallback.min == 800 && fallback.center == 2048 && fallback.max == 3300, "invalid calib falls back");
+
+    const std::array<sf::ChannelCalibration, 4> cals{cal, cal, cal, cal};
+    std::array<uint16_t, 4> raw{2048, 2048, 800, 2048};
+    check(sf::check_preflight_throttle(raw, cals, sf::StickMode::Mode2, ModelType::Airplane, false) ==
+              sf::Preflight::Ok,
+          "airplane low throttle ok");
+    raw[2] = 3300;
+    check(sf::check_preflight_throttle(raw, cals, sf::StickMode::Mode2, ModelType::Airplane, false) ==
+              sf::Preflight::ThrottleHigh,
+          "airplane high throttle blocks");
+    raw[2] = 2048;
+    check(sf::check_preflight_throttle(raw, cals, sf::StickMode::Mode2, ModelType::General, false) ==
+              sf::Preflight::Ok,
+          "general centered throttle ok");
+    raw[2] = 800;
+    check(sf::check_preflight_throttle(raw, cals, sf::StickMode::Mode2, ModelType::General, false) ==
+              sf::Preflight::ThrottleNotCentered,
+          "general off-center throttle blocks");
+    check(sf::check_preflight_throttle(raw, cals, sf::StickMode::Mode2, ModelType::Heli, false) ==
+              sf::Preflight::ThrottleHoldDisengaged,
+          "heli without hold blocks");
+    check(sf::check_preflight_throttle(raw, cals, sf::StickMode::Mode2, ModelType::Heli, true) == sf::Preflight::Ok,
+          "heli with hold ok");
+
+    Switches sw{};
+    check(sf::switches_safe(sw, ModelType::Airplane), "all up is safe for airplane");
+    sw.sb = SwitchPos::Down;
+    check(!sf::switches_safe(sw, ModelType::Airplane), "SB down blocks");
+    sw = Switches{};
+    sw.sa = SwitchPos::Down;
+    check(!sf::switches_safe(sw, ModelType::Airplane), "SA down blocks airplane");
+    check(sf::switches_safe(sw, ModelType::Heli), "SA down is safe for heli hold");
+
+    const auto& idle = sf::kSafeIdleChannels;
+    check(idle[0] == 1500 && idle[2] == 988 && idle[4] == 988 && idle[5] == 988 && idle[8] == 988 &&
+              idle[9] == 988 && idle[1] == 1500,
+          "safe idle channels");
+
+    InputState in{};
+    in.gimbals.rh = 500;
+    in.gimbals.rv = 300;
+    in.gimbals.lv = -200;
+    in.gimbals.lh = 100;
+    const auto m1 = fl::flight_controls(in.gimbals, sf::StickMode::Mode1);
+    check(m1.aileron == 500 && m1.elevator == -200 && m1.throttle == 300 && m1.rudder == 100, "mode 1 mapping");
+    const auto m2 = fl::flight_controls(in.gimbals, sf::StickMode::Mode2);
+    check(m2.aileron == 500 && m2.elevator == 300 && m2.throttle == -200 && m2.rudder == 100, "mode 2 mapping");
+    const auto m3 = fl::flight_controls(in.gimbals, sf::StickMode::Mode3);
+    check(m3.aileron == 100 && m3.elevator == -200 && m3.throttle == 300 && m3.rudder == 500, "mode 3 mapping");
+    const auto m4 = fl::flight_controls(in.gimbals, sf::StickMode::Mode4);
+    check(m4.aileron == 100 && m4.elevator == 300 && m4.throttle == -200 && m4.rudder == 500, "mode 4 mapping");
+
+    const auto model = default_model_config(0);
+    const logic::trim::TrimValues no_trim{};
+    in.gimbals = Gimbals{};
+    const auto ch = fl::rf_channels(in, sf::StickMode::Mode2, model, no_trim, 0);
+    check(ch[0] == 1500 && ch[1] == 1500, "centered sticks give centered channels");
+    in.gimbals.lv = 1000;
+    const auto thr_ch = fl::rf_channels(in, sf::StickMode::Mode2, model, no_trim, 0);
+    check(thr_ch[2] > 1500 && thr_ch[2] <= 2012, "throttle stick up raises throttle");
+}
+
 }  // namespace
 
 int main() {
@@ -593,6 +683,7 @@ int main() {
     storage_test();
     mixer_test();
     input_test();
+    safety_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }
