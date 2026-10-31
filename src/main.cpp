@@ -10,6 +10,7 @@
 #include "ferrox/hw/gpio.hpp"
 #include "ferrox/hw/keys.hpp"
 #include "ferrox/hw/st7567.hpp"
+#include "ferrox/logic/dashboard.hpp"
 #include "ferrox/logic/brr.hpp"
 #include "ferrox/logic/flight.hpp"
 #include "ferrox/logic/framebuffer.hpp"
@@ -18,7 +19,6 @@
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
 #include "ferrox/logic/trim.hpp"
-#include "ferrox/logic/widgets.hpp"
 #include "ferrox/time/systick.hpp"
 
 namespace {
@@ -35,20 +35,6 @@ ferrox::logic::input::Calibration g_calib{};
 
 // Display content is rendered into this buffer and flushed to the ST7567.
 ferrox::logic::display::Framebuffer g_fb{};
-
-// Temporary raw-stick debug screen until the LCD UI is ported.
-void draw_debug_screen(const ferrox::logic::input::InputState& in) {
-    using namespace ferrox::logic;
-    g_fb.clear();
-    widgets::draw_header(g_fb, "FS-i6X");
-    constexpr std::array<std::string_view, 4> kLabels{"CH1", "CH2", "CH3", "CH4"};
-    for (std::size_t i = 0; i < kLabels.size(); ++i) {
-        const uint16_t raw = in.raw[i];
-        const int fill = static_cast<int>(raw) * 40 / 4096;
-        widgets::draw_gauge_row(g_fb, 14 + static_cast<int>(i) * 12, kLabels[i], fill, raw);
-    }
-    ferrox::hw::lcd::flush(g_fb);
-}
 
 ferrox::logic::input::BoardSwitches read_board_switches() {
     using ferrox::hw::Pin;
@@ -133,13 +119,26 @@ int main() {
     hw::lcd::init();
     hw::lcd::set_backlight_level(100);
 
+    using namespace logic::dashboard;
+    PageState page_state{};
+    g_fb.clear();
+    draw_splash(g_fb);
+    hw::lcd::flush(g_fb);
+    const uint32_t splash_start_ms = time::millis();
+    while (time::millis() - splash_start_ms < 1200) {
+        chip::watchdog::feed();
+        __WFI();
+    }
+
     if (!was_watchdog_reset) {
         run_preflight(model);
     }
 
     const auto stick_mode = logic::safety::stick_mode_from(g_storage.radio.stick_mode);
     const logic::trim::TrimValues no_trim{};
+    const bool crsf = model.rf_protocol == 1;
     uint32_t last_draw_ms = 0;
+    uint16_t prev_keys = 0;
 
     for (;;) {
         chip::watchdog::feed();
@@ -148,18 +147,25 @@ int main() {
         g_battery_mv = input.battery_mv;
         g_keys = hw::keys::scan_keys();
 
+        const uint16_t pressed = static_cast<uint16_t>(g_keys & ~prev_keys);
+        prev_keys = g_keys;
+        handle_keys(page_state, pressed);
+
         const uint32_t now = time::millis();
-        if (now - last_draw_ms >= 100) {
-            draw_debug_screen(input);
-            last_draw_ms = now;
-        }
-        if (model.rf_protocol == 1) {
+        const auto channels =
+            logic::flight::rf_channels(input, stick_mode, model, no_trim, g_storage.radio.throttle_trim);
+        if (crsf) {
             const bool armed = logic::flight::is_armed(model.arm_switch, input.switches);
-            const auto channels =
-                logic::flight::rf_channels(input, stick_mode, model, no_trim, g_storage.radio.throttle_trim);
             hw::crsf::update_channels(now, channels, model.crsf_arm_mode != 0, armed);
         }
         hw::crsf::poll_telemetry(now);
+
+        if (now - last_draw_ms >= 100) {
+            g_fb.clear();
+            render(g_fb, page_state, View{input, g_storage, no_trim, channels, crsf});
+            hw::lcd::flush(g_fb);
+            last_draw_ms = now;
+        }
 
         __WFI();
     }

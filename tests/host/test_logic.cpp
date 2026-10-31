@@ -6,8 +6,11 @@
 #include "ferrox/logic/brr.hpp"
 #include "ferrox/logic/crsf.hpp"
 #include "ferrox/logic/crsf_menu.hpp"
+#include "ferrox/logic/dashboard.hpp"
 #include "ferrox/logic/flight.hpp"
+#include "ferrox/logic/format.hpp"
 #include "ferrox/logic/framebuffer.hpp"
+#include "ferrox/logic/glyphs.hpp"
 #include "ferrox/logic/input.hpp"
 #include "ferrox/logic/mixer.hpp"
 #include "ferrox/logic/power.hpp"
@@ -756,6 +759,85 @@ void display_test() {
     check(max[0] == '9' && max[3] == '9', "gauge value clamped to 9999");
 }
 
+void dashboard_test() {
+    using logic::dashboard::PageState;
+    namespace fmt = logic::format;
+
+    check(fmt::format_percent(500).view() == "+ 50%", "percent positive");
+    check(fmt::format_percent(-1000).view() == "-100%", "percent full negative");
+    check(fmt::format_percent(0).view() == "   0%", "percent centre");
+    check(fmt::format_throttle_percent(0).view() == "  50%", "throttle centre is 50%");
+    check(fmt::format_throttle_percent(1000).view() == " 100%", "throttle full is 100%");
+    check(fmt::format_trim('A', 5).view() == "TRM A:+05", "trim formatting");
+    check(fmt::format_vbat(4200).view() == "4.20V", "vbat formatting");
+    check(fmt::format_dec2(3).view() == "03", "dec2 zero padded");
+    check(fmt::format_hex32(0x1A2B3C4Du).view() == "1A2B3C4D", "hex32 uppercase, 8 digits");
+    check(fmt::trim_spaces("  AB ") == "AB", "trim spaces both sides");
+
+    PageState ps{};
+    logic::dashboard::handle_keys(ps, logic::dashboard::kKeyPageDown);
+    check(ps.page == 1, "page down advances");
+    logic::dashboard::handle_keys(ps, logic::dashboard::kKeyPageUp);
+    check(ps.page == 0, "page up goes back");
+    logic::dashboard::handle_keys(ps, logic::dashboard::kKeyPageUp);
+    check(ps.page == 4, "page up wraps 0 to last page");
+    logic::dashboard::handle_keys(ps, logic::dashboard::kKeyPageDown);
+    check(ps.page == 0, "page down wraps last page to 0");
+
+    // Layout invariant: pots never start on top of switch slots.
+    bool layout_ok = true;
+    for (std::size_t sw = 0; sw <= 16; ++sw) {
+        for (std::size_t pots = 0; pots <= 10; ++pots) {
+            const auto m = logic::dashboard::adaptive_metrics(sw, pots);
+            if (m.pot_w < 0 || m.pot_start_x > 126 + 2) {
+                layout_ok = false;
+            }
+            if (sw > 0 && pots > 0 && m.pot_w > 0) {
+                const int last_end = 2 + static_cast<int>(sw - 1) * m.spacing + (m.compact ? 7 : 10);
+                if (m.pot_start_x < last_end + 3) {
+                    layout_ok = false;
+                }
+            }
+        }
+    }
+    check(layout_ok, "adaptive layout never overlaps switches and pots");
+
+    const auto ten_sw_two_pots = logic::dashboard::adaptive_metrics(10, 2);
+    check(ten_sw_two_pots.compact && ten_sw_two_pots.spacing == 8 && ten_sw_two_pots.pot_start_x == 85,
+          "10 switches + 2 pots layout matches Rust math");
+
+    // Smoke test: every page renders into the framebuffer without touching out-of-range memory.
+    logic::input::InputState in{};
+    in.battery_mv = 7400;
+    logic::storage::RadioStorage st{};
+    logic::trim::TrimValues trims{};
+    std::array<uint16_t, logic::kNumChannels> chs{};
+    chs.fill(1500);
+    logic::dashboard::View view{in, st, trims, chs, true};
+
+    logic::display::Framebuffer fb{};
+    PageState render_state{};
+    for (uint8_t p = 0; p < logic::dashboard::kPageCount; ++p) {
+        render_state.page = p;
+        fb.clear();
+        logic::dashboard::render(fb, render_state, view);
+        bool any = false;
+        for (const auto b : fb.data()) {
+            any = any || b != 0;
+        }
+        check(any, "dashboard page draws something");
+    }
+    check(render_state.blink_phase == logic::dashboard::kPageCount, "blink phase advances once per render");
+
+    fb.clear();
+    logic::dashboard::draw_splash(fb);
+    bool splash_any = false;
+    for (const auto b : fb.data()) {
+        splash_any = splash_any || b != 0;
+    }
+    check(splash_any, "splash draws logo and text");
+}
+
 }  // namespace
 
 int main() {
@@ -767,6 +849,7 @@ int main() {
     input_test();
     safety_test();
     display_test();
+    dashboard_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

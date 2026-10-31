@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 #include "ferrox/logic/framebuffer.hpp"
@@ -125,6 +127,126 @@ constexpr void draw_scrollbar(Framebuffer& fb, int selected, int count, int top_
     const int thumb_y = top_y + selected * travel / (count - 1);
 
     fb.fill_rect(125, thumb_y, 3, thumb_h, true);
+}
+
+// Maps -1000..+1000 onto a cursor position in [min_pos, max_pos].
+constexpr int cursor_position(int val, int min_pos, int travel) {
+    return min_pos + ((val + 1000) * travel + 1000) / 2000;
+}
+
+// Channel monitor gauge with centre ticks, trim tick and cursor.
+constexpr void draw_channel_gauge(Framebuffer& fb, int x, int y, int width, int height, int val, int trim) {
+    fb.draw_rect(x, y, width, height, true);
+
+    const int center_x = x + width / 2;
+    fb.draw_vline(center_x, y, 2, true);
+    fb.draw_vline(center_x, y + height - 2, 2, true);
+
+    const int min_pos = x + 2;
+    const int max_pos = x + width - 3;
+    const int travel = max_pos - min_pos;
+    const int cursor = cursor_position(val, min_pos, travel);
+
+    if (trim != 0) {
+        const int trim_x = center_x + (trim * (travel / 2)) / 25;
+        fb.draw_vline(trim_x, y + 2, std::max(height - 4, 0), true);
+    }
+
+    fb.fill_rect(cursor - 1, y + 1, 3, std::max(height - 2, 0), true);
+}
+
+// Two-lane pot bar (width x 7) with separate cursors for VR1 and VR2.
+constexpr void draw_split_pot_bar(Framebuffer& fb, int x, int y, int width, int vr1, int vr2) {
+    if (width < 8) {
+        return;
+    }
+    fb.draw_hline(x, y, width, true);
+    fb.draw_hline(x, y + 3, width, true);
+    fb.draw_hline(x, y + 6, width, true);
+
+    fb.draw_vline(x, y, 7, true);
+    fb.draw_vline(x + width - 1, y, 7, true);
+
+    const int center_x = x + width / 2;
+    fb.set_pixel(center_x, y + 1, true);
+    fb.set_pixel(center_x, y + 5, true);
+
+    const int min_pos = x + 2;
+    const int travel = std::max(width - 5, 1);
+
+    const int c1 = cursor_position(vr1, min_pos, travel);
+    fb.fill_rect(c1 - 1, y + 1, 3, 2, true);
+
+    const int c2 = cursor_position(vr2, min_pos, travel);
+    fb.fill_rect(c2 - 1, y + 4, 3, 2, true);
+}
+
+// Single pot bar (width x 7) with centre tick and cursor.
+constexpr void draw_single_pot_bar(Framebuffer& fb, int x, int y, int width, int val) {
+    if (width < 8) {
+        return;
+    }
+    fb.draw_rect(x, y, width, 7, true);
+    fb.draw_vline(x + width / 2, y + 1, 5, true);
+
+    const int min_pos = x + 2;
+    const int travel = std::max(width - 5, 1);
+    const int c = cursor_position(val, min_pos, travel);
+    fb.fill_rect(c - 1, y + 1, 3, 5, true);
+}
+
+// Borderless pot lane (3 px high) with a baseline and a 2 px cursor.
+constexpr void draw_pot_track(Framebuffer& fb, int x, int y, int width, int val) {
+    if (width < 6) {
+        return;
+    }
+    fb.draw_hline(x, y + 1, width, true);
+
+    const int min_pos = x + 1;
+    const int travel = std::max(width - 3, 1);
+    const int c = cursor_position(val, min_pos, travel);
+    fb.fill_rect(c - 1, y, 2, 3, true);
+}
+
+// Cluster of pot tracks: 3 pots in one column, 4-6 in two columns, 7+ in three columns.
+constexpr void draw_multi_pot_bar(Framebuffer& fb, int x, int y, int width, std::span<const int16_t> pots) {
+    const int count = static_cast<int>(pots.size());
+    if (count == 0 || width < 12) {
+        return;
+    }
+
+    if (count == 3) {
+        draw_pot_track(fb, x, y, width, pots[0]);
+        draw_pot_track(fb, x, y + 3, width, pots[1]);
+        draw_pot_track(fb, x, y + 6, width, pots[2]);
+    } else if (count <= 6) {
+        constexpr int kColGap = 2;
+        const int col_w = std::max((width - kColGap) / 2, 6);
+        const int right_x = x + col_w + kColGap;
+
+        const int left_count = count == 4 ? 2 : 3;
+        const int right_count = count - left_count;
+
+        for (int row = 0; row < left_count; ++row) {
+            const int ry = left_count == 2 ? y + 1 + row * 4 : y + row * 3;
+            draw_pot_track(fb, x, ry, col_w, pots[static_cast<std::size_t>(row)]);
+        }
+        for (int row = 0; row < right_count; ++row) {
+            const int ry = right_count == 2 ? y + 1 + row * 4 : y + row * 3;
+            draw_pot_track(fb, right_x, ry, col_w, pots[static_cast<std::size_t>(left_count + row)]);
+        }
+    } else {
+        constexpr int kColGap = 2;
+        const int col_w = std::max((width - kColGap * 2) / 3, 6);
+        const int rows_per_col = (count + 2) / 3;
+
+        for (int i = 0; i < count; ++i) {
+            const int col = i / rows_per_col;
+            const int row = i % rows_per_col;
+            const int cx = x + col * (col_w + kColGap);
+            draw_pot_track(fb, cx, y + row * 3, col_w, pots[static_cast<std::size_t>(i)]);
+        }
+    }
 }
 
 }  // namespace ferrox::logic::widgets
