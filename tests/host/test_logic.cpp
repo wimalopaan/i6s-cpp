@@ -1473,6 +1473,53 @@ void mixer_menu_test() {
     }
 }
 
+void aux_menu_test() {
+    namespace mn = logic::menu;
+    using mn::Action;
+    using mn::Event;
+    using mn::Screen;
+
+    logic::storage::RadioStorage st = logic::storage::default_storage();
+    st.radio.adc_modes = {3, 0, 0, 0, 3, 3, 0, 0, 0, 0};  // SA, VRA, VRB unusable: stepping must skip them
+    st.active_model.aux_channels[0] = 4;                   // Yaw
+    st.active_model.aux_channels[1] = 8;                   // SB
+    mn::State ms{};
+    mn::open(ms);
+    uint32_t now = 0;
+    auto tap = [&](uint16_t key) {
+        now += 10;
+        const Event e = mn::update(ms, mn::Input{key, key, now}, st);
+        mn::update(ms, mn::Input{0, 0, now + 1}, st);
+        now += 1;
+        return e;
+    };
+
+    ms.main.selected = mn::kItemAuxChannels;
+    mn::update(ms, mn::Input{0, 0, 0}, st);
+    tap(mn::kKeyOk);
+    check(ms.screen == Screen::AuxChannels, "aux: Aux Channels main item must open the screen");
+
+    tap(mn::kKeyOk);
+    check(ms.editing, "aux: OK on CH5 must start editing");
+    tap(mn::kKeyUp);
+    check(st.active_model.aux_channels[0] == 8, "aux: source step up must skip unusable VRA, VRB and SA");
+    tap(mn::kKeyOk);
+    check(!ms.editing, "aux: OK must leave edit mode");
+
+    tap(mn::kKeyDown);
+    check(ms.aux.selected == 1, "aux: Down must select CH6");
+    tap(mn::kKeyOk);
+    tap(mn::kKeyDown);
+    check(st.active_model.aux_channels[1] == 4, "aux: source step down must skip unusable SA, VRB and VRA");
+    const Event cancel_edit = tap(mn::kKeyCancel);
+    check(cancel_edit.action == Action::None && !ms.editing && ms.screen == Screen::AuxChannels,
+          "aux: cancel while editing must only leave edit mode");
+
+    const Event back = tap(mn::kKeyCancel);
+    check(back.action == Action::SaveActiveModel && ms.screen == Screen::Main,
+          "aux: cancel from the list must save and return to Main");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -1488,6 +1535,7 @@ int main() {
     dual_rate_test();
     throttle_curve_test();
     mixer_menu_test();
+    aux_menu_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

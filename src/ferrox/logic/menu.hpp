@@ -66,12 +66,17 @@ enum class Screen : uint8_t {
     WingMixer,
     MixerLine,
     GlobalVars,
+    AuxChannels,
 };
 
 inline constexpr std::size_t kItemDualRate = 2;
 inline constexpr std::size_t kItemThrottleCurve = 3;
 inline constexpr std::size_t kItemWingMixer = 4;
+inline constexpr std::size_t kItemAuxChannels = 5;
 inline constexpr std::size_t kItemChannelReverse = 6;
+inline constexpr std::size_t kAuxChannelCount = 14;  // CH5..CH18
+// Aux source IDs offered by the Rust AUX_SOURCES list (None, sticks, VRA/VRB, SA..SD, SE, SF, SWI, SWJ, VRC, VRD).
+inline constexpr std::array<uint8_t, 17> kAuxSources{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 31, 32, 35, 36, 37, 38};
 inline constexpr std::size_t kItemChannelMonitor = 8;
 inline constexpr std::size_t kItemCalibration = 9;
 inline constexpr std::size_t kItemDiagAnalog = 10;
@@ -132,6 +137,7 @@ struct State {
     ListPos gvars{};
     uint8_t mix_idx{0};  // mix line shown by the line editor, 0..kNumMixLines-1
     ListPos reverse{};
+    ListPos aux{};
     uint8_t axis{0};  // dual rate axis: 0 Roll, 1 Pitch, 2 Yaw
     uint8_t page{0};  // page of the channel monitor or analog diagnostics
     bool editing{false};
@@ -261,6 +267,11 @@ constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
         if (s.main.selected == kItemWingMixer) {
             s.screen = Screen::WingMixer;
             s.wing = ListPos{};
+            s.editing = false;
+        }
+        if (s.main.selected == kItemAuxChannels) {
+            s.screen = Screen::AuxChannels;
+            s.aux = ListPos{};
             s.editing = false;
         }
         if (s.main.selected == kItemChannelReverse) {
@@ -814,6 +825,55 @@ constexpr Event update_global_vars(State& s, const Nav& n, storage::ModelConfig&
     return {};
 }
 
+// Next (down = false) or previous (down = true) usable aux source, wrapping like Rust next/prev_available_aux_source.
+// An unknown current source is treated as index 0.
+template <typename Ok>
+constexpr uint8_t step_aux_source(uint8_t cur, bool down, Ok ok) {
+    std::size_t pos = 0;
+    for (std::size_t i = 0; i < kAuxSources.size(); ++i) {
+        if (kAuxSources[i] == cur) {
+            pos = i;
+            break;
+        }
+    }
+    const std::size_t len = kAuxSources.size();
+    for (std::size_t i = 1; i < len; ++i) {
+        const std::size_t idx = down ? (pos + len - i) % len : (pos + i) % len;
+        if (ok(kAuxSources[idx])) {
+            return kAuxSources[idx];
+        }
+    }
+    return cur;
+}
+
+constexpr Event update_aux(State& s, const Nav& n, storage::ModelConfig& m, const storage::RadioConfig& r) {
+    if (n.cancel && s.editing) {
+        s.editing = false;
+        return {};
+    }
+    if (n.cancel) {
+        s.screen = Screen::Main;
+        return {Action::SaveActiveModel, 0};
+    }
+    if (!s.editing) {
+        if (n.up != n.down) {
+            step_list(s.aux, kAuxChannelCount, kListVisible, n.down);
+        }
+        if (n.ok) {
+            s.editing = true;
+        }
+        return {};
+    }
+    if (n.up != n.down) {
+        auto& src = m.aux_channels[s.aux.selected];
+        src = step_aux_source(src, n.down, [&](uint8_t c) { return is_source_available(c, r, m); });
+    }
+    if (n.ok) {
+        s.editing = false;
+    }
+    return {};
+}
+
 constexpr Event update_channel_reverse(State& s, const Nav& n, storage::ModelConfig& m) {
     if (n.up != n.down) {
         step_list(s.reverse, kNumChannels, kListVisible, n.down);
@@ -890,6 +950,7 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
         case Screen::ModelSetup: return update_setup(s, n, st.active_model);
         case Screen::DualRate: return update_dual_rate(s, n, st.active_model, st.radio);
         case Screen::ThrottleCurve: return update_throttle_curve(s, n, st.active_model);
+        case Screen::AuxChannels: return update_aux(s, n, st.active_model, st.radio);
         case Screen::ChannelReverse: return update_channel_reverse(s, n, st.active_model);
         case Screen::ChannelMonitor: return update_monitor(s, n);
         case Screen::DiagAnalog: return update_diag(s, n);
@@ -1168,6 +1229,35 @@ constexpr void render_throttle_curve(Framebuffer& fb, const State& s, const stor
     }
 }
 
+constexpr void render_aux(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
+    widgets::draw_header(fb, "AUX CHANNELS");
+    for (std::size_t slot = 0; slot < kListVisible; ++slot) {
+        const std::size_t idx = s.aux.scroll + slot;
+        if (idx >= kAuxChannelCount) {
+            break;
+        }
+        // Rust pads single-digit channels so the colon lines up with two-digit ones.
+        const std::size_t ch = idx + 5;
+        format::Text<8> label;
+        label.push('C');
+        label.push('H');
+        format::detail::push_uint(label, static_cast<unsigned>(ch));
+        if (ch < 10) {
+            label.push(' ');
+        }
+        label.push(':');
+        const uint8_t src = m.aux_channels[idx];
+        const std::size_t src_idx = std::min<std::size_t>(src, labels::kSourceNames.size() - 1);
+        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.aux.selected, label.view(),
+                               labels::kSourceNames[src_idx], 48);
+    }
+    if (s.editing) {
+        widgets::draw_footer(fb, "[OK] Done   [UP/DN] Source");
+    } else {
+        widgets::draw_footer(fb, "[OK] Edit   [ESC] Exit");
+    }
+}
+
 constexpr void render_channel_reverse(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
     widgets::draw_header(fb, "CHANNEL REVERSE");
     for (std::size_t slot = 0; slot < kListVisible; ++slot) {
@@ -1353,6 +1443,7 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::ModelSetup: render_setup(fb, s, st.active_model); break;
         case Screen::DualRate: render_dual_rate(fb, s, st.active_model); break;
         case Screen::ThrottleCurve: render_throttle_curve(fb, s, st.active_model); break;
+        case Screen::AuxChannels: render_aux(fb, s, st.active_model); break;
         case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;
         case Screen::ChannelMonitor: render_monitor(fb, s, live, st.active_model); break;
         case Screen::DiagAnalog: render_diag(fb, s, live); break;
