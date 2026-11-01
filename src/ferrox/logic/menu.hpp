@@ -101,13 +101,15 @@ inline constexpr std::array<std::string_view, kAdcModeCount> kAdcModeNames{
     "DEFAULT", "2-POS", "3-POS", "6-POS", "POT", "POT-D", "INST-TRIM"};
 inline constexpr std::size_t kMonitorPages = 3;
 inline constexpr std::size_t kMonitorRows = 6;
-inline constexpr std::size_t kDiagPages = 2;
+inline constexpr std::size_t kDiagPages = 5;
 inline constexpr std::size_t kAdcFullScale = 4095;
 
 // Live values shown by the diagnostic screens. Filled by the caller each frame.
 struct Live {
     std::array<uint16_t, kNumChannels> rf{};  // output channels in us
     input::Raw adc{};
+    Switches switches{};  // digital switches, SE and SF on page 2
+    storage::EepromStatus eeprom{};
     std::string_view mcu_name{};
 };
 
@@ -1245,13 +1247,19 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
 
 constexpr std::array<std::string_view, kMonitorPages> kMonitorTitles{"CHANNELS (1-6)", "CHANNELS (7-12)",
                                                                    "CHANNELS (13-18)"};
-constexpr std::array<std::string_view, kDiagPages> kDiagTitles{"ANALOG (1-6)", "ANALOG (7-11)"};
-// Raw ADC index of each row. Page 1 starts at raw index 6 (PA6).
-constexpr std::array<std::array<std::string_view, 6>, kDiagPages> kDiagNames{{
+constexpr std::array<std::string_view, kDiagPages> kDiagTitles{
+    "ANALOG (1-6)", "ANALOG (7-11)", "EXT SWITCHES (SE/SF)", "EXT ANALOG (P7)", "STORAGE (EEPROM)"};
+// Raw ADC index of each row. Analog page 1 starts at raw index 6 (PA6).
+constexpr std::array<std::array<std::string_view, 6>, 2> kAnalogNames{{
     {"RH:AIL", "RV:ELE", "LV:THR", "LH:RUD", "SW:SA ", "SW:SB "},
     {"POT:V1", "POT:V2", "SW:SC ", "SW:SD ", "VBAT  ", ""},
 }};
-constexpr std::array<std::size_t, kDiagPages> kDiagRows{6, 5};
+constexpr std::array<std::size_t, 2> kAnalogRows{6, 5};
+// P7 external ADC rows: raw index 11..14 (AD12..AD15).
+constexpr std::array<std::string_view, 4> kP7Names{"VRC:AD12", "VRD:AD13", "VRE:AD14", "VRF:AD15"};
+constexpr std::size_t kP7RawStart = 11;
+constexpr int kGaugeMaxFill = 38;
+constexpr int kSwitchBarFill = 30;
 
 // Copies a short label or number into a fixed buffer so the caller can hold the value for one row.
 constexpr format::Text<6> to_text(std::string_view sv) {
@@ -1517,13 +1525,117 @@ constexpr void render_monitor(Framebuffer& fb, const State& s, const Live& live,
     widgets::draw_footer(fb, "[UP/DN] Page  [ESC] Back");
 }
 
-constexpr void render_diag(Framebuffer& fb, const State& s, const Live& live) {
+// Gauge fill for a raw ADC value, 0..kGaugeMaxFill.
+constexpr int adc_fill(uint16_t raw) {
+    const uint16_t clamped = std::min<uint16_t>(raw, kAdcFullScale);
+    return std::min(static_cast<int>(clamped) * kGaugeMaxFill / static_cast<int>(kAdcFullScale), kGaugeMaxFill);
+}
+
+constexpr std::string_view ext_switch_config_label(bool enabled) {
+    return enabled ? "EXT SW: ENABLED (PC12/15)" : "EXT SW: DISABLED (OFF)";
+}
+
+constexpr std::string_view switch_pos_label(SwitchPos pos) {
+    return pos == SwitchPos::Down ? "DN (LOW)" : "UP (HIGH)";
+}
+
+constexpr int switch_fill(SwitchPos pos) { return pos == SwitchPos::Down ? kSwitchBarFill : 0; }
+
+constexpr std::string_view p7_config_label(bool enabled) {
+    return enabled ? "P7 ADC: ENABLED (15-CH)" : "P7 ADC: DISABLED (OFF)";
+}
+
+// Four-character value of a P7 row: the raw count when the ADC is enabled, " OFF" otherwise.
+constexpr format::Text<4> p7_value(uint16_t raw, bool enabled) {
+    format::Text<4> t;
+    if (enabled) {
+        const auto digits = widgets::format_u16_4(std::min<uint16_t>(raw, kAdcFullScale));
+        for (const char c : digits) {
+            t.push(c);
+        }
+    } else {
+        for (const char c : std::string_view{" OFF"}) {
+            t.push(c);
+        }
+    }
+    return t;
+}
+
+// "ADDR: 0x50 (FT24C128A 16KB)" with the device address in hex.
+constexpr format::Text<27> eeprom_addr_line(uint8_t addr) {
+    format::Text<27> t;
+    for (const char c : std::string_view{"ADDR: 0x"}) {
+        t.push(c);
+    }
+    t.push(format::detail::hex_digit(addr >> 4));
+    t.push(format::detail::hex_digit(addr));
+    for (const char c : std::string_view{" (FT24C128A 16KB)"}) {
+        t.push(c);
+    }
+    return t;
+}
+
+constexpr std::string_view eeprom_state_label(const storage::EepromStatus& e) {
+    if (e.write_err) {
+        return "STATUS: WRITE ERR (FAIL)";
+    }
+    return e.read_ok ? "STATUS: READY (HEALTHY)" : "STATUS: READ ERR (FAIL)";
+}
+
+constexpr void draw_analog_page(Framebuffer& fb, std::size_t page, const input::Raw& adc) {
+    const std::size_t start = page == 0 ? 0 : 6;
+    for (std::size_t row = 0; row < kAnalogRows[page]; ++row) {
+        const uint16_t raw = std::min<uint16_t>(adc[start + row], kAdcFullScale);
+        widgets::draw_gauge_row(fb, {13 + static_cast<int>(row) * 7}, kAnalogNames[page][row], {adc_fill(raw)}, raw);
+    }
+}
+
+constexpr void draw_ext_switches_page(Framebuffer& fb, const Switches& sw, bool enabled) {
+    fb.draw_str_4x6(Point{2, 13}, ext_switch_config_label(enabled), false);
+    fb.draw_str_4x6(Point{2, 23}, "SW:SE", false);
+    widgets::draw_bar_gauge(fb, {{32, 23}, {30, 6}}, switch_fill(sw.se));
+    fb.draw_str_4x6(Point{66, 23}, switch_pos_label(sw.se), false);
+    fb.draw_str_4x6(Point{2, 33}, "SW:SF", false);
+    widgets::draw_bar_gauge(fb, {{32, 33}, {30, 6}}, switch_fill(sw.sf));
+    fb.draw_str_4x6(Point{66, 33}, switch_pos_label(sw.sf), false);
+    fb.draw_str_4x6(Point{2, 44}, "Active-LOW mod to GND", false);
+}
+
+constexpr void draw_ext_adc_page(Framebuffer& fb, const input::Raw& adc, bool enabled) {
+    fb.draw_str_4x6(Point{2, 13}, p7_config_label(enabled), false);
+    for (std::size_t i = 0; i < kP7Names.size(); ++i) {
+        const int y = 25 + static_cast<int>(i) * 7;
+        const uint16_t raw = std::min<uint16_t>(adc[kP7RawStart + i], kAdcFullScale);
+        fb.draw_str_4x6(Point{2, y}, kP7Names[i], false);
+        widgets::draw_bar_gauge(fb, {{44, y + 1}, {40, 5}}, enabled ? adc_fill(raw) : 0);
+        const format::Text<4> value = p7_value(raw, enabled);
+        fb.draw_str_4x6(Point{90, y}, value.view(), false);
+    }
+}
+
+constexpr void draw_eeprom_page(Framebuffer& fb, const storage::EepromStatus& e) {
+    if (!e.detected) {
+        fb.draw_str_4x6(Point{2, 13}, "BUS: I2C2 (PB10/PB11)", false);
+        fb.draw_str_4x6(Point{2, 23}, "STATUS: NOT DETECTED", false);
+        fb.draw_str_4x6(Point{2, 33}, "CHECK: Pull-ups / Wiring", false);
+        fb.draw_str_4x6(Point{2, 43}, "FALLBACK: Factory Defaults", false);
+        return;
+    }
+    const format::Text<27> addr = eeprom_addr_line(e.addr);
+    fb.draw_str_4x6(Point{2, 13}, "BUS: I2C2 (PB10/PB11 Fm+)", false);
+    fb.draw_str_4x6(Point{2, 23}, addr.view(), false);
+    fb.draw_str_4x6(Point{2, 33}, eeprom_state_label(e), false);
+    fb.draw_str_4x6(Point{2, 43}, "SLOTS: 2xRadio  20xModels", false);
+}
+
+constexpr void render_diag(Framebuffer& fb, const State& s, const Live& live, const storage::RadioConfig& radio) {
     widgets::draw_header(fb, kDiagTitles[s.page]);
-    const std::size_t start = s.page == 0 ? 0 : 6;
-    for (std::size_t row = 0; row < kDiagRows[s.page]; ++row) {
-        const uint16_t raw = std::min<uint16_t>(live.adc[start + row], kAdcFullScale);
-        const int fill = std::min(static_cast<int>(raw) * 38 / static_cast<int>(kAdcFullScale), 38);
-        widgets::draw_gauge_row(fb, {13 + static_cast<int>(row) * 7}, kDiagNames[s.page][row], {fill}, raw);
+    switch (s.page) {
+        case 0:
+        case 1: draw_analog_page(fb, s.page, live.adc); break;
+        case 2: draw_ext_switches_page(fb, live.switches, radio.ext_switches != 0); break;
+        case 3: draw_ext_adc_page(fb, live.adc, radio.ext_adc != 0); break;
+        default: draw_eeprom_page(fb, live.eeprom); break;
     }
     widgets::draw_footer(fb, "[UP/DN/OK] Page  [ESC] Back");
 }
@@ -1678,7 +1790,7 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::InputSetup: render_input_setup(fb, s, st.radio); break;
         case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;
         case Screen::ChannelMonitor: render_monitor(fb, s, live, st.active_model); break;
-        case Screen::DiagAnalog: render_diag(fb, s, live); break;
+        case Screen::DiagAnalog: render_diag(fb, s, live, st.radio); break;
         case Screen::SystemInfo: render_system(fb, live.mcu_name); break;
         case Screen::WingMixer: render_wing_mixer(fb, s, st.active_model); break;
         case Screen::MixerLine: render_mixer_line(fb, s, st.active_model); break;

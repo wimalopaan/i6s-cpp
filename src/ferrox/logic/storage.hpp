@@ -50,6 +50,15 @@ enum class Status : uint8_t {
     CrcMismatch,
 };
 
+/// External EEPROM health shown on diagnostics page 4 (Rust `EepromStatus`; the bus is always I2C2).
+struct EepromStatus {
+    uint8_t addr{0x50};    // 7-bit address of the device that answered the probe
+    bool detected{false};
+    bool read_ok{false};   // radio config was read from EEPROM at boot
+    bool write_err{false}; // the most recent write failed
+    friend constexpr bool operator==(const EepromStatus&, const EepromStatus&) = default;
+};
+
 /// CRC-16 with polynomial 0x8005, initial value 0, no reflection (CRC-16/BUYPASS).
 constexpr uint16_t crc16(std::span<const uint8_t> data) {
     uint16_t crc = 0;
@@ -768,8 +777,9 @@ Status load_slot(uint16_t addr, T& dst) {
 }
 
 /// Loads radio config (A, then backup B) and the active model. Writes defaults when the EEPROM is blank.
+/// Returns true when the radio config was read from EEPROM (not replaced by defaults).
 template <EepromDevice Dev>
-void load_storage(RadioStorage& s) {
+bool load_storage(RadioStorage& s) {
     bool radio_loaded = load_slot<Dev>(kRadioSlotA, s.radio) == Status::Ok;
     if (!radio_loaded && load_slot<Dev>(kRadioSlotB, s.radio) == Status::Ok) {
         radio_loaded = true;
@@ -781,7 +791,7 @@ void load_storage(RadioStorage& s) {
         save_slot<Dev>(kRadioSlotB, s.radio);
         save_slot<Dev>(model_slot_addr(0).value(), s.active_model);
         sanitize(s);
-        return;
+        return false;
     }
 
     const std::size_t active_idx = s.radio.active_model < kNumModels ? s.radio.active_model : 0;
@@ -790,6 +800,7 @@ void load_storage(RadioStorage& s) {
         s.active_model = default_model_config(active_idx);
     }
     sanitize(s);
+    return true;
 }
 
 /// Reloads the model selected by `s.radio.active_model`. Falls back to defaults on failure.

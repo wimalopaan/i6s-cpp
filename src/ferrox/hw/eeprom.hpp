@@ -73,15 +73,23 @@ struct I2c2Eeprom {
             const std::size_t page_left = kPageSize - (cur % kPageSize);
             const std::size_t chunk = (data.size() - offset) < page_left ? (data.size() - offset) : page_left;
             if (const Status s = write_page(cur, data.subspan(offset, chunk)); s != Status::Ok) {
+                g_write_err = true;
                 return s;
             }
             offset += chunk;
         }
+        g_write_err = false;
         return Status::Ok;
     }
 
+    /// 7-bit address of the device found by the last `init()` probe.
+    static uint8_t probed_addr() { return g_addr; }
+    /// True when the most recent `write()` failed.
+    static bool write_failed() { return g_write_err; }
+
 private:
     inline static uint8_t g_addr = kBaseAddr;
+    inline static bool g_write_err = false;
 
     static void configure_peripheral() {
         I2C2->CR1 &= ~I2C_CR1_PE;

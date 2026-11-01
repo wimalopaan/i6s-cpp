@@ -1120,6 +1120,54 @@ void menu_test() {
     gauges.clear();
     mn::render(gauges, gs, names, st, live);
     check(lit_pixels(gauges) > 0, "system info must render the MCU name");
+
+    // Diagnostics pages 2-4 wrap around in both directions.
+    mn::State dp{};
+    dp.screen = Screen::DiagAnalog;
+    mn::update(dp, mn::Input{0, 0, 0}, st);
+    press_in(dp, mn::kKeyUp, 900);
+    check(dp.page == 4, "up from the first page must wrap to the EEPROM page");
+    press_in(dp, mn::kKeyDown, 910);
+    check(dp.page == 0, "down from the EEPROM page must wrap to page 1");
+    for (int i = 0; i < 3; ++i) {
+        press_in(dp, mn::kKeyOk, 920 + i * 10);
+    }
+    check(dp.page == 3, "OK must reach the P7 page");
+
+    // Helper values for the ext switch, P7 and EEPROM pages.
+    check(mn::switch_fill(logic::SwitchPos::Down) == 30 && mn::switch_fill(logic::SwitchPos::Up) == 0 &&
+              mn::switch_fill(logic::SwitchPos::Mid) == 0,
+          "switch bar fills only when the switch is down");
+    check(mn::switch_pos_label(logic::SwitchPos::Mid) == "UP (HIGH)", "mid switch must read as UP");
+    check(mn::p7_value(1234, true).view() == "1234", "enabled P7 row shows the raw count");
+    check(mn::p7_value(9999, true).view() == "4095", "P7 raw count clamps to full scale");
+    check(mn::p7_value(1234, false).view() == " OFF", "disabled P7 row shows OFF");
+    check(mn::adc_fill(0) == 0 && mn::adc_fill(9999) == mn::kGaugeMaxFill, "ADC gauge fill clamps");
+    check(mn::eeprom_addr_line(0x50).view() == "ADDR: 0x50 (FT24C128A 16KB)", "EEPROM address line");
+    check(mn::eeprom_state_label(logic::storage::EepromStatus{0x50, true, true, false}) == "STATUS: READY (HEALTHY)",
+          "healthy EEPROM status");
+    check(mn::eeprom_state_label(logic::storage::EepromStatus{0x50, true, false, false}) == "STATUS: READ ERR (FAIL)",
+          "EEPROM read failure status");
+    check(mn::eeprom_state_label(logic::storage::EepromStatus{0x50, true, true, true}) == "STATUS: WRITE ERR (FAIL)",
+          "EEPROM write error takes precedence");
+
+    // Pages 2-4 must render and differ from each other.
+    logic::display::Framebuffer ext{};
+    mn::Live el{};
+    el.adc.fill(4095);
+    el.switches.se = logic::SwitchPos::Down;
+    el.eeprom = logic::storage::EepromStatus{0x50, true, true, false};
+    mn::State ep{};
+    ep.screen = Screen::DiagAnalog;
+    std::array<std::size_t, 3> page_pixels{};
+    for (std::size_t p = 2; p <= 4; ++p) {
+        ep.page = static_cast<uint8_t>(p);
+        ext.clear();
+        mn::render(ext, ep, names, st, el);
+        page_pixels[p - 2] = lit_pixels(ext);
+    }
+    check(page_pixels[0] > 0 && page_pixels[1] > 0 && page_pixels[2] > 0, "diag pages 2-4 must draw");
+    check(page_pixels[0] != page_pixels[1] && page_pixels[1] != page_pixels[2], "diag pages 2-4 must differ");
 }
 
 void calib_test() {

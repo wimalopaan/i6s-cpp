@@ -69,6 +69,9 @@ constexpr uint32_t kMenuHoldMs = 1200;
 // Model names shown in the model list, filled from EEPROM when the list is opened.
 ferrox::logic::menu::ModelNames g_model_names{};
 
+// EEPROM probe and boot-read result for diagnostics page 4; write_err is refreshed at render time.
+ferrox::logic::storage::EepromStatus g_eeprom{};
+
 // Buzzer playback logic and the PWM output that follows it.
 ferrox::logic::buzzer::Player g_buzzer{};
 ferrox::hw::buzzer::Output g_buzzer_out{};
@@ -239,8 +242,10 @@ int main() {
 
     chip::watchdog::start();
 
-    if (hw::I2c2Eeprom::init()) {
-        logic::storage::load_storage<hw::I2c2Eeprom>(g_storage);
+    g_eeprom.detected = hw::I2c2Eeprom::init();
+    if (g_eeprom.detected) {
+        g_eeprom.addr = hw::I2c2Eeprom::probed_addr();
+        g_eeprom.read_ok = logic::storage::load_storage<hw::I2c2Eeprom>(g_storage);
     } else {
         g_storage = logic::storage::default_storage();
     }
@@ -465,8 +470,11 @@ int main() {
                             logic::flight_timer::display(g_flight_timer, timer_config(model)),
                             logic::flight_timer::modal(g_flight_timer)});
             } else {
+                auto eeprom = g_eeprom;
+                eeprom.write_err = hw::I2c2Eeprom::write_failed();
                 logic::menu::render(g_fb, menu_state, g_model_names, g_storage,
-                                    logic::menu::Live{channels, input.raw, chip::kProfile.name});
+                                    logic::menu::Live{channels, input.raw, input.switches, eeprom,
+                                                      chip::kProfile.name});
             }
             hw::lcd::flush(g_fb);
             last_draw_ms = now;
