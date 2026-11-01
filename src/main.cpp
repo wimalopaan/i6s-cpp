@@ -15,6 +15,7 @@
 #include "ferrox/hw/st7567.hpp"
 #include "ferrox/hw/trainer.hpp"
 #include "ferrox/logic/dashboard.hpp"
+#include "ferrox/logic/auto_select.hpp"
 #include "ferrox/logic/bind.hpp"
 #include "ferrox/logic/brr.hpp"
 #include "ferrox/logic/buzzer.hpp"
@@ -41,6 +42,7 @@ namespace {
 // Latest measurements, updated by the main loop (read by later UI/RF code).
 volatile uint16_t g_battery_mv = 0;
 volatile uint16_t g_keys = 0;
+ferrox::logic::auto_select::Tracker g_auto_select{};
 
 // Radio and active model settings loaded from the external EEPROM.
 ferrox::logic::storage::RadioStorage g_storage{};
@@ -365,6 +367,7 @@ int main() {
         chip::watchdog::feed();
 
         const auto input = sample_inputs();
+        const auto auto_changes = g_auto_select.step({input.switches, input.pots.vr1, input.pots.vr2});
         g_battery_mv = input.battery_mv;
         g_keys = hw::keys::scan_keys();
 
@@ -409,7 +412,8 @@ int main() {
                 ok_armed = false;
             }
         } else {
-            const auto ev = logic::menu::update(menu_state, logic::menu::Input{pressed, g_keys, now}, g_storage);
+            const auto ev = logic::menu::update(menu_state,
+                                                logic::menu::Input{pressed, g_keys, now, auto_changes}, g_storage);
             switch (ev.action) {
                 case logic::menu::Action::EnterModelSelect: refresh_model_names(); break;
                 case logic::menu::Action::SwitchModel:

@@ -4,8 +4,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
+#include "ferrox/logic/auto_select.hpp"
 #include "ferrox/logic/channels.hpp"
 #include "ferrox/logic/curve.hpp"
 #include "ferrox/logic/format.hpp"
@@ -147,6 +149,7 @@ struct Input {
     uint16_t pressed;  // edge-detected keys
     uint16_t held;
     uint32_t now_ms;
+    auto_select::Changes changes{};  // switch and pot movement since the previous tick
 };
 
 struct ListPos {
@@ -191,6 +194,7 @@ struct Nav {
     bool down{false};
     bool ok{false};
     bool cancel{false};
+    auto_select::Changes changes{};
 };
 
 // Direction of a list step. Only meaningful when exactly one of Nav::up and Nav::down is set.
@@ -384,7 +388,30 @@ constexpr Event update_models(State& s, const Nav& n) {
     return {};
 }
 
-constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, model_copy::SrcSlot active) {
+// Mixer source IDs of the two pots (VRA, VRB).
+inline constexpr uint8_t kSourceVra = 5;
+inline constexpr uint8_t kSourceVrb = 6;
+
+// Pot that moved this tick, as a mixer source ID. VR1 wins when both moved.
+constexpr std::optional<uint8_t> pot_change_source(const auto_select::Changes& c) {
+    if (c.vr1) {
+        return kSourceVra;
+    }
+    if (c.vr2) {
+        return kSourceVrb;
+    }
+    return std::nullopt;
+}
+
+constexpr bool is_switch_cond_available(uint8_t cond, const storage::RadioConfig& r);
+
+// Arm switch codes are condition codes 1..22 (0 is unused by auto-select).
+constexpr bool is_arm_switch_available(uint8_t sw, const storage::RadioConfig& r) {
+    return sw < kArmSwitchCount && is_switch_cond_available(sw, r);
+}
+
+constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, const storage::RadioConfig& r,
+                             model_copy::SrcSlot active) {
     const auto row = static_cast<SetupRow>(s.setup.selected);
     const Event save{Action::SaveActiveModel, 0};
 
@@ -458,10 +485,13 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, mo
             }
             break;
         case SetupRow::ArmSwitch:
-            if (n.up) {
+            if (n.changes.sw_cond) {
+                if (is_arm_switch_available(*n.changes.sw_cond, r)) {
+                    m.arm_switch = *n.changes.sw_cond;
+                }
+            } else if (n.up) {
                 m.arm_switch = static_cast<uint8_t>((m.arm_switch + 1) % kArmSwitchCount);
-            }
-            if (n.down) {
+            } else if (n.down) {
                 m.arm_switch = static_cast<uint8_t>((m.arm_switch + kArmSwitchCount - 1) % kArmSwitchCount);
             }
             if (n.ok || n.cancel) {
@@ -590,7 +620,11 @@ constexpr Event update_dual_rate(State& s, const Nav& n, storage::ModelConfig& m
     const std::size_t axis = s.axis;
     switch (s.dual_rate.selected) {
         case 0:
-            if (n.up) {
+            if (n.changes.dr_switch) {
+                if (is_dr_switch_available(*n.changes.dr_switch, r)) {
+                    m.dr_switch = *n.changes.dr_switch;
+                }
+            } else if (n.up) {
                 m.dr_switch = step_dr_switch(r, m.dr_switch, false);
             } else if (n.down) {
                 m.dr_switch = step_dr_switch(r, m.dr_switch, true);
@@ -848,7 +882,13 @@ constexpr Event update_vario(State& s, const Nav& n, storage::ModelConfig& m, co
         return {};
     }
 
-    if (n.up != n.down) {
+    if (n.changes.sw_cond) {
+        // Vario switch codes are condition codes shifted by one; 0 means no switch.
+        const auto sw = static_cast<uint8_t>(*n.changes.sw_cond + 1);
+        if (is_vario_switch_available(sw, r)) {
+            m.vario_switch = sw;
+        }
+    } else if (n.up != n.down) {
         m.vario_switch = step_available(m.vario_switch, kVarioSwitchCount, n.down,
                                         [&r](uint8_t c) { return is_vario_switch_available(c, r); });
     }
@@ -954,7 +994,11 @@ constexpr Event update_mixer_line(State& s, const Nav& n, storage::ModelConfig& 
             }
             break;
         case 1:
-            if (up || down) {
+            if (const auto pot = pot_change_source(n.changes)) {
+                if (is_source_available(*pot, r, m)) {
+                    mix.source = *pot;
+                }
+            } else if (up || down) {
                 mix.source = step_available(mix.source, labels::kSourceNames.size(), down,
                                             [&](uint8_t c) { return is_source_available(c, r, m); });
             }
@@ -968,7 +1012,11 @@ constexpr Event update_mixer_line(State& s, const Nav& n, storage::ModelConfig& 
         case 3: step_clamped(mix.weight, Range{-100, 100}, 5, n); break;
         case 4: step_clamped(mix.offset, Range{-100, 100}, 5, n); break;
         case 5:
-            if (up || down) {
+            if (n.changes.sw_cond) {
+                if (is_switch_cond_available(*n.changes.sw_cond, r)) {
+                    mix.switch_sel = *n.changes.sw_cond;
+                }
+            } else if (up || down) {
                 mix.switch_sel = step_available(mix.switch_sel, labels::kSwitchCondNames.size(), down,
                                                 [&](uint8_t c) { return is_switch_cond_available(c, r); });
             }
@@ -1056,7 +1104,9 @@ constexpr Event update_aux(State& s, const Nav& n, storage::ModelConfig& m, cons
         }
         return {};
     }
-    if (n.up != n.down) {
+    if (const auto pot = pot_change_source(n.changes)) {
+        m.aux_channels[s.aux.selected] = *pot;
+    } else if (n.up != n.down) {
         auto& src = m.aux_channels[s.aux.selected];
         src = step_aux_source(src, n.down, [&](uint8_t c) { return is_source_available(c, r, m); });
     }
@@ -1204,11 +1254,12 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
     n.down = repeat_step(s.down, KeyState{down_pressed, down_held}, in.now_ms);
     n.ok = (in.pressed & kKeyOk) != 0;
     n.cancel = (in.pressed & kKeyCancel) != 0;
+    n.changes = in.changes;
 
     switch (s.screen) {
         case Screen::Main: return update_main(s, n, st.radio.active_model);
         case Screen::ModelSelect: return update_models(s, n);
-        case Screen::ModelSetup: return update_setup(s, n, st.active_model, model_copy::active_slot(st));
+        case Screen::ModelSetup: return update_setup(s, n, st.active_model, st.radio, model_copy::active_slot(st));
         case Screen::DualRate: return update_dual_rate(s, n, st.active_model, st.radio);
         case Screen::ThrottleCurve: return update_throttle_curve(s, n, st.active_model);
         case Screen::AuxChannels: return update_aux(s, n, st.active_model, st.radio);

@@ -3588,6 +3588,98 @@ void trainer_test() {
     }
 }
 
+void auto_select_test() {
+    namespace as = logic::auto_select;
+    namespace mn = logic::menu;
+    using mn::Screen;
+
+    as::Tracker tracker{};
+    as::Sample s{};
+    check(!tracker.step(s).sw_cond.has_value(), "auto: idle sample reports no switch change");
+    s.switches.sa = logic::SwitchPos::Down;
+    check(tracker.step(s).sw_cond == 2, "auto: SA moving to Down reports condition 2");
+    check(!tracker.step(s).sw_cond.has_value(), "auto: a held switch reports no change");
+    s.vr1 = 400;
+    check(tracker.step(s).vr1, "auto: VR1 moving 400 counts is detected");
+    check(!tracker.step(s).vr1, "auto: a held VR1 reports no change");
+
+    logic::storage::RadioStorage st = logic::storage::default_storage();
+    uint8_t two_pos_code = 0;
+    for (unsigned v = 0; v < 256; ++v) {
+        if (logic::input::resolve_mode(0, static_cast<uint8_t>(v)) == logic::input::AdcMode::TwoPos) {
+            two_pos_code = static_cast<uint8_t>(v);
+            break;
+        }
+    }
+    st.radio.adc_modes[0] = two_pos_code;
+
+    const as::Changes vr1_moved{.vr1 = true};
+    const as::Changes vr2_moved{.vr2 = true};
+    const as::Changes sa_moved{.sw_cond = 1};
+    const as::Changes dr_sa{.dr_switch = 1};
+
+    mn::State ms{};
+    mn::open(ms);
+    ms.screen = Screen::AuxChannels;
+    ms.aux = mn::ListPos{};
+    ms.editing = true;
+    st.active_model.aux_channels[0] = 4;
+    mn::update(ms, mn::Input{0, 0, 0}, st);  // consumes the release wait that open() arms
+    mn::update(ms, mn::Input{0, 0, 0, vr1_moved}, st);
+    check(st.active_model.aux_channels[0] == mn::kSourceVra, "auto: aux row takes VRA when VR1 moves");
+    mn::update(ms, mn::Input{0, 0, 1, vr2_moved}, st);
+    check(st.active_model.aux_channels[0] == mn::kSourceVrb, "auto: aux row takes VRB when VR2 moves");
+    mn::update(ms, mn::Input{0, 0, 2}, st);
+    mn::update(ms, mn::Input{mn::kKeyCancel, mn::kKeyCancel, 3}, st);
+    check(!ms.editing, "auto: cancel leaves aux edit mode");
+
+    ms.screen = Screen::DualRate;
+    ms.dual_rate = mn::ListPos{};
+    ms.editing = true;
+    st.active_model.dr_switch = 0;
+    mn::update(ms, mn::Input{0, 0, 0, dr_sa}, st);
+    check(st.active_model.dr_switch == 1, "auto: dual rate switch follows SA when usable");
+    st.radio.adc_modes[0] = 3;  // SixPos: not usable for dual rate
+    st.active_model.dr_switch = 0;
+    mn::update(ms, mn::Input{mn::kKeyUp, mn::kKeyUp, 10, dr_sa}, st);
+    check(st.active_model.dr_switch == 0, "auto: unusable DR switch change is ignored and blocks up/down");
+    st.radio.adc_modes[0] = two_pos_code;
+
+    ms.screen = Screen::ModelSetup;
+    ms.setup.selected = static_cast<uint8_t>(mn::SetupRow::ArmSwitch);
+    ms.editing = true;
+    st.active_model.arm_switch = 0;
+    mn::update(ms, mn::Input{0, 0, 0, sa_moved}, st);
+    check(st.active_model.arm_switch == 1, "auto: arm switch follows SA when usable");
+    st.radio.adc_modes[0] = 3;  // SixPos: not usable for arm switch
+    st.active_model.arm_switch = 0;
+    mn::update(ms, mn::Input{0, 0, 1, sa_moved}, st);
+    check(st.active_model.arm_switch == 0, "auto: unusable arm switch change is ignored");
+    st.radio.adc_modes[0] = two_pos_code;
+
+    ms.screen = Screen::VarioSetup;
+    ms.vario = mn::ListPos{};
+    ms.editing = true;
+    st.active_model.vario_switch = 0;
+    mn::update(ms, mn::Input{0, 0, 0, sa_moved}, st);
+    check(st.active_model.vario_switch == 2, "auto: vario switch stores condition + 1");
+
+    ms.screen = Screen::MixerLine;
+    ms.mix_idx = 0;
+    ms.mix_line.selected = 5;
+    ms.editing = true;
+    st.active_model.mixes[0].switch_sel = 0;
+    mn::update(ms, mn::Input{0, 0, 0, sa_moved}, st);
+    check(st.active_model.mixes[0].switch_sel == 1, "auto: mixer switch row follows SA when usable");
+
+    ms.mix_line.selected = 1;
+    st.active_model.mixes[0].source = 0;
+    mn::update(ms, mn::Input{0, 0, 1, vr2_moved}, st);
+    const bool vrb_usable = mn::is_source_available(mn::kSourceVrb, st.radio, st.active_model);
+    check(st.active_model.mixes[0].source == (vrb_usable ? mn::kSourceVrb : 0),
+          "auto: mixer source takes VRB only when it is usable");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -3601,6 +3693,7 @@ int main() {
     menu_test();
     calib_test();
     dual_rate_test();
+    auto_select_test();
     throttle_curve_test();
     mixer_menu_test();
     aux_menu_test();
