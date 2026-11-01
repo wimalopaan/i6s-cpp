@@ -18,7 +18,7 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 ## Not yet ported
 
 - USB (device stack, HID and serial)
-- Trainer mode dashboard state and USB sim mode
+- USB sim mode (trainer)
 - Remaining buzzer cues (welcome, click, page, menu, preflight, inactivity, vario tone)
 - VarioSetup menu
 - Custom telemetry slots
