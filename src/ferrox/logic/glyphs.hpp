@@ -7,6 +7,7 @@
 
 #include "ferrox/logic/framebuffer.hpp"
 #include "ferrox/logic/switches.hpp"
+#include "ferrox/logic/widgets.hpp"
 
 namespace ferrox::logic::glyphs {
 
@@ -55,9 +56,9 @@ constexpr void draw_switch_arrow_compact(display::Framebuffer& fb, Point p, Swit
 }
 
 /// 11x7 battery gauge. The fill scales `mv` between `min_mv` and `max_mv` across 8 pixels.
-constexpr void draw_battery_gauge(display::Framebuffer& fb, Point p, uint16_t mv, uint16_t min_mv,
-                                  uint16_t max_mv) {
+constexpr void draw_battery_gauge(display::Framebuffer& fb, Point p, uint16_t mv, widgets::Range range) {
     const auto [x, y] = p;
+    const auto [min_mv, max_mv] = range;
     fb.draw_vline({x, y + 2}, 3, true);
     fb.draw_rect({{x + 1, y}, {10, 7}}, true);
 

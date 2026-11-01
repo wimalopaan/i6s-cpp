@@ -1156,7 +1156,7 @@ constexpr void render_main(Framebuffer& fb, const State& s) {
         }
         draw_icon_row(fb, static_cast<int>(slot), idx == s.main.selected, glyphs::kMenuGlyphs[idx], kMainItems[idx]);
     }
-    widgets::draw_scrollbar(fb, s.main.selected, static_cast<int>(kMainItems.size()), 13, 40);
+    widgets::draw_scrollbar(fb, {s.main.selected}, {static_cast<int>(kMainItems.size())}, {13, 40});
     const auto pos = counter_text(s.main.selected + 1u, kMainItems.size());
     widgets::draw_footer_split(fb, "[OK] Select   [ESC] Exit", pos.view());
 }
@@ -1174,7 +1174,7 @@ constexpr void render_models(Framebuffer& fb, const State& s, const ModelNames& 
         const auto label = model_row_text(idx, name, active);
         widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.models.selected, label.view(), {}, 0);
     }
-    widgets::draw_scrollbar(fb, s.models.selected, static_cast<int>(storage::kNumModels), 14, 36);
+    widgets::draw_scrollbar(fb, {s.models.selected}, {static_cast<int>(storage::kNumModels)}, {14, 36});
     widgets::draw_footer(fb, "[OK] Load     [ESC] Back");
 }
 
@@ -1413,7 +1413,7 @@ constexpr void render_radio_setup(Framebuffer& fb, const State& s, const storage
         const auto value = radio_value(r, idx);
         widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.radio.selected, kRadioLabels[idx], value.view(), 0);
     }
-    widgets::draw_scrollbar(fb, s.radio.selected, static_cast<int>(kRadioRows), 14, 36);
+    widgets::draw_scrollbar(fb, {s.radio.selected}, {static_cast<int>(kRadioRows)}, {14, 36});
     widgets::draw_footer(fb, "[OK] Toggle/Cycle   [ESC] Back");
 }
 
@@ -1429,7 +1429,7 @@ constexpr void render_input_setup(Framebuffer& fb, const State& s, const storage
         widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.input_setup.selected, kAuxInputNames[idx],
                                kAdcModeNames[mode], 0);
     }
-    widgets::draw_scrollbar(fb, s.input_setup.selected, static_cast<int>(count), 14, 36);
+    widgets::draw_scrollbar(fb, {s.input_setup.selected}, {static_cast<int>(count)}, {14, 36});
     widgets::draw_footer(fb, "[OK] Cycle Mode    [ESC] Back");
 }
 
@@ -1473,7 +1473,7 @@ constexpr void render_channel_reverse(Framebuffer& fb, const State& s, const sto
         widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.reverse.selected, labels::kChannelNames[idx],
                                reversed ? "REVERSE" : "NORMAL ", 76);
     }
-    widgets::draw_scrollbar(fb, s.reverse.selected, static_cast<int>(kNumChannels), 14, 36);
+    widgets::draw_scrollbar(fb, {s.reverse.selected}, {static_cast<int>(kNumChannels)}, {14, 36});
     widgets::draw_footer(fb, "[OK] Toggle   [ESC] Back");
 }
 
@@ -1601,7 +1601,7 @@ constexpr void render_wing_mixer(Framebuffer& fb, const State& s, const storage:
             }
         }
     }
-    widgets::draw_scrollbar(fb, static_cast<int>(s.wing.selected), static_cast<int>(rows), 14, 36);
+    widgets::draw_scrollbar(fb, {static_cast<int>(s.wing.selected)}, {static_cast<int>(rows)}, {14, 36});
     widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Diff" : "[OK] Select   [ESC] Back");
 }
 
@@ -1620,7 +1620,7 @@ constexpr void render_mixer_line(Framebuffer& fb, const State& s, const storage:
         const format::Text<11> value = mix_value(mix, idx);
         widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.mix_line.selected, kMixLabels[idx], value.view(), 56);
     }
-    widgets::draw_scrollbar(fb, static_cast<int>(s.mix_line.selected), static_cast<int>(kMixFields), 14, 36);
+    widgets::draw_scrollbar(fb, {static_cast<int>(s.mix_line.selected)}, {static_cast<int>(kMixFields)}, {14, 36});
     widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Value" : "[OK] Edit   [ESC] Back");
 }
 
@@ -1634,7 +1634,7 @@ constexpr void render_global_vars(Framebuffer& fb, const State& s, const storage
         const format::Text<5> value = format::format_percent(m.gvars[idx]);
         widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.gvars.selected, kGvarLabels[idx], value.view(), 56);
     }
-    widgets::draw_scrollbar(fb, static_cast<int>(s.gvars.selected), static_cast<int>(m.gvars.size()), 14, 36);
+    widgets::draw_scrollbar(fb, {static_cast<int>(s.gvars.selected)}, {static_cast<int>(m.gvars.size())}, {14, 36});
     widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Value" : "[OK] Edit   [ESC] Back");
 }
 

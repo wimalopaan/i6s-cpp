@@ -16,6 +16,43 @@ using display::kWidth;
 using display::Point;
 using display::Rect;
 
+struct Deflection {
+    int value;
+    friend constexpr bool operator==(const Deflection&, const Deflection&) = default;
+};
+
+struct Trim {
+    int value;
+    friend constexpr bool operator==(const Trim&, const Trim&) = default;
+};
+
+struct PotPosition {
+    int value;
+    friend constexpr bool operator==(const PotPosition&, const PotPosition&) = default;
+};
+
+struct Index {
+    int value;
+    friend constexpr bool operator==(const Index&, const Index&) = default;
+};
+
+struct Count {
+    int value;
+    friend constexpr bool operator==(const Count&, const Count&) = default;
+};
+
+struct Span {
+    int top;
+    int height;
+    friend constexpr bool operator==(const Span&, const Span&) = default;
+};
+
+struct Range {
+    uint16_t min;
+    uint16_t max;
+    friend constexpr bool operator==(const Range&, const Range&) = default;
+};
+
 // Header: centred 6x10 title at y = 2, divider at y = 11.
 constexpr void draw_header(Framebuffer& fb, std::string_view title) {
     const int x = std::max((kWidth - static_cast<int>(title.size()) * 6) / 2, 2);
@@ -56,10 +93,12 @@ constexpr void draw_footer_three(Framebuffer& fb, std::string_view left, std::st
 }
 
 // Framed bar for a value in -1000..+1000, with a trim tick at the trim position (-250..+250 maps to the bar).
-constexpr void draw_progress_bar(Framebuffer& fb, Rect r, int val, int trim) {
+constexpr void draw_progress_bar(Framebuffer& fb, Rect r, Deflection deflection, Trim trim_setting) {
     const auto [x, y] = r.pos;
     const auto [width, height] = r.size;
     fb.draw_rect(r, true);
+    const int val = deflection.value;
+    const int trim = trim_setting.value;
 
     const int max_fill = width - 2;
     const int normalized = std::clamp(val + 1000, 0, 2000);
@@ -121,15 +160,16 @@ constexpr void draw_list_row(Framebuffer& fb, int slot, bool selected, std::stri
 }
 
 // Vertical scrollbar at x = 125..127 with the thumb proportional to the visible share.
-constexpr void draw_scrollbar(Framebuffer& fb, int selected, int count, int top_y, int height) {
-    if (count <= 1) {
+constexpr void draw_scrollbar(Framebuffer& fb, Index selected, Count count, Span span) {
+    const auto [top_y, height] = span;
+    if (count.value <= 1) {
         return;
     }
     fb.draw_vline({126, top_y}, height, true);
 
-    const int thumb_h = std::clamp(height * 3 / count, 6, std::max(height, 6));
+    const int thumb_h = std::clamp(height * 3 / count.value, 6, std::max(height, 6));
     const int travel = std::max(height - thumb_h, 0);
-    const int thumb_y = top_y + selected * travel / (count - 1);
+    const int thumb_y = top_y + selected.value * travel / (count.value - 1);
 
     fb.fill_rect({{125, thumb_y}, {3, thumb_h}}, true);
 }
@@ -140,10 +180,12 @@ constexpr int cursor_position(int val, int min_pos, int travel) {
 }
 
 // Channel monitor gauge with centre ticks, trim tick and cursor.
-constexpr void draw_channel_gauge(Framebuffer& fb, Rect r, int val, int trim) {
+constexpr void draw_channel_gauge(Framebuffer& fb, Rect r, Deflection deflection, Trim trim_setting) {
     const auto [x, y] = r.pos;
     const auto [width, height] = r.size;
     fb.draw_rect(r, true);
+    const int val = deflection.value;
+    const int trim = trim_setting.value;
 
     const int center_x = x + width / 2;
     fb.draw_vline({center_x, y}, 2, true);
@@ -163,7 +205,7 @@ constexpr void draw_channel_gauge(Framebuffer& fb, Rect r, int val, int trim) {
 }
 
 // Two-lane pot bar (width x 7) with separate cursors for VR1 and VR2.
-constexpr void draw_split_pot_bar(Framebuffer& fb, Point p, int width, int vr1, int vr2) {
+constexpr void draw_split_pot_bar(Framebuffer& fb, Point p, int width, PotPosition vr1, PotPosition vr2) {
     const auto [x, y] = p;
     if (width < 8) {
         return;
@@ -182,10 +224,10 @@ constexpr void draw_split_pot_bar(Framebuffer& fb, Point p, int width, int vr1, 
     const int min_pos = x + 2;
     const int travel = std::max(width - 5, 1);
 
-    const int c1 = cursor_position(vr1, min_pos, travel);
+    const int c1 = cursor_position(vr1.value, min_pos, travel);
     fb.fill_rect({{c1 - 1, y + 1}, {3, 2}}, true);
 
-    const int c2 = cursor_position(vr2, min_pos, travel);
+    const int c2 = cursor_position(vr2.value, min_pos, travel);
     fb.fill_rect({{c2 - 1, y + 4}, {3, 2}}, true);
 }
 

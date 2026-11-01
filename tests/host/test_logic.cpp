@@ -749,13 +749,13 @@ void display_test() {
           "selected list row highlight 2..125 x 23..31");
 
     fb.clear();
-    widgets::draw_scrollbar(fb, 0, 4, 14, 40);
+    widgets::draw_scrollbar(fb, {0}, {4}, {14, 40});
     check((fb.data()[1 * 128 + 126] & 0x40) != 0 && (fb.data()[1 * 128 + 125] & 0x40) != 0 &&
               (fb.data()[5 * 128 + 125] & 0x10) == 0,
           "scrollbar track and thumb at top");
 
     fb.clear();
-    widgets::draw_progress_bar(fb, {{0, 0}, {102, 8}}, 0, 0);
+    widgets::draw_progress_bar(fb, {{0, 0}, {102, 8}}, {0}, {0});
     check((fb.data()[0 * 128 + 50] & 0x10) != 0 && (fb.data()[0 * 128 + 51] & 0x10) == 0,
           "progress bar fill at mid-scale");
 

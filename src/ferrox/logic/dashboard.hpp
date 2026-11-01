@@ -173,22 +173,23 @@ constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st,
             fb.fill_rect({{92, 1}, {22, 8}}, true);
             fb.draw_str_4x6({93, 3}, vbat.view(), true);
         } else {
-            glyphs::draw_battery_gauge(fb, {116, 2}, battery_mv, warn_mv, std::max<uint16_t>(warn_mv, 6000));
+            glyphs::draw_battery_gauge(fb, {116, 2}, battery_mv, {warn_mv, std::max<uint16_t>(warn_mv, 6000)});
             fb.draw_str_4x6({93, 3}, vbat.view(), false);
         }
     } else {
         const auto max_mv = static_cast<uint16_t>(std::max<unsigned>(6000u, warn_mv + 800u));
-        glyphs::draw_battery_gauge(fb, {116, 2}, battery_mv, warn_mv, max_mv);
+        glyphs::draw_battery_gauge(fb, {116, 2}, battery_mv, {warn_mv, max_mv});
         fb.draw_str_4x6({93, 3}, vbat.view(), false);
     }
 
     fb.draw_hline({0, 11}, kWidth, true);
 }
 
-constexpr void draw_stick_row(Framebuffer& fb, int y, std::string_view label, Rect gauge, int val, int trim) {
+constexpr void draw_stick_row(Framebuffer& fb, int y, std::string_view label, Rect gauge, widgets::Deflection val,
+                              widgets::Trim trim) {
     fb.draw_str_6x10({2, y}, label, false);
     widgets::draw_channel_gauge(fb, gauge, val, trim);
-    const auto pct = format::format_percent(static_cast<int16_t>(val));
+    const auto pct = format::format_percent(static_cast<int16_t>(val.value));
     fb.draw_str_6x10({92, y}, pct.view(), false);
 }
 
@@ -199,24 +200,24 @@ constexpr void draw_primary_sticks(Framebuffer& fb, const View& v) {
 
     const bool general = static_cast<mixer::ModelType>(v.storage.active_model.model_type) == mixer::ModelType::General;
     if (general) {
-        draw_stick_row(fb, 12, "RH", {{16, 13}, {72, 7}}, g.rh, t.roll);
-        draw_stick_row(fb, 20, "RV", {{16, 21}, {72, 7}}, g.rv, t.pitch);
-        draw_stick_row(fb, 28, "LV", {{16, 29}, {72, 7}}, g.lv, t.throttle);
-        draw_stick_row(fb, 36, "LH", {{16, 37}, {72, 7}}, g.lh, t.yaw);
+        draw_stick_row(fb, 12, "RH", {{16, 13}, {72, 7}}, {g.rh}, {t.roll});
+        draw_stick_row(fb, 20, "RV", {{16, 21}, {72, 7}}, {g.rv}, {t.pitch});
+        draw_stick_row(fb, 28, "LV", {{16, 29}, {72, 7}}, {g.lv}, {t.throttle});
+        draw_stick_row(fb, 36, "LH", {{16, 37}, {72, 7}}, {g.lh}, {t.yaw});
         return;
     }
 
     const auto controls = flight::flight_controls(g, safety::stick_mode_from(radio.stick_mode));
-    draw_stick_row(fb, 12, "A", {{12, 13}, {76, 7}}, controls.aileron, t.roll);
-    draw_stick_row(fb, 20, "E", {{12, 21}, {76, 7}}, controls.elevator, t.pitch);
+    draw_stick_row(fb, 12, "A", {{12, 13}, {76, 7}}, {controls.aileron}, {t.roll});
+    draw_stick_row(fb, 20, "E", {{12, 21}, {76, 7}}, {controls.elevator}, {t.pitch});
 
     fb.draw_str_6x10({2, 28}, "T", false);
     const int thr_trim = radio.throttle_trim != 0 ? t.throttle : 0;
-    widgets::draw_progress_bar(fb, {{12, 29}, {76, 7}}, controls.throttle, thr_trim);
+    widgets::draw_progress_bar(fb, {{12, 29}, {76, 7}}, {controls.throttle}, {thr_trim});
     const auto thr_pct = format::format_throttle_percent(controls.throttle);
     fb.draw_str_6x10({92, 28}, thr_pct.view(), false);
 
-    draw_stick_row(fb, 36, "R", {{12, 37}, {76, 7}}, controls.rudder, t.yaw);
+    draw_stick_row(fb, 36, "R", {{12, 37}, {76, 7}}, {controls.rudder}, {t.yaw});
 }
 
 constexpr void draw_fixed_switch_slot(Framebuffer& fb, Point label_pos, Point val_pos, std::string_view label,
@@ -241,7 +242,7 @@ constexpr void draw_default_layout(Framebuffer& fb, const input::InputState& in,
         draw_fixed_switch_slot(fb, {56, 47}, {63, 46}, "D", s.sd);
     }
     fb.draw_str_4x6({74, 47}, "VR", false);
-    widgets::draw_split_pot_bar(fb, {84, 46}, 42, in.pots.vr1, in.pots.vr2);
+    widgets::draw_split_pot_bar(fb, {84, 46}, 42, {in.pots.vr1}, {in.pots.vr2});
 }
 
 struct SwitchSlot {
@@ -391,7 +392,7 @@ constexpr void draw_adaptive_layout(Framebuffer& fb, const input::InputState& in
     if (layout.pot_count == 1) {
         widgets::draw_single_pot_bar(fb, {m.pot_start_x, 46}, m.pot_w, layout.pots[0]);
     } else if (layout.pot_count == 2) {
-        widgets::draw_split_pot_bar(fb, {m.pot_start_x, 46}, m.pot_w, layout.pots[0], layout.pots[1]);
+        widgets::draw_split_pot_bar(fb, {m.pot_start_x, 46}, m.pot_w, {layout.pots[0]}, {layout.pots[1]});
     } else {
         widgets::draw_multi_pot_bar(fb, {m.pot_start_x, 45}, m.pot_w,
                                     std::span<const int16_t>(layout.pots.data(), layout.pot_count));
