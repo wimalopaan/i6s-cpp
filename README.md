@@ -33,6 +33,8 @@ Firmware (clang + arm-none-eabi-gcc for Cortex-M0, MinSizeRel):
     cmake -S . -B build-fw -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi-clang.cmake -DCMAKE_BUILD_TYPE=MinSizeRel
     cmake --build build-fw --target i6s_fw
 
+`USE_USB` (default ON) sets `FERROX_USE_USB`, so USB code can be left out to save flash: `-DUSE_USB=OFF`.
+
 Host tests (clang with C++26 support):
 
     cmake -S . -B build-host -DCMAKE_CXX_COMPILER=clang++

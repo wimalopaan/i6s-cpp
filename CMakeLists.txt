@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(FERROX_BUILD_TESTS "Build host-side logic tests" ON)
+option(USE_USB "Include the USB device stack (removing it saves flash)" ON)
 
 if(CMAKE_CROSSCOMPILING)
     # Short commit hash for the system info screen, as the Rust build.rs does. The reflog changes on every commit, so
@@ -44,7 +45,8 @@ if(CMAKE_CROSSCOMPILING)
     # C++-only flags: the assembler step would otherwise warn about them as unused.
     target_compile_definitions(i6s_fw PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:STM32F072xB>
-        "$<$<COMPILE_LANGUAGE:CXX>:FERROX_FW_VERSION=\"${PROJECT_VERSION}\";FERROX_GIT_HASH=\"${FERROX_GIT_HASH}\">")
+        "$<$<COMPILE_LANGUAGE:CXX>:FERROX_FW_VERSION=\"${PROJECT_VERSION}\";FERROX_GIT_HASH=\"${FERROX_GIT_HASH}\">"
+        $<$<BOOL:${USE_USB}>:FERROX_USE_USB=1>)
     target_compile_options(i6s_fw PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
@@ -76,6 +78,7 @@ elseif(FERROX_BUILD_TESTS)
     enable_testing()
     add_executable(host_logic_tests tests/host/test_logic.cpp)
     target_include_directories(host_logic_tests PRIVATE src)
+    target_compile_definitions(host_logic_tests PRIVATE $<$<BOOL:${USE_USB}>:FERROX_USE_USB=1>)
     target_compile_options(host_logic_tests PRIVATE -Wall -Wextra -fno-exceptions -fno-rtti)
     add_test(NAME host_logic_tests COMMAND host_logic_tests)
 endif()
