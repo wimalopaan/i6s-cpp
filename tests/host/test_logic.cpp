@@ -3,7 +3,9 @@
 #include <cstdio>
 #include <span>
 
+#include "ferrox/logic/a7105.hpp"
 #include "ferrox/logic/afhds2a.hpp"
+#include "ferrox/logic/afhds2a_radio.hpp"
 #include "ferrox/logic/brr.hpp"
 #include "ferrox/logic/calib.hpp"
 #include "ferrox/logic/crsf.hpp"
@@ -1748,6 +1750,124 @@ void afhds2a_test() {
           "afhds2a: failsafe request queues failsafe packet");
 }
 
+static_assert(logic::a7105::crc_ok(0x00));
+static_assert(!logic::a7105::crc_ok(0x20));
+static_assert(logic::a7105::power_from_index(0) == 0x1F);
+static_assert(logic::a7105::power_from_index(1) == 0x0D);
+static_assert(logic::a7105::power_from_index(2) == 0x02);
+static_assert(logic::a7105::power_from_index(3) == 0x00);
+static_assert(logic::a7105::power_from_index(7) == 0x1F);
+static_assert(logic::a7105::cmd_read(0x10) == 0x50);
+static_assert(logic::a7105::cmd_write(0x45) == 0x05);
+static_assert(logic::a7105::kAfhds2aInit.size() == 50);
+static_assert(logic::a7105::kAfhds2aInit[0] == 0xFF);
+static_assert(logic::a7105::kAfhds2aInit[1] == 0xE2);
+static_assert(logic::a7105::kAfhds2aInit[11] == 0x19);
+static_assert(logic::a7105::kAfhds2aInit[12] == 0x01);
+static_assert(logic::a7105::kAfhds2aInit[16] == 0x9E);
+
+void a7105_radio_test() {
+    namespace af = logic::afhds2a;
+    namespace a7 = logic::a7105;
+
+    af::Heartbeat gate{};
+    bool gate_ok = true;
+    for (int i = 0; i < 29; ++i) {
+        gate_ok = gate_ok && gate.allow_tx(0);
+    }
+    check(gate_ok, "heartbeat: first 29 unchanged ticks still transmit");
+    check(!gate.allow_tx(0), "heartbeat: 30th unchanged tick stops TX");
+    check(gate.allow_tx(5), "heartbeat: new heartbeat resumes TX");
+    check(gate.stale == 0, "heartbeat: stale count reset");
+
+    af::Radio bind(0x12345678);
+    check(!bind.binding(), "radio: starts in normal mode");
+    const auto bind_power = bind.set_bind_mode(true);
+    check(bind_power && *bind_power == a7::kBindPower, "radio: bind mode uses bind power");
+    check(bind.binding(), "radio: bind mode active");
+
+    const auto t1 = bind.on_timer_tick();
+    check(t1.channel == 0x0D, "bind: odd packet uses channel 0x0D");
+    check(t1.packet[0] == af::kPacketBind1, "bind: phase 1 sends 0xBB");
+    const auto g1 = bind.on_gio2_event();
+    check(g1.step == af::GioStep::StartRx && g1.front == af::FrontEnd::Off,
+          "bind: TX done starts RX with front-end off");
+    check(bind.link.bind_step == af::BindStep::Phase2, "bind: phase 1 -> 2");
+    auto cycle = [&bind] {
+        bind.on_timer_tick();
+        return bind.on_gio2_event();
+    };
+    cycle();
+    check(bind.link.bind_step == af::BindStep::Phase3, "bind: phase 2 -> 3");
+    cycle();
+    check(bind.link.bind_step == af::BindStep::Phase1, "bind: phase 3 -> 1");
+    check(bind.on_timer_tick().channel == 0x8C, "bind: even packet uses channel 0x8C");
+
+    af::Frame bind_reply{};
+    bind_reply[0] = af::kPacketBind2;
+    bind_reply[9] = 0x01;
+    bind_reply[5] = 0x78;
+    bind_reply[6] = 0x56;
+    bind_reply[7] = 0x34;
+    bind_reply[8] = 0x12;
+    bind.on_rx_frame(bind_reply, 0, 0);
+    check(bind.link.rx_id == 0x12345678, "bind: receiver answer captures RX ID");
+    check(bind.link.bind_step == af::BindStep::Confirm, "bind: receiver answer enters confirm");
+
+    for (int i = 0; i < 3; ++i) {
+        bind.on_timer_tick();
+    }
+    check(bind.binding(), "bind: three confirm packets keep binding");
+    const auto done = bind.on_timer_tick();
+    check(!bind.binding() && done.power_reg && *done.power_reg == a7::kPowerHigh,
+          "bind: fourth confirm leaves bind mode with high power");
+    check(bind.link.bind_done, "bind: bind_done after confirm");
+    const auto saved = bind.take_rx_save();
+    check(saved && *saved == 0x12345678, "bind: RX ID queued for persistence");
+    check(!bind.take_rx_save(), "bind: save flag cleared after take");
+
+    af::Radio normal(0x12345678);
+    normal.set_rx_id(0x11223344);
+    bool sticks_before_failsafe = true;
+    for (uint32_t i = 1; i <= 1568; ++i) {
+        sticks_before_failsafe = sticks_before_failsafe && normal.on_timer_tick().packet[0] == af::kPacketSticks;
+    }
+    check(sticks_before_failsafe, "normal: sticks frames before the failsafe period");
+    check(normal.on_timer_tick().packet[0] == af::kPacketFailsafe, "normal: failsafe frame at packet 1569");
+    check(normal.on_timer_tick().packet[0] == af::kPacketSticks, "normal: sticks resume after failsafe");
+
+    af::Radio lossy(0x12345678);
+    lossy.link.telemetry.connected = true;
+    lossy.link.telemetry.rssi = 80;
+    for (int i = 0; i < 52; ++i) {
+        lossy.on_timer_tick();
+    }
+    check(lossy.link.telemetry.connected, "loss: 52 missed frames keep the link");
+    lossy.on_timer_tick();
+    check(!lossy.link.telemetry.connected && lossy.link.telemetry.rssi == 0,
+          "loss: 53rd missed frame drops the link");
+
+    af::Radio rxs(0xAABBCCDD);
+    rxs.set_rx_id(0);
+    check(!rxs.link.bind_done && rxs.link.rx_id == 0xFFFF'FFFFu, "rx id: zero becomes placeholder");
+    af::Frame downlink{};
+    downlink[0] = 0xAC;
+    downlink[1] = 0xDD;
+    downlink[2] = 0xCC;
+    downlink[3] = 0xBB;
+    downlink[4] = 0xAA;
+    downlink[5] = 0x78;
+    downlink[6] = 0x56;
+    downlink[7] = 0x34;
+    downlink[8] = 0x12;
+    rxs.on_rx_frame(downlink, 0x20, 1000);
+    check(rxs.link.rx_id == 0x12345678, "rx id: placeholder replaced by downlink ID");
+    check(rxs.link.telemetry.connected, "rx id: downlink marks link connected");
+    const auto rx_saved = rxs.take_rx_save();
+    check(rx_saved && *rx_saved == 0x12345678, "rx id: captured ID requests save");
+    check(!rxs.take_rx_save(), "rx id: save flag cleared after take");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -1766,6 +1886,7 @@ int main() {
     aux_menu_test();
     radio_setup_test();
     afhds2a_test();
+    a7105_radio_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }
