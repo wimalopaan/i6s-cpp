@@ -197,6 +197,7 @@ constexpr Tile sensor_tile(SlotId slot, NowMs now, const Sources& s) {
             return Tile{.label = "PKTS RX", .value = plain(static_cast<int32_t>(at.packets_received))};
         case 11:
             return Tile{.label = "TIMER", .value = to_text(s.timer.empty() ? std::string_view{"00:00"} : s.timer)};
+        // Deliberate deviation from Rust: under CRSF these tiles use CRSF data (Rust reads AFHDS fields for both).
         case 12: {
             const SensorStatus st = crsf ? check_sensor_status(LastSeenMs{ct.last_vspd_ms}, now, ct.connected)
                                          : check_sensor_status(LastSeenMs{at.last_vspd_ms}, now, at.connected);
