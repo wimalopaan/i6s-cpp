@@ -26,6 +26,8 @@ namespace ferrox::logic::dashboard {
 
 using display::Framebuffer;
 using display::kWidth;
+using display::Point;
+using display::Rect;
 
 inline constexpr uint8_t kPageCount = 5;
 inline constexpr uint16_t kKeyPageDown = 1u << 8;
@@ -115,12 +117,12 @@ constexpr std::string_view rf_status_fixed(const View& v) {
 constexpr void draw_rf_status(Framebuffer& fb, const View& v) {
     const auto fixed = rf_status_fixed(v);
     if (!fixed.empty()) {
-        fb.draw_str_4x6(64, 3, fixed, false);
+        fb.draw_str_4x6({64, 3}, fixed, false);
         return;
     }
     const auto r = std::min<unsigned>(v.telem.rssi, 100u);
     if (r >= 100u) {
-        fb.draw_str_4x6(64, 3, "R:100", false);
+        fb.draw_str_4x6({64, 3}, "R:100", false);
         return;
     }
     const auto digits = format::format_dec2(r);
@@ -130,7 +132,7 @@ constexpr void draw_rf_status(Framebuffer& fb, const View& v) {
     for (const char c : digits.view()) {
         t.push(c);
     }
-    fb.draw_str_4x6(64, 3, t.view(), false);
+    fb.draw_str_4x6({64, 3}, t.view(), false);
 }
 
 
@@ -157,9 +159,9 @@ constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st,
         for (const char c : digits.view()) {
             fallback.push(c);
         }
-        fb.draw_str_6x10(2, 2, fallback.view(), false);
+        fb.draw_str_6x10({2, 2}, fallback.view(), false);
     } else {
-        fb.draw_str_6x10(2, 2, trimmed, false);
+        fb.draw_str_6x10({2, 2}, trimmed, false);
     }
 
     draw_rf_status(fb, v);
@@ -168,27 +170,26 @@ constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st,
     const auto warn_mv = static_cast<uint16_t>(st.radio.vbat_warn_deci * 100u);
     if (battery_mv < warn_mv) {
         if ((blink_phase & 0x10u) != 0) {
-            fb.fill_rect(92, 1, 22, 8, true);
-            fb.draw_str_4x6(93, 3, vbat.view(), true);
+            fb.fill_rect({{92, 1}, {22, 8}}, true);
+            fb.draw_str_4x6({93, 3}, vbat.view(), true);
         } else {
-            glyphs::draw_battery_gauge(fb, 116, 2, battery_mv, warn_mv, std::max<uint16_t>(warn_mv, 6000));
-            fb.draw_str_4x6(93, 3, vbat.view(), false);
+            glyphs::draw_battery_gauge(fb, {116, 2}, battery_mv, warn_mv, std::max<uint16_t>(warn_mv, 6000));
+            fb.draw_str_4x6({93, 3}, vbat.view(), false);
         }
     } else {
         const auto max_mv = static_cast<uint16_t>(std::max<unsigned>(6000u, warn_mv + 800u));
-        glyphs::draw_battery_gauge(fb, 116, 2, battery_mv, warn_mv, max_mv);
-        fb.draw_str_4x6(93, 3, vbat.view(), false);
+        glyphs::draw_battery_gauge(fb, {116, 2}, battery_mv, warn_mv, max_mv);
+        fb.draw_str_4x6({93, 3}, vbat.view(), false);
     }
 
-    fb.draw_hline(0, 11, kWidth, true);
+    fb.draw_hline({0, 11}, kWidth, true);
 }
 
-constexpr void draw_stick_row(Framebuffer& fb, int y, std::string_view label, int gauge_x, int gauge_w, int val,
-                              int trim) {
-    fb.draw_str_6x10(2, y, label, false);
-    widgets::draw_channel_gauge(fb, gauge_x, y + 1, gauge_w, 7, val, trim);
+constexpr void draw_stick_row(Framebuffer& fb, int y, std::string_view label, Rect gauge, int val, int trim) {
+    fb.draw_str_6x10({2, y}, label, false);
+    widgets::draw_channel_gauge(fb, gauge, val, trim);
     const auto pct = format::format_percent(static_cast<int16_t>(val));
-    fb.draw_str_6x10(92, y, pct.view(), false);
+    fb.draw_str_6x10({92, y}, pct.view(), false);
 }
 
 constexpr void draw_primary_sticks(Framebuffer& fb, const View& v) {
@@ -198,49 +199,49 @@ constexpr void draw_primary_sticks(Framebuffer& fb, const View& v) {
 
     const bool general = static_cast<mixer::ModelType>(v.storage.active_model.model_type) == mixer::ModelType::General;
     if (general) {
-        draw_stick_row(fb, 12, "RH", 16, 72, g.rh, t.roll);
-        draw_stick_row(fb, 20, "RV", 16, 72, g.rv, t.pitch);
-        draw_stick_row(fb, 28, "LV", 16, 72, g.lv, t.throttle);
-        draw_stick_row(fb, 36, "LH", 16, 72, g.lh, t.yaw);
+        draw_stick_row(fb, 12, "RH", {{16, 13}, {72, 7}}, g.rh, t.roll);
+        draw_stick_row(fb, 20, "RV", {{16, 21}, {72, 7}}, g.rv, t.pitch);
+        draw_stick_row(fb, 28, "LV", {{16, 29}, {72, 7}}, g.lv, t.throttle);
+        draw_stick_row(fb, 36, "LH", {{16, 37}, {72, 7}}, g.lh, t.yaw);
         return;
     }
 
     const auto controls = flight::flight_controls(g, safety::stick_mode_from(radio.stick_mode));
-    draw_stick_row(fb, 12, "A", 12, 76, controls.aileron, t.roll);
-    draw_stick_row(fb, 20, "E", 12, 76, controls.elevator, t.pitch);
+    draw_stick_row(fb, 12, "A", {{12, 13}, {76, 7}}, controls.aileron, t.roll);
+    draw_stick_row(fb, 20, "E", {{12, 21}, {76, 7}}, controls.elevator, t.pitch);
 
-    fb.draw_str_6x10(2, 28, "T", false);
+    fb.draw_str_6x10({2, 28}, "T", false);
     const int thr_trim = radio.throttle_trim != 0 ? t.throttle : 0;
-    widgets::draw_progress_bar(fb, 12, 29, 76, 7, controls.throttle, thr_trim);
+    widgets::draw_progress_bar(fb, {{12, 29}, {76, 7}}, controls.throttle, thr_trim);
     const auto thr_pct = format::format_throttle_percent(controls.throttle);
-    fb.draw_str_6x10(92, 28, thr_pct.view(), false);
+    fb.draw_str_6x10({92, 28}, thr_pct.view(), false);
 
-    draw_stick_row(fb, 36, "R", 12, 76, controls.rudder, t.yaw);
+    draw_stick_row(fb, 36, "R", {{12, 37}, {76, 7}}, controls.rudder, t.yaw);
 }
 
-constexpr void draw_fixed_switch_slot(Framebuffer& fb, int label_x, int val_x, std::string_view label,
+constexpr void draw_fixed_switch_slot(Framebuffer& fb, Point label_pos, Point val_pos, std::string_view label,
                                       SwitchPos pos) {
-    fb.draw_str_4x6(label_x, 47, label, false);
-    glyphs::draw_switch_arrow(fb, val_x, 46, pos);
+    fb.draw_str_4x6(label_pos, label, false);
+    glyphs::draw_switch_arrow(fb, val_pos, pos);
 }
 
 constexpr void draw_default_layout(Framebuffer& fb, const input::InputState& in, const storage::RadioStorage& st) {
     const auto& s = in.switches;
     if (st.radio.ext_switches != 0) {
-        draw_fixed_switch_slot(fb, 2, 7, "A", s.sa);
-        draw_fixed_switch_slot(fb, 13, 18, "B", s.sb);
-        draw_fixed_switch_slot(fb, 24, 29, "C", s.sc);
-        draw_fixed_switch_slot(fb, 35, 40, "D", s.sd);
-        draw_fixed_switch_slot(fb, 46, 51, "E", s.se);
-        draw_fixed_switch_slot(fb, 57, 62, "F", s.sf);
+        draw_fixed_switch_slot(fb, {2, 47}, {7, 46}, "A", s.sa);
+        draw_fixed_switch_slot(fb, {13, 47}, {18, 46}, "B", s.sb);
+        draw_fixed_switch_slot(fb, {24, 47}, {29, 46}, "C", s.sc);
+        draw_fixed_switch_slot(fb, {35, 47}, {40, 46}, "D", s.sd);
+        draw_fixed_switch_slot(fb, {46, 47}, {51, 46}, "E", s.se);
+        draw_fixed_switch_slot(fb, {57, 47}, {62, 46}, "F", s.sf);
     } else {
-        draw_fixed_switch_slot(fb, 2, 9, "A", s.sa);
-        draw_fixed_switch_slot(fb, 20, 27, "B", s.sb);
-        draw_fixed_switch_slot(fb, 38, 45, "C", s.sc);
-        draw_fixed_switch_slot(fb, 56, 63, "D", s.sd);
+        draw_fixed_switch_slot(fb, {2, 47}, {9, 46}, "A", s.sa);
+        draw_fixed_switch_slot(fb, {20, 47}, {27, 46}, "B", s.sb);
+        draw_fixed_switch_slot(fb, {38, 47}, {45, 46}, "C", s.sc);
+        draw_fixed_switch_slot(fb, {56, 47}, {63, 46}, "D", s.sd);
     }
-    fb.draw_str_4x6(74, 47, "VR", false);
-    widgets::draw_split_pot_bar(fb, 84, 46, 42, in.pots.vr1, in.pots.vr2);
+    fb.draw_str_4x6({74, 47}, "VR", false);
+    widgets::draw_split_pot_bar(fb, {84, 46}, 42, in.pots.vr1, in.pots.vr2);
 }
 
 struct SwitchSlot {
@@ -356,15 +357,15 @@ constexpr RowMetrics adaptive_metrics(std::size_t sw_count, std::size_t pot_coun
 }
 
 constexpr void draw_adaptive_slot(Framebuffer& fb, int x, bool compact, const SwitchSlot& s) {
-    fb.draw_str_4x6(x + 1, 48, s.name, false);
+    fb.draw_str_4x6({x + 1, 48}, s.name, false);
     const int glyph_x = x + 5;
     if (s.six_pos) {
         const auto digit = static_cast<char>('0' + std::clamp<int>(s.mode_num, 1, 6));
-        fb.draw_str_4x6(glyph_x, 47, std::string_view(&digit, 1), false);
+        fb.draw_str_4x6({glyph_x, 47}, std::string_view(&digit, 1), false);
     } else if (compact) {
-        glyphs::draw_switch_arrow_compact(fb, glyph_x, 46, s.pos);
+        glyphs::draw_switch_arrow_compact(fb, {glyph_x, 46}, s.pos);
     } else {
-        glyphs::draw_switch_arrow(fb, glyph_x, 46, s.pos);
+        glyphs::draw_switch_arrow(fb, {glyph_x, 46}, s.pos);
     }
 }
 
@@ -383,16 +384,16 @@ constexpr void draw_adaptive_layout(Framebuffer& fb, const input::InputState& in
     if (layout.switch_count > 0) {
         const int div_x = m.pot_start_x - 2;
         if (div_x > 2 && div_x < kWidth) {
-            fb.draw_vline(div_x, 46, 8, true);
+            fb.draw_vline({div_x, 46}, 8, true);
         }
     }
 
     if (layout.pot_count == 1) {
-        widgets::draw_single_pot_bar(fb, m.pot_start_x, 46, m.pot_w, layout.pots[0]);
+        widgets::draw_single_pot_bar(fb, {m.pot_start_x, 46}, m.pot_w, layout.pots[0]);
     } else if (layout.pot_count == 2) {
-        widgets::draw_split_pot_bar(fb, m.pot_start_x, 46, m.pot_w, layout.pots[0], layout.pots[1]);
+        widgets::draw_split_pot_bar(fb, {m.pot_start_x, 46}, m.pot_w, layout.pots[0], layout.pots[1]);
     } else {
-        widgets::draw_multi_pot_bar(fb, m.pot_start_x, 45, m.pot_w,
+        widgets::draw_multi_pot_bar(fb, {m.pot_start_x, 45}, m.pot_w,
                                     std::span<const int16_t>(layout.pots.data(), layout.pot_count));
     }
 }
@@ -434,18 +435,18 @@ constexpr void draw_channel_page(Framebuffer& fb, const std::array<uint16_t, kNu
             } else {
                 label[1] = static_cast<char>('0' + ch_num);
             }
-            fb.draw_str_4x6(col_x, y, std::string_view(label.data(), label.size()), false);
+            fb.draw_str_4x6({col_x, y}, std::string_view(label.data(), label.size()), false);
 
             const auto us = std::clamp<uint16_t>(chs[static_cast<std::size_t>(ch)], kChannelMinUs, kChannelMaxUs);
             const int fill = std::min((us - kChannelMinUs) * 24 / kChannelSpanUs, 24);
-            widgets::draw_bar_gauge(fb, col_x + 14, y + 1, 26, 5, fill);
+            widgets::draw_bar_gauge(fb, {{col_x + 14, y + 1}, {26, 5}}, fill);
 
             const auto digits = widgets::format_u16_4(us);
-            fb.draw_str_4x6(col_x + 42, y, std::string_view(digits.data(), digits.size()), false);
+            fb.draw_str_4x6({col_x + 42, y}, std::string_view(digits.data(), digits.size()), false);
         }
     }
 
-    fb.draw_vline(64, 12, second_part ? 33 : 41, true);
+    fb.draw_vline({64, 12}, second_part ? 33 : 41, true);
     if (second_part) {
         widgets::draw_footer_split(fb, "P3/5", "CH 11-18 MONITOR");
     } else {
@@ -457,20 +458,20 @@ constexpr void draw_model_page(Framebuffer& fb, const View& v) {
     const auto& st = v.storage;
     const auto& m = st.active_model;
     const auto name = model_name(m);
-    fb.draw_str_6x10(2, 14, format::trim_spaces(name.view()), false);
-    fb.draw_str_6x10(74, 14, model_type_label(m.model_type), false);
+    fb.draw_str_6x10({2, 14}, format::trim_spaces(name.view()), false);
+    fb.draw_str_6x10({74, 14}, model_type_label(m.model_type), false);
 
-    fb.draw_str_6x10(2, 24, "RxID:", false);
+    fb.draw_str_6x10({2, 24}, "RxID:", false);
     const auto rx_id = format::format_hex32(m.rx_id);
-    fb.draw_str_6x10(36, 24, rx_id.view(), false);
+    fb.draw_str_6x10({36, 24}, rx_id.view(), false);
 
-    fb.draw_str_6x10(2, 34, "TCrv:", false);
-    fb.draw_str_6x10(36, 34, m.thr_curve_pts == 9 ? std::string_view("9-PT") : std::string_view("5-PT"), false);
-    fb.draw_str_6x10(74, 34, m.thr_curve_smooth != 0 ? std::string_view("SMOOTH") : std::string_view("LINEAR"),
+    fb.draw_str_6x10({2, 34}, "TCrv:", false);
+    fb.draw_str_6x10({36, 34}, m.thr_curve_pts == 9 ? std::string_view("9-PT") : std::string_view("5-PT"), false);
+    fb.draw_str_6x10({74, 34}, m.thr_curve_smooth != 0 ? std::string_view("SMOOTH") : std::string_view("LINEAR"),
                      false);
 
     // CRSF telemetry is not ported yet, so its line always shows DISCONNECTED.
-    fb.draw_str_6x10(2, 44, v.crsf ? std::string_view("CRSF: DISCONNECTED") : afhds_link_line(v), false);
+    fb.draw_str_6x10({2, 44}, v.crsf ? std::string_view("CRSF: DISCONNECTED") : afhds_link_line(v), false);
 
     widgets::draw_footer_split(fb, "P4/5", "MODEL DASHBOARD");
 }
@@ -478,15 +479,15 @@ constexpr void draw_model_page(Framebuffer& fb, const View& v) {
 // AFHDS 2A sensor page, same layout as Rust `telemetry.rs` (AFHDS branch). CRSF is not ported yet.
 constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
     if (v.crsf) {
-        fb.draw_str_6x10(22, 26, "NOT PORTED YET", false);
+        fb.draw_str_6x10({22, 26}, "NOT PORTED YET", false);
         widgets::draw_footer_split(fb, "P5/5", "TELEMETRY");
         return;
     }
 
-    fb.draw_vline(64, 12, 42, true);
+    fb.draw_vline({64, 12}, 42, true);
 
     const bool rssi_ok = sensor_fresh(v, v.telem.last_rx_voltage_ms);
-    fb.draw_str_6x10(2, 14, "RSSI:", false);
+    fb.draw_str_6x10({2, 14}, "RSSI:", false);
     if (rssi_ok) {
         const auto r = std::min<unsigned>(v.telem.rssi, 100u);
         const auto digits = format::format_dec2(r);
@@ -495,33 +496,33 @@ constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
             t.push(c);
         }
         t.push('%');
-        fb.draw_str_6x10(44, 14, t.view(), false);
+        fb.draw_str_6x10({44, 14}, t.view(), false);
     } else {
-        fb.draw_str_6x10(44, 14, "--%", false);
+        fb.draw_str_6x10({44, 14}, "--%", false);
     }
 
-    fb.draw_str_6x10(2, 24, v.telem.connected ? "LINK: OK" : "LINK: DISC", false);
+    fb.draw_str_6x10({2, 24}, v.telem.connected ? "LINK: OK" : "LINK: DISC", false);
 
     format::Text<5> tx_count;
     format::detail::push_uint(tx_count, v.packets_sent);
-    fb.draw_str_6x10(2, 34, "TX:", false);
-    fb.draw_str_6x10(24, 34, tx_count.view(), false);
+    fb.draw_str_6x10({2, 34}, "TX:", false);
+    fb.draw_str_6x10({24, 34}, tx_count.view(), false);
 
     format::Text<5> rx_count;
     format::detail::push_uint(rx_count, v.telem.packets_received);
-    fb.draw_str_6x10(2, 44, "RX:", false);
-    fb.draw_str_6x10(24, 44, rx_count.view(), false);
+    fb.draw_str_6x10({2, 44}, "RX:", false);
+    fb.draw_str_6x10({24, 44}, rx_count.view(), false);
 
     const bool rx_fresh = sensor_fresh(v, v.telem.last_rx_voltage_ms) && v.telem.rx_voltage_mv > 0;
     const auto rx_text = format::format_vbat(v.telem.rx_voltage_mv);
-    fb.draw_str_6x10(66, 14, "RX:", false);
-    fb.draw_str_6x10(88, 14, rx_fresh ? rx_text.view() : std::string_view("----"), false);
+    fb.draw_str_6x10({66, 14}, "RX:", false);
+    fb.draw_str_6x10({88, 14}, rx_fresh ? rx_text.view() : std::string_view("----"), false);
 
     const auto tx_text = format::format_vbat(v.in.battery_mv);
-    fb.draw_str_6x10(66, 24, "TX:", false);
-    fb.draw_str_6x10(88, 24, tx_text.view(), false);
+    fb.draw_str_6x10({66, 24}, "TX:", false);
+    fb.draw_str_6x10({88, 24}, tx_text.view(), false);
 
-    fb.draw_str_6x10(66, 34, "mRSS:", false);
+    fb.draw_str_6x10({66, 34}, "mRSS:", false);
     if (v.stats.seen) {
         const auto digits = format::format_dec2(std::min<unsigned>(v.stats.min_rssi, 100u));
         format::Text<4> t;
@@ -529,15 +530,15 @@ constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
             t.push(c);
         }
         t.push('%');
-        fb.draw_str_6x10(98, 34, t.view(), false);
+        fb.draw_str_6x10({98, 34}, t.view(), false);
     } else {
-        fb.draw_str_6x10(98, 34, " --%", false);
+        fb.draw_str_6x10({98, 34}, " --%", false);
     }
 
-    fb.draw_str_6x10(66, 44, "mRX:", false);
+    fb.draw_str_6x10({66, 44}, "mRX:", false);
     const bool min_rx_ok = v.stats.seen && v.stats.min_rx_v_mv != 0xFFFF && v.stats.min_rx_v_mv > 0;
     const auto min_rx_text = format::format_vbat(v.stats.min_rx_v_mv);
-    fb.draw_str_6x10(92, 44, min_rx_ok ? min_rx_text.view() : std::string_view("----"), false);
+    fb.draw_str_6x10({92, 44}, min_rx_ok ? min_rx_text.view() : std::string_view("----"), false);
 
     if (v.binding) {
         widgets::draw_footer(fb, "[ESC] Finish Bind");
@@ -563,9 +564,9 @@ constexpr void render(Framebuffer& fb, PageState& s, const View& v) {
 
 constexpr void draw_splash(Framebuffer& fb) {
     fb.clear();
-    glyphs::draw_ferrox_logo(fb, 50, 3);
-    fb.draw_str_6x10(37, 34, "FERROX-RC", false);
-    fb.draw_str_4x6(38, 45, "flysky-i6x-rs", false);
+    glyphs::draw_ferrox_logo(fb, {50, 3});
+    fb.draw_str_6x10({37, 34}, "FERROX-RC", false);
+    fb.draw_str_4x6({38, 45}, "flysky-i6x-rs", false);
 }
 
 }  // namespace ferrox::logic::dashboard

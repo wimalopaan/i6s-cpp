@@ -14,6 +14,7 @@
 namespace ferrox::logic::calib {
 
 using display::Framebuffer;
+using display::Rect;
 
 inline constexpr uint16_t kKeyOk = 1u << 10;
 inline constexpr uint16_t kKeyCancel = 1u << 11;
@@ -196,14 +197,16 @@ constexpr bool update(Wizard& w, const Input& in, storage::RadioConfig& radio) {
 }
 
 // Mirrors the Rust gauge: a centre bar, travel fill on each side, and a live cursor.
-constexpr void draw_gauge(Framebuffer& fb, int x, int y, int w, int h, uint16_t center, uint16_t lo, uint16_t hi,
-                          uint16_t cur, uint32_t target) {
+constexpr void draw_gauge(Framebuffer& fb, Rect r, uint16_t center, uint16_t lo, uint16_t hi, uint16_t cur,
+                          uint32_t target) {
+    const auto [x, y] = r.pos;
+    const auto [w, h] = r.size;
     if (w < 6 || h < 3) {
         return;
     }
-    fb.draw_rect(x, y, w, h, true);
+    fb.draw_rect(r, true);
     const int cx = x + w / 2;
-    fb.draw_vline(cx, y, h, true);
+    fb.draw_vline({cx, y}, h, true);
 
     const int half = w / 2 - 1;
     if (half <= 0 || target == 0) {
@@ -217,11 +220,11 @@ constexpr void draw_gauge(Framebuffer& fb, int x, int y, int w, int h, uint16_t 
 
     const int left = scaled(sat_sub(center, lo));
     if (left > 0) {
-        fb.draw_hline(cx - left, mid, left + 1, true);
+        fb.draw_hline({cx - left, mid}, left + 1, true);
     }
     const int right = scaled(sat_sub(hi, center));
     if (right > 0) {
-        fb.draw_hline(cx, mid, right + 1, true);
+        fb.draw_hline({cx, mid}, right + 1, true);
     }
 
     const int delta = static_cast<int>(cur) - static_cast<int>(center);
@@ -229,7 +232,7 @@ constexpr void draw_gauge(Framebuffer& fb, int x, int y, int w, int h, uint16_t 
     const int cur_x = delta < 0 ? cx - dist : cx + dist;
     const int marker_h = h - 2;
     if (marker_h > 0) {
-        fb.draw_vline(cur_x, y + 1, marker_h, true);
+        fb.draw_vline({cur_x, y + 1}, marker_h, true);
     }
 }
 
@@ -240,11 +243,11 @@ constexpr void draw_sticks(Framebuffer& fb, const Wizard& w, const input::Raw& r
     const auto ready = stick_ready(w, radio);
     for (std::size_t i = 0; i < kSticks; ++i) {
         const int y = 13 + static_cast<int>(i) * 8;
-        fb.draw_str_6x10(2, y - 1, labels[i], false);
+        fb.draw_str_6x10({2, y - 1}, labels[i], false);
         // Horizontal axes (aileron, rudder) travel ~1350 counts, vertical ones ~1250.
         const uint32_t target = (i == 0 || i == 3) ? 1350u : 1250u;
-        draw_gauge(fb, 10, y, 63, 7, w.stick_center[i], w.stick_min[i], w.stick_max[i], raw[i], target);
-        fb.draw_str_6x10(75, y - 1, ready[i] ? "OK" : "--", false);
+        draw_gauge(fb, {{10, y}, {63, 7}}, w.stick_center[i], w.stick_min[i], w.stick_max[i], raw[i], target);
+        fb.draw_str_6x10({75, y - 1}, ready[i] ? "OK" : "--", false);
     }
 }
 
@@ -263,24 +266,24 @@ constexpr void draw_pots(Framebuffer& fb, const Wizard& w, const Pots& pots, con
         if (count <= 2) {
             const int text_y = count == 1 ? 18 : (i == 0 ? 12 : 28);
             const int box_y = count == 1 ? 27 : (i == 0 ? 21 : 37);
-            fb.draw_str_6x10(92, text_y, name, false);
-            fb.draw_str_6x10(110, text_y, status, false);
-            draw_gauge(fb, 92, box_y, 35, 7, center, lo, hi, cur, kPotTargetSpan);
+            fb.draw_str_6x10({92, text_y}, name, false);
+            fb.draw_str_6x10({110, text_y}, status, false);
+            draw_gauge(fb, {{92, box_y}, {35, 7}}, center, lo, hi, cur, kPotTargetSpan);
         } else if (count <= 4) {
             const int y = 13 + static_cast<int>(i) * 8;
-            fb.draw_str_4x6(89, y + 1, name, false);
-            fb.draw_str_4x6(99, y + 1, status, false);
-            draw_gauge(fb, 110, y, 17, 7, center, lo, hi, cur, kPotTargetSpan);
+            fb.draw_str_4x6({89, y + 1}, name, false);
+            fb.draw_str_4x6({99, y + 1}, status, false);
+            draw_gauge(fb, {{110, y}, {17, 7}}, center, lo, hi, cur, kPotTargetSpan);
         } else {
             constexpr int kColWidth = 18;
             const std::size_t rows_per_col = (count + 1) / 2;
             const int x = i / rows_per_col == 0 ? 89 : 108;
             const int y = 13 + static_cast<int>(i % rows_per_col) * 7;
-            fb.draw_str_4x6(x, y, name, false);
+            fb.draw_str_4x6({x, y}, name, false);
             if (moved) {
-                fb.draw_rect(x + 9, y, kColWidth - 9, 6, true);
+                fb.draw_rect({{x + 9, y}, {kColWidth - 9, 6}}, true);
             }
-            draw_gauge(fb, x + 9, y, kColWidth - 9, 6, center, lo, hi, cur, kPotTargetSpan);
+            draw_gauge(fb, {{x + 9, y}, {kColWidth - 9, 6}}, center, lo, hi, cur, kPotTargetSpan);
         }
     }
 }
@@ -292,9 +295,9 @@ constexpr void render(Framebuffer& fb, const Wizard& w, const input::Raw& raw, c
 
         case Step::Center:
             widgets::draw_header(fb, "CALIBRATION (1/2)");
-            fb.draw_str_6x10(2, 15, "1. Center all sticks", false);
-            fb.draw_str_6x10(2, 25, "   & rotary pots.", false);
-            fb.draw_str_6x10(2, 36, "2. Move THR to middle!", false);
+            fb.draw_str_6x10({2, 15}, "1. Center all sticks", false);
+            fb.draw_str_6x10({2, 25}, "   & rotary pots.", false);
+            fb.draw_str_6x10({2, 36}, "2. Move THR to middle!", false);
             if (w.waiting_release) {
                 widgets::draw_footer(fb, "Release [OK] key...");
             } else {
@@ -321,8 +324,8 @@ constexpr void render(Framebuffer& fb, const Wizard& w, const input::Raw& raw, c
 
         case Step::Complete:
             widgets::draw_header(fb, "CALIBRATION (OK)");
-            fb.draw_str_6x10(10, 19, "CALIBRATION SAVED!", false);
-            fb.draw_str_6x10(14, 33, "EEPROM updated OK", false);
+            fb.draw_str_6x10({10, 19}, "CALIBRATION SAVED!", false);
+            fb.draw_str_6x10({14, 33}, "EEPROM updated OK", false);
             widgets::draw_footer(fb, "Ready");
             break;
     }

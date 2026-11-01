@@ -10,57 +10,62 @@
 
 namespace ferrox::logic::glyphs {
 
+using display::Point;
+
 /// 5x7 switch position arrow.
-constexpr void draw_switch_arrow(display::Framebuffer& fb, int x, int y, SwitchPos pos) {
+constexpr void draw_switch_arrow(display::Framebuffer& fb, Point p, SwitchPos pos) {
+    const auto [x, y] = p;
     switch (pos) {
         case SwitchPos::Up:
-            fb.set_pixel(x + 2, y, true);
-            fb.draw_hline(x + 1, y + 1, 3, true);
-            fb.draw_hline(x, y + 2, 5, true);
-            fb.draw_vline(x + 2, y + 3, 4, true);
+            fb.set_pixel({x + 2, y}, true);
+            fb.draw_hline({x + 1, y + 1}, 3, true);
+            fb.draw_hline({x, y + 2}, 5, true);
+            fb.draw_vline({x + 2, y + 3}, 4, true);
             break;
         case SwitchPos::Mid:
-            fb.draw_hline(x, y + 3, 5, true);
+            fb.draw_hline({x, y + 3}, 5, true);
             break;
         case SwitchPos::Down:
-            fb.draw_vline(x + 2, y, 4, true);
-            fb.draw_hline(x, y + 4, 5, true);
-            fb.draw_hline(x + 1, y + 5, 3, true);
-            fb.set_pixel(x + 2, y + 6, true);
+            fb.draw_vline({x + 2, y}, 4, true);
+            fb.draw_hline({x, y + 4}, 5, true);
+            fb.draw_hline({x + 1, y + 5}, 3, true);
+            fb.set_pixel({x + 2, y + 6}, true);
             break;
     }
 }
 
 /// Compact 3x7 switch position arrow for dense rows.
-constexpr void draw_switch_arrow_compact(display::Framebuffer& fb, int x, int y, SwitchPos pos) {
+constexpr void draw_switch_arrow_compact(display::Framebuffer& fb, Point p, SwitchPos pos) {
+    const auto [x, y] = p;
     switch (pos) {
         case SwitchPos::Up:
-            fb.set_pixel(x + 1, y, true);
-            fb.draw_hline(x, y + 1, 3, true);
-            fb.draw_vline(x + 1, y + 2, 5, true);
+            fb.set_pixel({x + 1, y}, true);
+            fb.draw_hline({x, y + 1}, 3, true);
+            fb.draw_vline({x + 1, y + 2}, 5, true);
             break;
         case SwitchPos::Mid:
-            fb.draw_hline(x, y + 3, 3, true);
+            fb.draw_hline({x, y + 3}, 3, true);
             break;
         case SwitchPos::Down:
-            fb.draw_vline(x + 1, y, 5, true);
-            fb.draw_hline(x, y + 5, 3, true);
-            fb.set_pixel(x + 1, y + 6, true);
+            fb.draw_vline({x + 1, y}, 5, true);
+            fb.draw_hline({x, y + 5}, 3, true);
+            fb.set_pixel({x + 1, y + 6}, true);
             break;
     }
 }
 
 /// 11x7 battery gauge. The fill scales `mv` between `min_mv` and `max_mv` across 8 pixels.
-constexpr void draw_battery_gauge(display::Framebuffer& fb, int x, int y, uint16_t mv, uint16_t min_mv,
+constexpr void draw_battery_gauge(display::Framebuffer& fb, Point p, uint16_t mv, uint16_t min_mv,
                                   uint16_t max_mv) {
-    fb.draw_vline(x, y + 2, 3, true);
-    fb.draw_rect(x + 1, y, 10, 7, true);
+    const auto [x, y] = p;
+    fb.draw_vline({x, y + 2}, 3, true);
+    fb.draw_rect({{x + 1, y}, {10, 7}}, true);
 
     const uint32_t span = std::max<uint32_t>(max_mv > min_mv ? max_mv - min_mv : 1u, 1u);
     const uint32_t delta = mv > min_mv ? mv - min_mv : 0u;
     const auto fill_w = static_cast<int>(std::min<uint32_t>((delta * 8u) / span, 8u));
     if (fill_w > 0) {
-        fb.fill_rect(x + 10 - fill_w, y + 1, fill_w, 5, true);
+        fb.fill_rect({{x + 10 - fill_w, y + 1}, {fill_w, 5}}, true);
     }
 }
 
@@ -76,12 +81,12 @@ inline constexpr std::array<uint8_t, 95> kLogo28x27{
     227, 3,   0,   124, 30,  240, 128, 247, 1,   6,   248, 7,   96,  0,   14,
 };
 
-constexpr void draw_ferrox_logo(display::Framebuffer& fb, int x, int y) {
+constexpr void draw_ferrox_logo(display::Framebuffer& fb, Point p) {
     for (int row = 0; row < kLogoHeight; ++row) {
         for (int col = 0; col < kLogoWidth; ++col) {
             const int bit = row * kLogoWidth + col;
             if ((kLogo28x27[static_cast<std::size_t>(bit / 8)] >> (bit % 8)) & 1u) {
-                fb.set_pixel(x + col, y + row, true);
+                fb.set_pixel({p.x + col, p.y + row}, true);
             }
         }
     }
@@ -105,13 +110,13 @@ inline constexpr std::array<Glyph12, 12> kMenuGlyphs{{
     {0, 0, 15, 12, 67, 32, 2, 36, 64, 98, 36, 70, 4, 194, 48, 240, 0, 0},          // information outline
 }};
 
-/// Draws a 12x12 icon at (x, y); only set bits are drawn, in colour `on`.
-constexpr void draw_glyph_12x12(display::Framebuffer& fb, int x, int y, const Glyph12& data, bool on) {
+/// Draws a 12x12 icon at p; only set bits are drawn, in colour `on`.
+constexpr void draw_glyph_12x12(display::Framebuffer& fb, Point p, const Glyph12& data, bool on) {
     for (int row = 0; row < 12; ++row) {
         for (int col = 0; col < 12; ++col) {
             const int bit = row * 12 + col;
             if ((data[static_cast<std::size_t>(bit / 8)] >> (bit % 8)) & 1u) {
-                fb.set_pixel(x + col, y + row, on);
+                fb.set_pixel({p.x + col, p.y + row}, on);
             }
         }
     }

@@ -700,36 +700,36 @@ void display_test() {
     using namespace ferrox::logic;
 
     Framebuffer fb;
-    fb.set_pixel(5, 9, true);
+    fb.set_pixel({5, 9}, true);
     check(fb.data()[1 * 128 + 5] == 0x02 && lit_pixels(fb) == 1, "set_pixel page/bit placement");
-    fb.set_pixel(-1, 0, true);
-    fb.set_pixel(128, 0, true);
-    fb.set_pixel(0, 64, true);
+    fb.set_pixel({-1, 0}, true);
+    fb.set_pixel({128, 0}, true);
+    fb.set_pixel({0, 64}, true);
     check(lit_pixels(fb) == 1, "set_pixel ignores out-of-bounds");
 
     fb.clear();
-    fb.fill_rect(-5, -5, 10, 10, true);
+    fb.fill_rect({{-5, -5}, {10, 10}}, true);
     check(lit_pixels(fb) == 25, "fill_rect clips to the screen");
 
     fb.clear();
-    fb.draw_rect(0, 0, 10, 6, true);
+    fb.draw_rect({{0, 0}, {10, 6}}, true);
     check(lit_pixels(fb) == 28, "draw_rect outline pixel count");
 
     fb.clear();
-    fb.draw_char_4x6(0, 0, 'A', false);
+    fb.draw_char_4x6({0, 0}, 'A', false);
     check(lit_pixels(fb) == 10 && (fb.data()[0] & 0x02) != 0, "4x6 'A' glyph");
 
-    fb.fill_rect(0, 0, 4, 6, true);
-    fb.draw_char_4x6(0, 0, 'A', true);
+    fb.fill_rect({{0, 0}, {4, 6}}, true);
+    fb.draw_char_4x6({0, 0}, 'A', true);
     check(lit_pixels(fb) == 14, "inverted glyph clears lit pixels only");
 
     fb.clear();
-    fb.draw_char_4x6(0, 0, '\x7f', false);
-    fb.draw_char_6x10(0, 0, '\t', false);
+    fb.draw_char_4x6({0, 0}, '\x7f', false);
+    fb.draw_char_6x10({0, 0}, '\t', false);
     check(lit_pixels(fb) == 0, "non-printable characters are skipped");
 
     fb.clear();
-    fb.draw_char_6x10(0, 0, 'I', false);
+    fb.draw_char_6x10({0, 0}, 'I', false);
     check(lit_pixels(fb) == 11, "6x10 'I' glyph");
 
     fb.clear();
@@ -755,7 +755,7 @@ void display_test() {
           "scrollbar track and thumb at top");
 
     fb.clear();
-    widgets::draw_progress_bar(fb, 0, 0, 102, 8, 0, 0);
+    widgets::draw_progress_bar(fb, {{0, 0}, {102, 8}}, 0, 0);
     check((fb.data()[0 * 128 + 50] & 0x10) != 0 && (fb.data()[0 * 128 + 51] & 0x10) == 0,
           "progress bar fill at mid-scale");
 
@@ -1028,10 +1028,10 @@ void menu_test() {
           "menu glyph table must match the Rust bitmaps");
     {
         logic::display::Framebuffer icons{};
-        logic::glyphs::draw_glyph_12x12(icons, 0, 0, logic::glyphs::kMenuGlyphs[0], true);
+        logic::glyphs::draw_glyph_12x12(icons, {0, 0}, logic::glyphs::kMenuGlyphs[0], true);
         const int lit = lit_pixels(icons);
         icons.clear();
-        logic::glyphs::draw_glyph_12x12(icons, 0, 0, logic::glyphs::kMenuGlyphs[0], false);
+        logic::glyphs::draw_glyph_12x12(icons, {0, 0}, logic::glyphs::kMenuGlyphs[0], false);
         check(lit > 0 && lit_pixels(icons) == 0, "glyph with on=false must not light pixels on a clear buffer");
     }
 

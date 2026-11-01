@@ -21,6 +21,7 @@
 namespace ferrox::logic::menu {
 
 using display::Framebuffer;
+using display::Point;
 using ferrox::logic::kKeyOk;
 using safety::kKeyCancel;
 using ModelName = std::array<uint8_t, 10>;
@@ -1140,10 +1141,10 @@ constexpr void draw_icon_row(Framebuffer& fb, int slot, bool selected, const gly
                              std::string_view label) {
     const int y = 13 + slot * 14;
     if (selected) {
-        fb.fill_rect(2, y, 121, 13, true);
+        fb.fill_rect({{2, y}, {121, 13}}, true);
     }
-    glyphs::draw_glyph_12x12(fb, 4, y + 1, icon, !selected);
-    fb.draw_str_6x10(19, y + 3, label, selected);
+    glyphs::draw_glyph_12x12(fb, Point{4, y + 1}, icon, !selected);
+    fb.draw_str_6x10(Point{19, y + 3}, label, selected);
 }
 
 constexpr void render_main(Framebuffer& fb, const State& s) {
@@ -1192,8 +1193,8 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
                     const int char_x = kValueX + s.name_cursor * 6;
                     const uint8_t c = m.name[s.name_cursor];
                     const std::array<char, 1> one{c == 0 ? ' ' : static_cast<char>(c)};
-                    fb.fill_rect(char_x - 1, y, 8, 9, true);
-                    fb.draw_str_6x10(char_x, y, std::string_view(one.data(), 1), true);
+                    fb.fill_rect({{char_x - 1, y}, {8, 9}}, true);
+                    fb.draw_str_6x10(Point{char_x, y}, std::string_view(one.data(), 1), true);
                 }
                 break;
             }
@@ -1297,45 +1298,45 @@ constexpr void render_throttle_curve(Framebuffer& fb, const State& s, const stor
 
     const bool sel_pts = !s.editing && sel == 0;
     if (sel_pts) {
-        fb.fill_rect(2, 13, 70, 9, true);
+        fb.fill_rect({{2, 13}, {70, 9}}, true);
     }
-    fb.draw_str_6x10(4, 13, "Pts:", sel_pts);
-    fb.draw_str_6x10(32, 13, pts == 9 ? "9-PT" : (pts == 7 ? "7-PT" : "5-PT"), sel_pts);
+    fb.draw_str_6x10(Point{4, 13}, "Pts:", sel_pts);
+    fb.draw_str_6x10(Point{32, 13}, pts == 9 ? "9-PT" : (pts == 7 ? "7-PT" : "5-PT"), sel_pts);
 
     const bool sel_crv = !s.editing && sel == 1;
     if (sel_crv) {
-        fb.fill_rect(2, 23, 70, 9, true);
+        fb.fill_rect({{2, 23}, {70, 9}}, true);
     }
-    fb.draw_str_6x10(4, 23, "Crv:", sel_crv);
-    fb.draw_str_6x10(32, 23, m.thr_curve_smooth != 0 ? "SMOOTH" : "LINEAR", sel_crv);
+    fb.draw_str_6x10(Point{4, 23}, "Crv:", sel_crv);
+    fb.draw_str_6x10(Point{32, 23}, m.thr_curve_smooth != 0 ? "SMOOTH" : "LINEAR", sel_crv);
 
     if (sel >= 2) {
         const format::Text<9> label = curve_point_label(sel - 2, m.thr_curve[sel - 2]);
         if (s.editing) {
-            fb.fill_rect(2, 35, 70, 11, true);
-            fb.draw_str_6x10(4, 37, label.view(), true);
+            fb.fill_rect({{2, 35}, {70, 11}}, true);
+            fb.draw_str_6x10(Point{4, 37}, label.view(), true);
         } else {
-            fb.draw_rect(2, 35, 70, 11, true);
-            fb.draw_str_6x10(4, 37, label.view(), false);
+            fb.draw_rect({{2, 35}, {70, 11}}, true);
+            fb.draw_str_6x10(Point{4, 37}, label.view(), false);
         }
     } else {
-        fb.draw_str_6x10(4, 37, pts == 9 ? "Pts: 1..9" : (pts == 7 ? "Pts: 1..7" : "Pts: 1..5"), false);
+        fb.draw_str_6x10(Point{4, 37}, pts == 9 ? "Pts: 1..9" : (pts == 7 ? "Pts: 1..7" : "Pts: 1..5"), false);
     }
 
     // Graph box 49x37 at (76,13). Plot area 47 px wide, output 0..34 px high.
-    fb.draw_rect(76, 13, 49, 37, true);
+    fb.draw_rect({{76, 13}, {49, 37}}, true);
     const bool smooth = m.thr_curve_smooth != 0;
     for (int px = 0; px < 47; ++px) {
         const auto input = static_cast<uint16_t>(px * 1000 / 46);
         const uint16_t out = curve::evaluate(input, m.thr_curve_pts, smooth, m.thr_curve);
-        fb.set_pixel(77 + px, 48 - out * 34 / 1000, true);
+        fb.set_pixel(Point{77 + px, 48 - out * 34 / 1000}, true);
     }
     if (sel >= 2) {
         const std::size_t idx = sel - 2;
         const int input = static_cast<int>(idx * 1000 / (pts - 1));
         const int dot_x = 77 + input * 46 / 1000;
         const int dot_y = 48 - (m.thr_curve[idx] * 10 * 34) / 1000;
-        fb.fill_rect(dot_x - 1, dot_y - 1, 3, 3, true);
+        fb.fill_rect({{dot_x - 1, dot_y - 1}, {3, 3}}, true);
     }
 
     if (s.editing) {
@@ -1503,10 +1504,10 @@ constexpr void render_diag(Framebuffer& fb, const State& s, const Live& live) {
 
 constexpr void render_system(Framebuffer& fb, std::string_view mcu_name) {
     widgets::draw_header(fb, "SYSTEM INFORMATION");
-    fb.draw_str_4x6(4, 14, "MCU:", false);
-    fb.draw_str_4x6(48, 14, mcu_name, false);
-    fb.draw_str_4x6(4, 22, "Flash: 128KB | SRAM: 16KB", false);
-    fb.draw_str_4x6(4, 30, "Profiles: 20 Models (16KB)", false);
+    fb.draw_str_4x6(Point{4, 14}, "MCU:", false);
+    fb.draw_str_4x6(Point{48, 14}, mcu_name, false);
+    fb.draw_str_4x6(Point{4, 22}, "Flash: 128KB | SRAM: 16KB", false);
+    fb.draw_str_4x6(Point{4, 30}, "Profiles: 20 Models (16KB)", false);
     widgets::draw_footer(fb, "[ESC] Back");
 }
 
@@ -1592,11 +1593,11 @@ constexpr void render_wing_mixer(Framebuffer& fb, const State& s, const storage:
             const storage::MixLine& mix = m.mixes[mi];
             widgets::draw_list_row(fb, row, sel, mix_label(mi).view(), {}, 0);
             if (mix.target_ch == 0) {
-                fb.draw_str_6x10(32, y, "[DISABLED]", sel);
+                fb.draw_str_6x10(Point{32, y}, "[DISABLED]", sel);
             } else {
-                fb.draw_str_6x10(30, y, target_text(mix.target_ch).view(), sel);
-                fb.draw_str_6x10(58, y, "<-", sel);
-                fb.draw_str_6x10(74, y, name_at(labels::kSourceNames, mix.source), sel);
+                fb.draw_str_6x10(Point{30, y}, target_text(mix.target_ch).view(), sel);
+                fb.draw_str_6x10(Point{58, y}, "<-", sel);
+                fb.draw_str_6x10(Point{74, y}, name_at(labels::kSourceNames, mix.source), sel);
             }
         }
     }
