@@ -81,6 +81,19 @@ constexpr Text<5> format_percent(int16_t val) {
 }
 
 /// Unipolar throttle percent 0..100 as "   0%" .. " 100%" (always 5 characters).
+// Vario deadband in tenths of m/s (0..99) as "+1.2m/s" (climb) or "-0.5m/s" (sink).
+constexpr Text<7> format_deadband_ms(uint8_t tenths, bool sink) {
+    Text<7> t;
+    t.push(sink ? '-' : '+');
+    t.push(static_cast<char>('0' + (tenths / 10) % 10));
+    t.push('.');
+    t.push(static_cast<char>('0' + tenths % 10));
+    t.push('m');
+    t.push('/');
+    t.push('s');
+    return t;
+}
+
 constexpr Text<5> format_throttle_percent(int16_t val) {
     const int pct = std::clamp((static_cast<int>(val) + 1000) * 100 / 2000, 0, 100);
     Text<5> t;

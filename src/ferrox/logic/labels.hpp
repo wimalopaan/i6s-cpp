@@ -32,6 +32,17 @@ constexpr std::string_view switch_cond_label(uint8_t cond) {
     return cond < kSwitchCondNames.size() ? kSwitchCondNames[cond] : kSwitchCondNames[0];
 }
 
+// Vario sink mode: 0 mute, 1 pulse, 2 continuous (shown as DRONE).
+constexpr std::string_view vario_sink_mode_label(uint8_t mode) {
+    switch (mode) {
+        case 0: return "MUTE";
+        case 1: return "PULSE";
+        default: return "DRONE";
+    }
+}
+
+constexpr std::string_view vario_motor_mute_label(uint8_t mute) { return mute != 0 ? "ENABLED" : "DISABLED"; }
+
 inline constexpr std::array<std::string_view, 18> kChannelNames{
     "CH1 (AIL)", "CH2 (ELE)", "CH3 (THR)", "CH4 (RUD)", "CH5 (SA)",  "CH6 (SB)",
     "CH7 (VR1)", "CH8 (VR2)", "CH9 (SC)",  "CH10 (SD)", "CH11",     "CH12",

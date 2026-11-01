@@ -1028,7 +1028,8 @@ void menu_test() {
     const mn::ModelNames names{};
     mn::open(s);
     for (const Screen screen : {Screen::Main, Screen::ModelSelect, Screen::ModelSetup, Screen::ChannelReverse,
-                                Screen::ChannelMonitor, Screen::DiagAnalog, Screen::SystemInfo}) {
+                                Screen::ChannelMonitor, Screen::DiagAnalog, Screen::SystemInfo,
+                                Screen::VarioSetup}) {
         s.screen = screen;
         fb.clear();
         mn::render(fb, s, names, st, mn::Live{});
@@ -3268,9 +3269,10 @@ void model_copy_test() {
         return e;
     };
     press(mn::kKeyUp, 10);
-    check(s.setup.selected == 6 && s.setup.scroll == 3, "up from Name must wrap to the Reset row and scroll");
+    check(s.setup.selected == 7 && s.setup.scroll == 4, "up from Name must wrap to the Reset row and scroll");
     press(mn::kKeyUp, 15);
     press(mn::kKeyUp, 16);
+    press(mn::kKeyUp, 17);
     check(s.setup.selected == 4, "up from Reset must reach the Copy row");
     const mn::Event open_ev = press(mn::kKeyOk, 20);
     check(open_ev.action == Action::None && s.editing && s.copy.dst == mc::DstSlot{3},
@@ -3317,8 +3319,8 @@ void protocol_reset_test() {
     rs.active_model.rf_protocol = 0;
     mn::State s{};
     s.screen = mn::Screen::ModelSetup;
-    s.setup.selected = 5;
-    s.setup.scroll = 2;
+    s.setup.selected = 6;
+    s.setup.scroll = 3;
     auto press = [&](uint16_t key, uint32_t now) {
         const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
         mn::update(s, mn::Input{0, 0, now + 1}, rs);
@@ -3338,11 +3340,11 @@ void protocol_reset_test() {
     check(save_ev.action == Action::SaveActiveModel && !s.editing && rs.active_model.rf_protocol == 1,
           "second OK must save the CRSF selection and stop editing");
     press(mn::kKeyCancel, 70);
-    check(s.screen == mn::Screen::ModelSetup && s.setup.selected == 5 && s.setup.scroll == 2,
+    check(s.screen == mn::Screen::ModelSetup && s.setup.selected == 6 && s.setup.scroll == 3,
           "ESC must return to Model Setup on the Protocol row");
 
     // Cancel while editing keeps the toggled value in RAM without saving, then cancel leaves the sub-screen.
-    s.setup.selected = 5;
+    s.setup.selected = 6;
     press(mn::kKeyOk, 80);
     press(mn::kKeyOk, 90);
     press(mn::kKeyUp, 100);
@@ -3359,15 +3361,111 @@ void protocol_reset_test() {
     rs.active_model.rf_protocol = 1;
     rs.active_model.rx_id = 0x1234;
     rs.active_model.name = {'X', 'X', 'X', 0, 0, 0, 0, 0, 0, 0};
-    s.setup.selected = 6;
+    s.setup.selected = 7;
     const mn::Event reset_ev = press(mn::kKeyOk, 130);
     check(reset_ev.action == Action::ResetActiveModel && rs.active_model.rf_protocol == 0 &&
               rs.active_model.rx_id == 0 && rs.active_model.name == st::default_model_config(2).name,
           "OK on Reset must restore the active model defaults and request a reset");
 
-    s.setup.selected = 6;
+    s.setup.selected = 7;
     press(mn::kKeyUp, 140);
-    check(s.setup.selected == 5, "UP from Reset must reach the Protocol row");
+    check(s.setup.selected == 6, "UP from Reset must reach the Protocol row");
+}
+
+void vario_setup_test() {
+    namespace mn = logic::menu;
+    namespace st = logic::storage;
+    namespace lb = logic::labels;
+    namespace fmt = logic::format;
+    using mn::Action;
+
+    check(std::string_view{lb::vario_sink_mode_label(0)} == "MUTE" &&
+              std::string_view{lb::vario_sink_mode_label(1)} == "PULSE" &&
+              std::string_view{lb::vario_sink_mode_label(2)} == "DRONE",
+          "sink mode labels must match the Rust vario screen");
+    check(std::string_view{lb::vario_motor_mute_label(1)} == "ENABLED" &&
+              std::string_view{lb::vario_motor_mute_label(0)} == "DISABLED",
+          "motor mute labels must match the Rust vario screen");
+    check(fmt::format_deadband_ms(10, false).view() == "+1.0m/s" &&
+              fmt::format_deadband_ms(5, true).view() == "-0.5m/s",
+          "deadband text must show tenths of m/s with climb and sink signs");
+
+    // Deadband and sink mode cycles, including Rust's odd-start sink sequence.
+    check(mn::next_climb_deadband(10) == 1 && mn::next_climb_deadband(1) == 2, "climb deadband must wrap 1..10");
+    check(mn::next_sink_deadband(20) == 2 && mn::next_sink_deadband(5) == 7 && mn::next_sink_deadband(19) == 21,
+          "sink deadband must step by 2 and wrap as Rust does");
+
+    st::RadioStorage rs = st::default_storage();
+    rs.radio.active_model = 2;
+    rs.active_model.vario_switch = 0;
+    rs.active_model.vario_climb_deadband = 10;
+    rs.active_model.vario_sink_deadband = 5;
+    rs.active_model.vario_sink_mode = 1;
+    rs.active_model.vario_motor_mute = 1;
+    mn::State s{};
+    s.screen = mn::Screen::ModelSetup;
+    s.setup.selected = 5;
+    s.setup.scroll = 2;
+    auto press = [&](uint16_t key, uint32_t now) {
+        const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
+        mn::update(s, mn::Input{0, 0, now + 1}, rs);
+        return e;
+    };
+
+    press(mn::kKeyOk, 10);
+    check(s.screen == mn::Screen::VarioSetup && s.vario.selected == 0 && s.vario.scroll == 0 && !s.editing,
+          "OK on Vario must open the sub-screen at the top");
+    check(rs.active_model.vario_switch == 0, "switch row must start from OFF");
+
+    // Climb deadband: each OK cycles and saves.
+    press(mn::kKeyDown, 20);
+    const mn::Event climb_ev = press(mn::kKeyOk, 30);
+    check(climb_ev.action == Action::SaveActiveModel && rs.active_model.vario_climb_deadband == 1,
+          "OK on climb deadband must wrap to 0.1 m/s and save");
+    press(mn::kKeyDown, 40);
+    press(mn::kKeyOk, 50);
+    check(rs.active_model.vario_sink_deadband == 7, "OK on sink deadband must step to 0.7 m/s");
+
+    // Sink mode cycles Pulse -> Drone -> Mute; motor mute toggles.
+    press(mn::kKeyDown, 60);
+    press(mn::kKeyOk, 70);
+    check(rs.active_model.vario_sink_mode == 2, "sink mode must cycle from pulse to continuous");
+    press(mn::kKeyOk, 80);
+    check(rs.active_model.vario_sink_mode == 0, "sink mode must wrap to mute");
+    press(mn::kKeyDown, 90);
+    const mn::Event mute_ev = press(mn::kKeyOk, 100);
+    check(mute_ev.action == Action::SaveActiveModel && rs.active_model.vario_motor_mute == 0,
+          "OK on motor mute must toggle off and save");
+    press(mn::kKeyOk, 110);
+    check(rs.active_model.vario_motor_mute == 1, "OK on motor mute must toggle back on");
+
+    // Switch row: OFF cycles only to ON while no arm condition is available (no switch inputs configured).
+    press(mn::kKeyUp, 120);
+    press(mn::kKeyUp, 130);
+    press(mn::kKeyUp, 140);
+    press(mn::kKeyUp, 150);
+    check(s.vario.selected == 0, "UP must move back to the switch row");
+    press(mn::kKeyOk, 160);
+    check(s.editing, "OK on the switch row must start editing");
+    press(mn::kKeyUp, 170);
+    check(rs.active_model.vario_switch == 1, "UP while editing must select ON");
+    const mn::Event switch_done = press(mn::kKeyOk, 180);
+    check(switch_done.action == Action::SaveActiveModel && !s.editing && rs.active_model.vario_switch == 1,
+          "OK while editing must save the switch and stop editing");
+
+    // ESC from the sub-screen returns to Model Setup on the Vario row.
+    press(mn::kKeyCancel, 190);
+    check(s.screen == mn::Screen::ModelSetup && s.setup.selected == 5 && s.setup.scroll == 2,
+          "ESC must return to Model Setup on the Vario row");
+
+    // Rendering and the available-switch rule.
+    logic::display::Framebuffer fb{};
+    s.screen = mn::Screen::VarioSetup;
+    s.vario = mn::ListPos{};
+    mn::render(fb, s, mn::ModelNames{}, rs, mn::Live{});
+    check(mn::is_vario_switch_available(0, rs.radio) && mn::is_vario_switch_available(1, rs.radio) &&
+              !mn::is_vario_switch_available(24, rs.radio),
+          "OFF and ON must always be available and codes past 23 must not");
 }
 
 void trainer_test() {
@@ -3520,6 +3618,7 @@ int main() {
     bind_test();
     model_copy_test();
     protocol_reset_test();
+    vario_setup_test();
     trainer_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");

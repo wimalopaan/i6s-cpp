@@ -13,14 +13,13 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 - Storage: I2C EEPROM, A/B radio slots, model slots, legacy v1–v4 migration
 - Mixer, input, RC output, safety/preflight, calibration, trim, flight timer, vario, bind
 - Dashboard pages P1–P5 (P5: AFHDS 2A or CRSF diagnostics)
-- Menus: main menu, model setup (incl. copy), model select, dual rate/expo, throttle curve, wing/mixer, aux channels, diagnostics, system info, radio setup, protocol and reset
+- Menus: main menu, model setup (incl. copy), model select, dual rate/expo, throttle curve, wing/mixer, aux channels, diagnostics, system info, radio setup, vario setup, protocol and reset
 
 ## Not yet ported
 
 - USB (device stack, HID and serial)
 - USB sim mode (trainer)
 - Remaining buzzer cues (pot centre, menu list navigation, watchdog chirp, preflight exit, bind hold, RX save)
-- VarioSetup menu
 - Custom telemetry slots
 
 ## Known deviations from Rust

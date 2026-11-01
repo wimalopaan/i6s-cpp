@@ -48,13 +48,20 @@ inline constexpr std::size_t kItemModelSelect = 0;
 inline constexpr std::size_t kItemModelSetup = 1;
 
 // Rows of the model setup screen. Each row maps to one slot of the 4-row view.
-enum class SetupRow : uint8_t { Name = 0, Type, ArmSwitch, Timer, Copy, Protocol, Reset };
-inline constexpr std::size_t kSetupRows = 7;
+enum class SetupRow : uint8_t { Name = 0, Type, ArmSwitch, Timer, Copy, Vario, Protocol, Reset };
+inline constexpr std::size_t kSetupRows = 8;
+inline constexpr std::size_t kItemVarioRow = 5;
 inline constexpr uint8_t kNameLen = 10;
 inline constexpr uint8_t kModelTypeCount = 5;
 inline constexpr uint8_t kArmSwitchCount = 23;
 inline constexpr uint16_t kTimerStepSecs = 30;
 inline constexpr uint16_t kTimerMaxSecs = 3600;
+// Vario switch codes: 0 OFF, 1 ON, 2..23 arm conditions 1..22.
+inline constexpr uint8_t kVarioSwitchCount = 24;
+inline constexpr uint8_t kVarioClimbMaxTenths = 10;
+inline constexpr uint8_t kVarioSinkMaxTenths = 20;
+inline constexpr std::size_t kVarioRows = 5;
+enum class VarioRow : uint8_t { Switch = 0, ClimbDeadband, SinkDeadband, SinkMode, MotorMute };
 
 enum class Screen : uint8_t {
     Closed,
@@ -74,6 +81,7 @@ enum class Screen : uint8_t {
     RadioSetup,
     InputSetup,
     ProtocolSetup,
+    VarioSetup,
 };
 
 inline constexpr std::size_t kItemDualRate = 2;
@@ -168,6 +176,7 @@ struct State {
     ListPos aux{};
     ListPos radio{};
     ListPos input_setup{};
+    ListPos vario{};
     uint8_t axis{0};  // dual rate axis: 0 Roll, 1 Pitch, 2 Yaw
     uint8_t page{0};  // page of the channel monitor or analog diagnostics
     bool editing{false};
@@ -404,6 +413,11 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, mo
                     s.editing = true;
                     s.copy = model_copy::open(active);
                     break;
+                case SetupRow::Vario:
+                    s.screen = Screen::VarioSetup;
+                    s.vario = ListPos{};
+                    s.editing = false;
+                    break;
                 case SetupRow::Protocol:
                     s.screen = Screen::ProtocolSetup;
                     s.editing = false;
@@ -417,6 +431,7 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, mo
     }
 
     switch (row) {
+        case SetupRow::Vario:
         case SetupRow::Protocol:
         case SetupRow::Reset:
             break;
@@ -780,6 +795,70 @@ constexpr uint8_t step_available(uint8_t cur, std::size_t count, bool down, Ok o
     return cur;
 }
 
+// Vario switch codes that can be picked: OFF and ON always, others when their arm condition exists.
+constexpr bool is_vario_switch_available(uint8_t sw, const storage::RadioConfig& r) {
+    if (sw <= 1) {
+        return true;
+    }
+    return sw < kVarioSwitchCount && is_switch_cond_available(static_cast<uint8_t>(sw - 1), r);
+}
+
+// Deadband cycles as in Rust: climb 0.1..1.0 m/s, sink steps by 2 tenths and can reach 2.1 from an odd start.
+constexpr uint8_t next_climb_deadband(uint8_t tenths) {
+    return tenths >= kVarioClimbMaxTenths ? 1 : static_cast<uint8_t>(tenths + 1);
+}
+
+constexpr uint8_t next_sink_deadband(uint8_t tenths) {
+    return tenths >= kVarioSinkMaxTenths ? 2 : static_cast<uint8_t>(tenths + 2);
+}
+
+// Vario Setup sub-screen. Each change is saved at once, as Rust does. The switch row edits like the arm switch.
+constexpr Event update_vario(State& s, const Nav& n, storage::ModelConfig& m, const storage::RadioConfig& r) {
+    const Event save{Action::SaveActiveModel, 0};
+
+    if (!s.editing) {
+        if (n.cancel) {
+            s.screen = Screen::ModelSetup;
+            s.setup.selected = kItemVarioRow;
+            s.setup.scroll = window_scroll(ItemIndex{kItemVarioRow}, Rows{kListVisible});
+            return {};
+        }
+        if (n.up != n.down) {
+            step_list(s.vario, kVarioRows, Rows{kListVisible}, nav_dir(n));
+        }
+        if (n.ok) {
+            switch (static_cast<VarioRow>(s.vario.selected)) {
+                case VarioRow::Switch:
+                    s.editing = true;
+                    break;
+                case VarioRow::ClimbDeadband:
+                    m.vario_climb_deadband = next_climb_deadband(m.vario_climb_deadband);
+                    return save;
+                case VarioRow::SinkDeadband:
+                    m.vario_sink_deadband = next_sink_deadband(m.vario_sink_deadband);
+                    return save;
+                case VarioRow::SinkMode:
+                    m.vario_sink_mode = static_cast<uint8_t>((m.vario_sink_mode + 1) % 3);
+                    return save;
+                case VarioRow::MotorMute:
+                    m.vario_motor_mute = m.vario_motor_mute == 0 ? 1 : 0;
+                    return save;
+            }
+        }
+        return {};
+    }
+
+    if (n.up != n.down) {
+        m.vario_switch = step_available(m.vario_switch, kVarioSwitchCount, n.down,
+                                        [&r](uint8_t c) { return is_vario_switch_available(c, r); });
+    }
+    if (n.ok || n.cancel) {
+        s.editing = false;
+        return save;
+    }
+    return {};
+}
+
 constexpr bool wing_has_diff(const storage::ModelConfig& m) {
     return m.wing_tail_mix == 1 || m.wing_tail_mix == 3;
 }
@@ -1136,6 +1215,7 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
         case Screen::RadioSetup: return update_radio_setup(s, n, st.radio);
         case Screen::InputSetup: return update_input_setup(s, n, st.radio);
         case Screen::ProtocolSetup: return update_protocol(s, n, st.active_model);
+        case Screen::VarioSetup: return update_vario(s, n, st.active_model, st.radio);
         case Screen::ChannelReverse: return update_channel_reverse(s, n, st.active_model);
         case Screen::ChannelMonitor: return update_monitor(s, n);
         case Screen::DiagAnalog: return update_diag(s, n);
@@ -1307,6 +1387,9 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
                 }
                 break;
             }
+            case SetupRow::Vario:
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Vario:", "[SETUP]", {kValueX});
+                break;
             case SetupRow::Protocol:
                 widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Protocol:",
                                        protocol::label(protocol::from_raw(m.rf_protocol)), {64});
@@ -1327,6 +1410,50 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
     } else {
         widgets::draw_footer(fb, "[OK] Done   [UP/DN] Value");
     }
+}
+
+constexpr void render_vario(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
+    widgets::draw_header(fb, "VARIO SETUP");
+    for (std::size_t slot = 0; slot < kListVisible; ++slot) {
+        const std::size_t idx = s.vario.scroll + slot;
+        if (idx >= kVarioRows) {
+            break;
+        }
+        const bool selected = idx == s.vario.selected;
+        const int slot_i = static_cast<int>(slot);
+        switch (static_cast<VarioRow>(idx)) {
+            case VarioRow::Switch: {
+                const uint8_t sw = m.vario_switch;
+                const std::string_view value = sw == 0   ? std::string_view{"OFF"}
+                                               : sw == 1 ? std::string_view{"ON"}
+                                               : sw < kVarioSwitchCount
+                                                   ? labels::switch_cond_label(static_cast<uint8_t>(sw - 1))
+                                                   : std::string_view{"OFF"};
+                widgets::draw_list_row(fb, {slot_i}, selected, "Switch:", value, {0});
+                break;
+            }
+            case VarioRow::ClimbDeadband: {
+                const auto t = format::format_deadband_ms(m.vario_climb_deadband, false);
+                widgets::draw_list_row(fb, {slot_i}, selected, "Climb Dead:", t.view(), {0});
+                break;
+            }
+            case VarioRow::SinkDeadband: {
+                const auto t = format::format_deadband_ms(m.vario_sink_deadband, true);
+                widgets::draw_list_row(fb, {slot_i}, selected, "Sink Dead:", t.view(), {0});
+                break;
+            }
+            case VarioRow::SinkMode:
+                widgets::draw_list_row(fb, {slot_i}, selected, "Sink Mode:",
+                                       labels::vario_sink_mode_label(m.vario_sink_mode), {0});
+                break;
+            case VarioRow::MotorMute:
+                widgets::draw_list_row(fb, {slot_i}, selected, "Motor Mute:",
+                                       labels::vario_motor_mute_label(m.vario_motor_mute), {0});
+                break;
+        }
+    }
+    widgets::draw_scrollbar(fb, {s.vario.selected}, {static_cast<int>(kVarioRows)}, {14, 36});
+    widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Switch" : "[OK] Edit/Cycle    [ESC] Back");
 }
 
 constexpr void render_protocol(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
@@ -1888,6 +2015,7 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::RadioSetup: render_radio_setup(fb, s, st.radio); break;
         case Screen::InputSetup: render_input_setup(fb, s, st.radio); break;
         case Screen::ProtocolSetup: render_protocol(fb, s, st.active_model); break;
+        case Screen::VarioSetup: render_vario(fb, s, st.active_model); break;
         case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;
         case Screen::ChannelMonitor: render_monitor(fb, s, live, st.active_model); break;
         case Screen::DiagAnalog: render_diag(fb, s, live, st.radio); break;
