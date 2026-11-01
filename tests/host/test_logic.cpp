@@ -2227,6 +2227,75 @@ void a7105_radio_test() {
     check(!rxs.take_rx_save(), "rx id: save flag cleared after take");
 }
 
+void crsf_diag_test() {
+    namespace tm = logic::telemetry;
+    namespace crsf = logic::crsf;
+
+    const auto none = tm::crsf_diag(crsf::Telemetry{}, {.value = 1000});
+    check(none.lq.view() == "LQ: ---%", "crsf diag: no data shows LQ placeholder");
+    check(none.rssi.view() == "RS: ---dB", "crsf diag: no data shows RS placeholder");
+    check(none.snr.view() == "SNR: --dB", "crsf diag: no data shows SNR placeholder");
+    check(none.ant.view() == "ANT: -", "crsf diag: disconnected antenna");
+    check(none.pwr.view() == "PWR: ---", "crsf diag: no data shows PWR placeholder");
+    check(none.rate == "---", "crsf diag: no data shows rate placeholder");
+    check(none.bat_label.view() == "BAT:", "crsf diag: no data shows BAT label");
+    check(none.bat.view() == "----", "crsf diag: no data shows battery placeholder");
+    check(none.cap.view() == "----", "crsf diag: no data shows capacity placeholder");
+
+    crsf::Telemetry t{};
+    t.connected = true;
+    t.last_link_ms = 1000;
+    t.last_vbat_ms = 1000;
+    t.uplink_link_quality = 99;
+    t.uplink_rssi_1 = -50;
+    t.uplink_snr = 5;
+    t.tx_power_mw = 100;
+    t.rf_mode = 3;
+    t.active_antenna = 1;
+    t.rx_battery_mv = 7400;
+    t.cell_count = 2;
+    t.rx_capacity_mah = 1234;
+
+    const auto live = tm::crsf_diag(t, {.value = 1500});
+    check(live.lq.view() == "LQ: 99%", "crsf diag: live link quality");
+    check(live.rssi.view() == "RS: -050dB", "crsf diag: live RSSI is absolute, zero padded");
+    check(live.snr.view() == "SNR:+05dB", "crsf diag: live SNR is signed");
+    check(live.ant.view() == "ANT: 2", "crsf diag: antenna 2 when index is 1");
+    check(live.pwr.view() == "PWR: 100mW", "crsf diag: live TX power");
+    check(live.rate == "100Hz", "crsf diag: rate name from rf mode");
+    check(live.bat_label.view() == "2S: ", "crsf diag: cell count label");
+    check(live.bat.view() == "7.40V", "crsf diag: live RX battery");
+    check(live.cap.view() == " 1234", "crsf diag: capacity right aligned in 5 columns");
+
+    const auto stale = tm::crsf_diag(t, {.value = 5000});
+    check(stale.lq.view() == "LQ: 99%*", "crsf diag: stale link gets star");
+    check(stale.pwr.view() == "PWR: 100mW*", "crsf diag: stale power gets star");
+    check(stale.bat.view() == "7.40V*", "crsf diag: stale battery gets star");
+    check(stale.cap.view() == " 1234*", "crsf diag: stale capacity gets star");
+    check(stale.rate == "100Hz", "crsf diag: stale rate has no star");
+    check(stale.ant.view() == "ANT: 2", "crsf diag: antenna has no star");
+
+    crsf::Telemetry down = t;
+    down.connected = false;
+    const auto dropped = tm::crsf_diag(down, {.value = 1500});
+    check(dropped.ant.view() == "ANT: -", "crsf diag: disconnected link shows no antenna");
+    check(dropped.lq.view() == "LQ: 99%*", "crsf diag: disconnected link is stale");
+
+    crsf::Telemetry no_power = t;
+    no_power.tx_power_mw = 0;
+    no_power.cell_count = 1;
+    no_power.last_vbat_ms = 0;
+    const auto unpowered = tm::crsf_diag(no_power, {.value = 1500});
+    check(unpowered.pwr.view() == "PWR: ---", "crsf diag: zero power shows placeholder");
+    check(unpowered.bat_label.view() == "BAT:", "crsf diag: single cell shows BAT label");
+    check(unpowered.bat.view() == "----", "crsf diag: no battery data shows placeholder");
+
+    crsf::Telemetry ten_cells = t;
+    ten_cells.cell_count = 10;
+    check(tm::crsf_diag(ten_cells, {.value = 1500}).bat_label.view() == "BAT:",
+          "crsf diag: ten cells shows BAT label");
+}
+
 void telemetry_test() {
     namespace tm = logic::telemetry;
     namespace fmt = logic::format;
@@ -3395,6 +3464,7 @@ int main() {
     a7105_radio_test();
     vario_test();
     telemetry_test();
+    crsf_diag_test();
     buzzer_test();
     trim_controller_test();
     trim_autosave_test();

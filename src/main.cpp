@@ -524,7 +524,7 @@ int main() {
                        View{input, g_storage, g_trims, channels, crsf, rf_telem, rf_binding, g_rf_ok, rf_bound, now,
                             rf_sent, g_rf_stats,
                             logic::flight_timer::display(g_flight_timer, timer_config(model)),
-                            logic::flight_timer::modal(g_flight_timer)});
+                            logic::flight_timer::modal(g_flight_timer), hw::crsf::telemetry()});
             } else {
                 auto eeprom = g_eeprom;
                 eeprom.write_err = hw::I2c2Eeprom::write_failed();

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <iterator>
 #include <string_view>
 
@@ -298,6 +299,95 @@ constexpr Tile sensor_tile(SlotId slot, NowMs now, const Sources& s) {
         default:
             return Tile{.label = "SLOT OFF", .slot_off = true};
     }
+}
+
+// Text of the CRSF link diagnostics page (Rust `draw_telemetry_page`, CRSF branch). Each stat is the
+// full drawn text, including its label prefix and '*' stale mark. Placeholders are used without data.
+struct CrsfDiag {
+    format::Text<12> lq{};
+    format::Text<12> rssi{};
+    format::Text<12> snr{};
+    format::Text<12> ant{};
+    format::Text<12> pwr{};
+    std::string_view rate{};
+    format::Text<4> bat_label{};
+    format::Text<12> bat{};
+    format::Text<12> cap{};
+};
+
+namespace detail {
+
+constexpr format::Text<12> with_prefix(std::string_view prefix, const format::Text<12>& body) {
+    format::Text<12> t = to_text(prefix);
+    for (const char c : body.view()) {
+        t.push(c);
+    }
+    return t;
+}
+
+constexpr format::Text<12> diag_stat(bool has_data, bool stale, const format::Text<12>& value,
+                                     std::string_view placeholder) {
+    if (!has_data) {
+        return to_text(placeholder);
+    }
+    return stale ? mark_stale(value) : value;
+}
+
+}  // namespace detail
+
+constexpr CrsfDiag crsf_diag(const crsf::Telemetry& ct, NowMs now) {
+    using detail::diag_stat;
+    using detail::to_text;
+    using detail::with_prefix;
+    constexpr auto force = format::SignMode::Force;
+    const auto fixed = [](format::FixedFormat f) { return to_text(format::format_fixed(f)); };
+
+    const SensorStatus link = check_sensor_status(LastSeenMs{ct.last_link_ms}, now, ct.connected);
+    const SensorStatus vbat = check_sensor_status(LastSeenMs{ct.last_vbat_ms}, now, ct.connected);
+
+    CrsfDiag d;
+    d.lq = diag_stat(link.has_data, link.stale,
+                     with_prefix("LQ:", fixed({.value = std::min<int32_t>(ct.uplink_link_quality, 100),
+                                               .pad_digits = 3,
+                                               .suffix = "%"})),
+                     "LQ: ---%");
+    d.rssi = diag_stat(link.has_data, link.stale,
+                       with_prefix("RS: -", fixed({.value = std::abs(static_cast<int32_t>(ct.uplink_rssi_1)),
+                                                   .pad_digits = 3,
+                                                   .pad_zero = true,
+                                                   .suffix = "dB"})),
+                       "RS: ---dB");
+    d.snr = diag_stat(link.has_data, link.stale,
+                      with_prefix("SNR:", fixed({.value = ct.uplink_snr,
+                                                 .pad_digits = 2,
+                                                 .pad_zero = true,
+                                                 .sign = force,
+                                                 .suffix = "dB"})),
+                      "SNR: --dB");
+    // The antenna label is shown without the stale mark, as in Rust.
+    d.ant = to_text(std::string_view{!ct.connected ? "ANT: -" : ct.active_antenna == 0 ? "ANT: 1" : "ANT: 2"});
+    d.pwr = diag_stat(link.has_data && ct.tx_power_mw > 0, link.stale,
+                      with_prefix("PWR:", fixed({.value = ct.tx_power_mw, .pad_digits = 4, .suffix = "mW"})),
+                      "PWR: ---");
+    d.rate = link.has_data ? rf_mode_name(ct.rf_mode) : std::string_view{"---"};
+
+    if (vbat.has_data && ct.cell_count > 1 && ct.cell_count < 10) {
+        d.bat_label.push(static_cast<char>('0' + ct.cell_count));
+        d.bat_label.push('S');
+        d.bat_label.push(':');
+        d.bat_label.push(' ');
+    } else {
+        for (const char c : std::string_view{"BAT:"}) {
+            d.bat_label.push(c);
+        }
+    }
+    d.bat = diag_stat(vbat.has_data && ct.rx_battery_mv > 0, vbat.stale,
+                      to_text(format::format_vbat(ct.rx_battery_mv)), "----");
+    d.cap = diag_stat(vbat.has_data && ct.rx_capacity_mah > 0, vbat.stale,
+                      fixed({.value = static_cast<int32_t>(std::min<uint32_t>(ct.rx_capacity_mah, 99999u)),
+                             .pad_digits = 5}),
+                      "----");
+    return d;
 }
 
 }  // namespace ferrox::logic::telemetry

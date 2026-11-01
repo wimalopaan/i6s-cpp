@@ -99,6 +99,8 @@ struct View {
     // Flight timer footer and reset overlay; empty when the timer is off or no overlay is due.
     std::optional<flight_timer::Display> timer{};
     std::optional<flight_timer::Modal> timer_modal{};
+    // CRSF link state for page P5, only meaningful when crsf.
+    ferrox::logic::crsf::Telemetry crsf_link{};
 };
 
 using labels::model_name;
@@ -542,10 +544,29 @@ constexpr void draw_model_page(Framebuffer& fb, const View& v) {
 }
 
 // AFHDS 2A sensor page, same layout as Rust `telemetry.rs` (AFHDS branch). CRSF is not ported yet.
+constexpr void draw_crsf_telemetry_page(Framebuffer& fb, const View& v) {
+    const auto d = telemetry::crsf_diag(v.crsf_link, {.value = v.now_ms});
+    fb.draw_vline({64, 12}, 42, true);
+
+    fb.draw_str_6x10({2, 14}, d.lq.view(), false);
+    fb.draw_str_6x10({2, 24}, d.rssi.view(), false);
+    fb.draw_str_6x10({2, 34}, d.snr.view(), false);
+    fb.draw_str_6x10({2, 44}, d.ant.view(), false);
+
+    fb.draw_str_6x10({66, 14}, d.pwr.view(), false);
+    fb.draw_str_6x10({66, 24}, "RATE:", false);
+    fb.draw_str_6x10({98, 24}, d.rate, false);
+    fb.draw_str_6x10({66, 34}, d.bat_label.view(), false);
+    fb.draw_str_6x10({92, 34}, d.bat.view(), false);
+    fb.draw_str_6x10({66, 44}, "CAP:", false);
+    fb.draw_str_6x10({92, 44}, d.cap.view(), false);
+
+    widgets::draw_footer_split(fb, "P5/5", "CRSF LINK DIAG");
+}
+
 constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
     if (v.crsf) {
-        fb.draw_str_6x10({22, 26}, "NOT PORTED YET", false);
-        widgets::draw_footer_split(fb, "P5/5", "TELEMETRY");
+        draw_crsf_telemetry_page(fb, v);
         return;
     }
 
