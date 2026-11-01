@@ -18,6 +18,7 @@
 #include "ferrox/logic/bind.hpp"
 #include "ferrox/logic/brr.hpp"
 #include "ferrox/logic/buzzer.hpp"
+#include "ferrox/logic/buzzer_inputs.hpp"
 #include "ferrox/logic/calib.hpp"
 #include "ferrox/logic/flight.hpp"
 #include "ferrox/logic/framebuffer.hpp"
@@ -122,6 +123,14 @@ void store_trims_in_model() {
 // Plays a cue in the stored tone style. Cue::None is a no-op.
 void play_buzzer_cue(ferrox::logic::buzzer::Cue cue) {
     g_buzzer.play_cue(cue, ferrox::logic::buzzer::tone_style_from_u8(g_storage.radio.tone_style));
+}
+
+// Advances the buzzer and its output during the blocking boot screens, where the main loop does not run.
+void pump_buzzer(uint32_t& last_ms) {
+    const uint32_t now = ferrox::time::millis();
+    g_buzzer.tick(ferrox::logic::buzzer::Millis{static_cast<uint16_t>(std::min<uint32_t>(now - last_ms, 20))});
+    last_ms = now;
+    g_buzzer_out.sync(g_buzzer.output());
 }
 
 // TX ID is the XOR of the three 32-bit words of the MCU UID, as in the Rust firmware.
@@ -230,6 +239,8 @@ void run_preflight(const ferrox::logic::storage::ModelConfig& model) {
     }
     const auto sm = safety::stick_mode_from(g_storage.radio.stick_mode);
     const auto mt = static_cast<mixer::ModelType>(model.model_type);
+    buzzer::PreflightTimer preflight{};
+    uint32_t buzz_ms = time::millis();
 
     for (;;) {
         chip::watchdog::feed();
@@ -248,6 +259,10 @@ void run_preflight(const ferrox::logic::storage::ModelConfig& model) {
                                   ferrox::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
                                   ferrox::logic::crsf::ArmedState{false});
         hw::crsf::poll_telemetry(time::millis());
+        if (preflight.step(buzzer::Millis{time::millis()})) {
+            play_buzzer_cue(buzzer::Cue::WarnPreflight);
+        }
+        pump_buzzer(buzz_ms);
         __WFI();
     }
 }
@@ -315,9 +330,15 @@ int main() {
     g_fb.clear();
     draw_splash(g_fb);
     hw::lcd::flush(g_fb);
+    g_buzzer.set_enabled(g_storage.radio.audio_enabled != 0);
+    if (!was_watchdog_reset) {
+        play_buzzer_cue(logic::buzzer::Cue::Welcome);
+    }
+    uint32_t buzz_ms = time::millis();
     const uint32_t splash_start_ms = time::millis();
     while (time::millis() - splash_start_ms < 1200) {
         chip::watchdog::feed();
+        pump_buzzer(buzz_ms);
         __WFI();
     }
 
@@ -333,7 +354,12 @@ int main() {
     uint32_t ok_press_ms = 0;
     uint32_t last_loop_ms = time::millis();
     bool rx_id_dirty = false;
-    bool prev_armed = logic::flight::is_armed(model.arm_switch, sample_inputs().switches);
+    const auto boot_input = sample_inputs();
+    bool prev_armed = logic::flight::is_armed(model.arm_switch, boot_input.switches);
+    logic::buzzer_inputs::ActivityTracker activity{};
+    activity.prime(boot_input.raw, boot_input.switches);
+    logic::buzzer::InactivityTimer inactivity{};
+    logic::vario::State vario{};
 
     for (;;) {
         chip::watchdog::feed();
@@ -367,7 +393,11 @@ int main() {
             }
             play_buzzer_cue(g_calib_wizard.cue);
         } else if (menu_state.screen == logic::menu::Screen::Closed) {
+            const uint8_t prev_page = page_state.page;
             handle_keys(page_state, pressed);
+            if (page_state.page != prev_page) {
+                play_buzzer_cue(logic::buzzer::Cue::NavStep);
+            }
             if ((g_keys & logic::kKeyOk) == 0) {
                 ok_armed = true;
             } else if ((pressed & logic::kKeyOk) != 0) {
@@ -375,6 +405,7 @@ int main() {
             }
             if (ok_armed && (g_keys & logic::kKeyOk) != 0 && now - ok_press_ms >= kMenuHoldMs) {
                 logic::menu::open(menu_state);
+                play_buzzer_cue(logic::buzzer::Cue::Click);
                 ok_armed = false;
             }
         } else {
@@ -386,6 +417,7 @@ int main() {
                     apply_protocol_link();
                     apply_rf_model();
                     prev_armed = logic::flight::is_armed(g_storage.active_model.arm_switch, input.switches);
+                    vario.reset();
                     break;
                 case logic::menu::Action::SaveActiveModel:
                     logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage);
@@ -412,6 +444,8 @@ int main() {
                     play_buzzer_cue(g_calib_wizard.cue);
                     break;
                 case logic::menu::Action::CloseMenu:
+                    play_buzzer_cue(logic::buzzer::Cue::Click);
+                    break;
                 case logic::menu::Action::None: break;
             }
         }
@@ -543,6 +577,37 @@ int main() {
             .menu_active = menu_open,
         }));
         prev_armed = armed;
+
+        const bool user_active = activity.step(input.raw, input.switches, g_keys);
+        if (inactivity.step(user_active, logic::buzzer::Millis{dt_ms})) {
+            play_buzzer_cue(logic::buzzer::Cue::WarnInactivity);
+        }
+
+        if (menu_open) {
+            g_buzzer.set_vario(logic::vario::kSilent);
+        } else {
+            const auto vario_telem = afhds ? hw::rf::get_telemetry() : logic::afhds2a::Telemetry{};
+            const auto crsf_telem = hw::crsf::telemetry();
+            const bool crsf_link = logic::protocol::from_raw(model.rf_protocol) == logic::protocol::Protocol::Crsf;
+            const logic::vario::Sample sample{
+                .now = {now},
+                .alt_m = {crsf_link ? crsf_telem.baro_alt_m : vario_telem.alt_m},
+                .alt_dm = {crsf_link ? crsf_telem.baro_alt_dm : vario_telem.alt_dm},
+                .vspeed = {crsf_link ? crsf_telem.vspeed_cms : vario_telem.vspeed_cms},
+                .has_native_vspeed = crsf_link ? crsf_telem.has_vspeed : vario_telem.has_vspeed,
+                .telem_connected = crsf_link ? crsf_telem.connected : vario_telem.connected,
+                .switch_active = logic::buzzer_inputs::vario_switch_active(model.vario_switch, input.switches),
+                .throttle = {channels[2]},
+            };
+            const logic::vario::Config vario_cfg{
+                .switch_index = model.vario_switch,
+                .climb_deadband = {model.vario_climb_deadband},
+                .sink_deadband = {model.vario_sink_deadband},
+                .sink_mode = logic::vario::sink_mode_from_u8(model.vario_sink_mode),
+                .motor_mute = model.vario_motor_mute != 0,
+            };
+            g_buzzer.set_vario(vario.update(sample, vario_cfg));
+        }
 
         if (!menu_open) {
             const bool battery_low = logic::buzzer::battery_low(logic::buzzer::BatteryMv{input.battery_mv},

@@ -7,6 +7,7 @@
 #include "ferrox/logic/bind.hpp"
 #include "ferrox/logic/afhds2a.hpp"
 #include "ferrox/logic/afhds2a_radio.hpp"
+#include "ferrox/logic/buzzer_inputs.hpp"
 #include "ferrox/logic/brr.hpp"
 #include "ferrox/logic/calib.hpp"
 #include "ferrox/logic/crsf.hpp"
@@ -2669,6 +2670,52 @@ void buzzer_test() {
     check(cw.cue == Cue::CalibReject, "buzzer: limits without travel rejects");
     calib::update(cw, calib::Input{calib::kKeyCancel, calib::kKeyCancel, center, 10}, radio);
     check(cw.cue == Cue::Click, "buzzer: cancel in limits clicks");
+
+    using namespace ferrox::logic::buzzer_inputs;
+    const input::Raw idle_raw{};
+    Switches sw_idle{};
+    ActivityTracker act{};
+    act.prime(idle_raw, sw_idle);
+    check(!act.step(idle_raw, sw_idle, 0), "inactivity: primed idle sample is not activity");
+    input::Raw raw_small = idle_raw;
+    raw_small[0] = 30;
+    raw_small[6] = 40;
+    check(!act.step(raw_small, sw_idle, 0), "inactivity: deflections at the thresholds are not activity");
+    raw_small[0] = 61;
+    check(act.step(raw_small, sw_idle, 0), "inactivity: stick past 30 counts is activity");
+    check(!act.step(raw_small, sw_idle, 0), "inactivity: activity only counts the sample it changes");
+    raw_small[6] = 81;
+    check(act.step(raw_small, sw_idle, 0), "inactivity: pot past 40 counts is activity");
+    check(act.step(raw_small, sw_idle, 0x0004) && !act.step(raw_small, sw_idle, 0), "inactivity: any key is activity");
+    raw_small[2] = 1000;
+    check(act.step(raw_small, sw_idle, 0), "inactivity: channel 2 movement is activity");
+    raw_small[7] = 0;
+    raw_small[4] = 2000;
+    check(!act.step(raw_small, sw_idle, 0), "inactivity: unused raw channels are ignored");
+    Switches sw_moved = sw_idle;
+    sw_moved.sa = SwitchPos::Down;
+    check(act.step(raw_small, sw_moved, 0), "inactivity: a switch change is activity");
+
+    InactivityTimer idle_timer{};
+    int beeps = 0;
+    for (uint32_t t = 0; t < 700000; t += 20) {
+        beeps += idle_timer.step(false, Millis{20}) ? 1 : 0;
+    }
+    check(beeps > 0 && beeps <= 3, "inactivity: beeps once the 10 minute limit passes, with a 30 s cadence");
+    check(!idle_timer.step(true, Millis{20}) && idle_timer.idle.value == 0, "inactivity: activity resets the timer");
+
+    check(!vario_switch_active(0, sw_idle) && vario_switch_active(1, sw_idle),
+          "vario: setting 0 is off and setting 1 is always on");
+    Switches sw_arm{};
+    sw_arm.sa = SwitchPos::Down;
+    check(vario_switch_active(2, sw_arm) == mixer::eval_arm_switch(1, sw_arm) &&
+              vario_switch_active(23, sw_arm) == mixer::eval_arm_switch(22, sw_arm),
+          "vario: settings 2..=23 map to arm conditions 1..=22");
+    check(!vario_switch_active(24, sw_arm), "vario: out-of-range settings are off");
+
+    PreflightTimer preflight_timer{};
+    check(!preflight_timer.step(Millis{799}) && preflight_timer.step(Millis{800}) && !preflight_timer.step(Millis{1000}),
+          "buzzer: preflight warns every 800 ms");
 }
 
 void trim_controller_test() {
