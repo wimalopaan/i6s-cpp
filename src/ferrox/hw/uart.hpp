@@ -35,8 +35,6 @@ inline constinit volatile bool g_rx_idle_pending = false;
 inline constinit volatile bool g_active_high = true;
 inline constinit volatile bool g_power_on = false;
 inline constinit volatile bool g_half_duplex = false;
-// Half-duplex: bytes we transmitted are echoed back on RX and must be dropped.
-inline constinit uint32_t g_echo_skip = 0;
 
 /// Write position of the RX DMA (the producer side of the ring).
 inline std::size_t rx_head() {
@@ -82,7 +80,6 @@ enum class Duplex : uint8_t { Full, Half };
 /// Configures USART2 for CRSF (full-duplex) or single-wire half-duplex on PD5.
 inline void set_uart_enabled(bool enabled, uint8_t baud_index, Duplex duplex) {
     g_half_duplex = duplex == Duplex::Half;
-    g_echo_skip = 0;
 
     if (enabled) {
         RCC->AHBENR |= RCC_AHBENR_GPIOAEN | RCC_AHBENR_GPIODEN;
@@ -161,8 +158,10 @@ inline std::size_t write_bytes(std::span<const uint8_t> bytes) {
     for (std::size_t i = 0; i < n; ++i) {
         g_tx_buf[i] = bytes[i];
     }
+    // Half-duplex: the receiver stays off while we transmit so our own bytes are never echoed.
+    // The TC interrupt turns it back on.
     if (g_half_duplex) {
-        g_echo_skip = g_echo_skip + static_cast<uint32_t>(n);
+        USART2->CR1 &= ~USART_CR1_RE;
     }
 
     USART2->ICR = USART_ICR_TCCF;
@@ -187,6 +186,7 @@ inline void on_irq() {
     const uint32_t isr = USART2->ISR;
     if ((isr & USART_ISR_TC) != 0) {
         USART2->ICR = USART_ICR_TCCF;
+        USART2->CR1 |= USART_CR1_RE;
         g_tx_busy = false;
     }
     if ((isr & USART_ISR_IDLE) != 0) {
@@ -195,7 +195,7 @@ inline void on_irq() {
     }
 }
 
-/// Returns the next received byte. Half-duplex echoes of our own transmissions are dropped.
+/// Returns the next received byte.
 /// Bytes overwritten by the DMA before they are read (more than kRxBufSize unread) are lost.
 inline std::optional<uint8_t> read_byte() {
     if ((USART2->ISR & USART_ISR_ORE) != 0) {
@@ -203,18 +203,14 @@ inline std::optional<uint8_t> read_byte() {
     }
 
     const std::size_t head = rx_head();
-    while (g_rx_tail != head) {
-        std::atomic_signal_fence(std::memory_order_seq_cst);
-        const uint8_t byte = g_rx_buf[g_rx_tail];
-        std::atomic_signal_fence(std::memory_order_seq_cst);
-        g_rx_tail = (g_rx_tail + 1) & (kRxBufSize - 1);
-        if (g_echo_skip > 0) {
-            --g_echo_skip;
-            continue;
-        }
-        return byte;
+    if (g_rx_tail == head) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+    const uint8_t byte = g_rx_buf[g_rx_tail];
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+    g_rx_tail = (g_rx_tail + 1) & (kRxBufSize - 1);
+    return byte;
 }
 
 }  // namespace ferrox::hw::uart
