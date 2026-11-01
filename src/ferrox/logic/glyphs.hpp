@@ -87,4 +87,34 @@ constexpr void draw_ferrox_logo(display::Framebuffer& fb, int x, int y) {
     }
 }
 
+// 12x12 MDI icons, 1 bit per pixel, row-major, 18 bytes each.
+using Glyph12 = std::array<uint8_t, 18>;
+
+inline constexpr std::array<Glyph12, 12> kMenuGlyphs{{
+    {0, 0, 0, 0, 194, 59, 240, 1, 30, 224, 193, 27, 24, 1, 17, 0, 0, 0},           // airplane
+    {0, 0, 16, 142, 193, 15, 240, 0, 15, 216, 192, 32, 136, 15, 80, 128, 15, 32},  // airplane cog
+    {0, 32, 0, 2, 36, 96, 50, 34, 23, 154, 161, 0, 6, 224, 127, 254, 7, 0},        // chart line
+    {0, 32, 0, 226, 32, 10, 18, 33, 17, 18, 161, 32, 14, 38, 0, 254, 7, 0},        // bell curve
+    {0, 0, 0, 0, 0, 48, 224, 3, 48, 8, 192, 7, 8, 0, 0, 0, 0, 0},                  // swap horizontal
+    {0, 0, 0, 0, 128, 31, 252, 227, 71, 126, 196, 63, 248, 1, 0, 0, 0, 0},         // toggle switch
+    {0, 0, 0, 48, 128, 3, 16, 0, 9, 144, 0, 8, 192, 1, 24, 0, 0, 0},               // swap vertical
+    {0, 0, 6, 240, 192, 63, 158, 199, 48, 12, 227, 121, 252, 3, 15, 96, 0, 0},     // cog
+    {0, 0, 15, 12, 67, 44, 66, 36, 70, 98, 36, 64, 244, 194, 63, 240, 0, 0},       // gauge
+    {0, 0, 6, 248, 193, 48, 100, 98, 111, 246, 70, 38, 12, 131, 31, 96, 0, 0},     // crosshairs gps
+    {0, 0, 0, 0, 0, 1, 16, 128, 11, 252, 67, 34, 32, 0, 0, 0, 0, 0},               // pulse
+    {0, 0, 15, 12, 67, 32, 2, 36, 64, 98, 36, 70, 4, 194, 48, 240, 0, 0},          // information outline
+}};
+
+/// Draws a 12x12 icon at (x, y); only set bits are drawn, in colour `on`.
+constexpr void draw_glyph_12x12(display::Framebuffer& fb, int x, int y, const Glyph12& data, bool on) {
+    for (int row = 0; row < 12; ++row) {
+        for (int col = 0; col < 12; ++col) {
+            const int bit = row * 12 + col;
+            if ((data[static_cast<std::size_t>(bit / 8)] >> (bit % 8)) & 1u) {
+                fb.set_pixel(x + col, y + row, on);
+            }
+        }
+    }
+}
+
 }  // namespace ferrox::logic::glyphs

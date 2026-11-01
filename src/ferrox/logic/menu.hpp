@@ -8,6 +8,7 @@
 
 #include "ferrox/logic/format.hpp"
 #include "ferrox/logic/framebuffer.hpp"
+#include "ferrox/logic/glyphs.hpp"
 #include "ferrox/logic/labels.hpp"
 #include "ferrox/logic/power.hpp"
 #include "ferrox/logic/safety.hpp"
@@ -386,6 +387,17 @@ constexpr format::Text<5> timer_text(uint16_t secs) {
     return t;
 }
 
+// 3-slot icon row: 13 px pitch, icon at x = 4, label at x = 19. Icon is inverted on the highlight bar.
+constexpr void draw_icon_row(Framebuffer& fb, int slot, bool selected, const glyphs::Glyph12& icon,
+                             std::string_view label) {
+    const int y = 13 + slot * 14;
+    if (selected) {
+        fb.fill_rect(2, y, 121, 13, true);
+    }
+    glyphs::draw_glyph_12x12(fb, 4, y + 1, icon, !selected);
+    fb.draw_str_6x10(19, y + 3, label, selected);
+}
+
 constexpr void render_main(Framebuffer& fb, const State& s) {
     widgets::draw_header(fb, "SETTINGS MENU");
     for (std::size_t slot = 0; slot < kMainVisible; ++slot) {
@@ -393,9 +405,9 @@ constexpr void render_main(Framebuffer& fb, const State& s) {
         if (idx >= kMainItems.size()) {
             break;
         }
-        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.main.selected, kMainItems[idx], {}, 0);
+        draw_icon_row(fb, static_cast<int>(slot), idx == s.main.selected, glyphs::kMenuGlyphs[idx], kMainItems[idx]);
     }
-    widgets::draw_scrollbar(fb, s.main.selected, static_cast<int>(kMainItems.size()), 14, 27);
+    widgets::draw_scrollbar(fb, s.main.selected, static_cast<int>(kMainItems.size()), 13, 40);
     const auto pos = counter_text(s.main.selected + 1u, kMainItems.size());
     widgets::draw_footer_split(fb, "[OK] Select   [ESC] Exit", pos.view());
 }

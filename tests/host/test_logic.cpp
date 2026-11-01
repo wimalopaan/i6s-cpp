@@ -974,6 +974,17 @@ void menu_test() {
         mn::render(fb, s, names, st);
     }
 
+    check(logic::glyphs::kMenuGlyphs[0][4] == 194 && logic::glyphs::kMenuGlyphs[11][13] == 194,
+          "menu glyph table must match the Rust bitmaps");
+    {
+        logic::display::Framebuffer icons{};
+        logic::glyphs::draw_glyph_12x12(icons, 0, 0, logic::glyphs::kMenuGlyphs[0], true);
+        const int lit = lit_pixels(icons);
+        icons.clear();
+        logic::glyphs::draw_glyph_12x12(icons, 0, 0, logic::glyphs::kMenuGlyphs[0], false);
+        check(lit > 0 && lit_pixels(icons) == 0, "glyph with on=false must not light pixels on a clear buffer");
+    }
+
     check(logic::labels::switch_cond_label(22) == "SWJv", "arm switch label 22");
     check(logic::labels::switch_cond_label(99) == "ON", "out-of-range switch label falls back to ON");
     check(mn::next_ascii('Z') == '0' && mn::next_ascii('9') == '-' && mn::next_ascii('_') == ' ',
