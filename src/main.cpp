@@ -10,6 +10,7 @@
 #include "ferrox/hw/eeprom.hpp"
 #include "ferrox/hw/gpio.hpp"
 #include "ferrox/hw/keys.hpp"
+#include "ferrox/hw/rf.hpp"
 #include "ferrox/hw/st7567.hpp"
 #include "ferrox/logic/dashboard.hpp"
 #include "ferrox/logic/brr.hpp"
@@ -19,6 +20,7 @@
 #include "ferrox/logic/input.hpp"
 #include "ferrox/logic/menu.hpp"
 #include "ferrox/logic/mixer.hpp"
+#include "ferrox/logic/power.hpp"
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
 #include "ferrox/logic/trim.hpp"
@@ -42,6 +44,10 @@ ferrox::logic::calib::Wizard g_calib_wizard{};
 // Display content is rendered into this buffer and flushed to the ST7567.
 ferrox::logic::display::Framebuffer g_fb{};
 
+// RF radio init result, and whether the A7105 is currently silenced (starts silenced, as in hw::rf).
+bool g_rf_ok = false;
+bool g_rf_silenced = true;
+
 ferrox::logic::input::BoardSwitches read_board_switches() {
     using ferrox::hw::Pin;
     using ferrox::hw::Port;
@@ -55,6 +61,9 @@ ferrox::logic::input::InputState sample_inputs() {
 // Holding OK this long on the dashboard opens the menu.
 constexpr uint32_t kMenuHoldMs = 1200;
 
+// Holding BIND this long on the dashboard starts binding.
+constexpr uint32_t kBindHoldMs = 1000;
+
 // Model names shown in the model list, filled from EEPROM when the list is opened.
 ferrox::logic::menu::ModelNames g_model_names{};
 
@@ -63,6 +72,47 @@ void apply_crsf_config() {
     const auto& model = g_storage.active_model;
     const uint8_t baud_idx = model.crsf_baud < logic::kBaudRates.size() ? model.crsf_baud : logic::kDefaultBaudIndex;
     hw::crsf::set_enabled(true, baud_idx, model.crsf_half_duplex != 0);
+}
+
+// TX ID is the XOR of the three 32-bit words of the MCU UID, as in the Rust firmware.
+uint32_t tx_id_from_uid() {
+    using namespace ferrox;
+    const auto uid = chip::read_uid(chip::kProfile);
+    auto word = [&uid](std::size_t i) {
+        return static_cast<uint32_t>(uid[i]) | (static_cast<uint32_t>(uid[i + 1]) << 8) |
+               (static_cast<uint32_t>(uid[i + 2]) << 16) | (static_cast<uint32_t>(uid[i + 3]) << 24);
+    };
+    return word(0) ^ word(4) ^ word(8);
+}
+
+// Silences the A7105 for CRSF models. Only changes state when the protocol changes.
+void set_rf_silenced(bool silenced) {
+    if (!g_rf_ok || silenced == g_rf_silenced) {
+        return;
+    }
+    ferrox::hw::rf::set_silenced(silenced);
+    g_rf_silenced = silenced;
+}
+
+// Applies power, RX output settings and the silence state of the active model. Keeps the RX ID.
+void apply_rf_link() {
+    using namespace ferrox;
+    if (!g_rf_ok) {
+        return;
+    }
+    const auto& model = g_storage.active_model;
+    hw::rf::set_rf_power(model.rf_power);
+    hw::rf::set_rx_settings(model.servo_rate_hz, model.rx_out_mode == 1, model.rx_serial_proto == 1);
+    set_rf_silenced(model.rf_protocol == 1);
+}
+
+// Full RF setup for the active model, used at boot and on model switch.
+void apply_rf_model() {
+    if (!g_rf_ok) {
+        return;
+    }
+    ferrox::hw::rf::set_rx_id(g_storage.active_model.rx_id);
+    apply_rf_link();
 }
 
 void refresh_model_names() {
@@ -163,6 +213,13 @@ int main() {
     const auto& model = g_storage.active_model;
     apply_crsf_config();
 
+    const bool bind_on_boot = !was_watchdog_reset && (hw::keys::scan_keys() & logic::kKeyBind) != 0;
+    g_rf_ok = hw::rf::init(tx_id_from_uid());
+    apply_rf_model();
+    if (bind_on_boot && g_rf_ok && model.rf_protocol == 0) {
+        hw::rf::set_bind_mode(true);
+    }
+
     hw::lcd::init();
     apply_lcd_settings(g_storage.radio);
 
@@ -189,6 +246,9 @@ int main() {
     bool ok_armed = false;
     uint32_t ok_press_ms = 0;
     uint32_t last_loop_ms = time::millis();
+    uint32_t bind_hold_ms = 0;
+    bool bind_was_held = false;
+    bool rx_id_dirty = false;
 
     for (;;) {
         chip::watchdog::feed();
@@ -202,6 +262,11 @@ int main() {
         const uint32_t now = time::millis();
         const auto dt_ms = static_cast<uint16_t>(std::min<uint32_t>(now - last_loop_ms, 20));
         last_loop_ms = now;
+
+        const bool afhds = g_rf_ok && g_storage.active_model.rf_protocol == 0;
+        if (afhds && hw::rf::is_binding() && (pressed & (logic::kKeyBind | logic::calib::kKeyCancel)) != 0) {
+            hw::rf::set_bind_mode(false);
+        }
 
         if (logic::calib::active(g_calib_wizard)) {
             const logic::calib::Input cal_in{pressed, g_keys, input.raw, dt_ms};
@@ -220,6 +285,18 @@ int main() {
                 logic::menu::open(menu_state);
                 ok_armed = false;
             }
+            if (afhds && !hw::rf::is_binding()) {
+                if ((g_keys & logic::kKeyBind) != 0) {
+                    bind_hold_ms += dt_ms;
+                    if (bind_hold_ms >= kBindHoldMs && !bind_was_held) {
+                        hw::rf::set_bind_mode(true);
+                        bind_was_held = true;
+                    }
+                } else {
+                    bind_hold_ms = 0;
+                    bind_was_held = false;
+                }
+            }
         } else {
             const auto ev = logic::menu::update(menu_state, logic::menu::Input{pressed, g_keys, now}, g_storage);
             switch (ev.action) {
@@ -227,9 +304,11 @@ int main() {
                 case logic::menu::Action::SwitchModel:
                     switch_model(ev.index);
                     apply_crsf_config();
+                    apply_rf_model();
                     break;
                 case logic::menu::Action::SaveActiveModel:
                     logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage);
+                    apply_rf_link();
                     break;
                 case logic::menu::Action::SaveRadioConfig:
                     logic::storage::save_radio_config<hw::I2c2Eeprom>(g_storage);
@@ -241,12 +320,27 @@ int main() {
             }
         }
 
+        const bool armed = logic::flight::is_armed(model.arm_switch, input.switches);
+        if (g_rf_ok) {
+            if (const auto id = hw::rf::take_pending_rx_save()) {
+                if (*id != 0 && *id != 0xFFFF'FFFFu && model.rx_id != *id) {
+                    g_storage.active_model.rx_id = *id;
+                    rx_id_dirty = true;
+                }
+            }
+        }
+        if (rx_id_dirty && !armed) {
+            logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage);
+            rx_id_dirty = false;
+        }
+
         const auto channels =
             logic::flight::rf_channels(input, stick_mode, model, no_trim, g_storage.radio.throttle_trim);
         const bool crsf = model.rf_protocol == 1;
         if (crsf) {
-            const bool armed = logic::flight::is_armed(model.arm_switch, input.switches);
             hw::crsf::update_channels(now, channels, model.crsf_arm_mode != 0, armed);
+        } else if (afhds) {
+            hw::rf::publish_channels(channels);
         }
         hw::crsf::poll_telemetry(now);
 
