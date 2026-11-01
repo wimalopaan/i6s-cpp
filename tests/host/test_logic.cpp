@@ -1,9 +1,12 @@
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
 #include <span>
+#include <string_view>
 
 #include "ferrox/logic/a7105.hpp"
+#include "ferrox/logic/usb.hpp"
 #include "ferrox/logic/bind.hpp"
 #include "ferrox/logic/afhds2a.hpp"
 #include "ferrox/logic/afhds2a_radio.hpp"
@@ -3806,6 +3809,154 @@ void wiring_cues_test() {
     check(!menu.nav_tick, "wiring: the nav tick clears on the next tick");
 }
 
+void usb_logic_test() {
+    namespace u = ferrox::logic::usb;
+    using M = u::UsbMode;
+    const auto le16 = [](std::span<const uint8_t> d, std::size_t i) {
+        return static_cast<unsigned>(d[i] | (d[i + 1] << 8));
+    };
+    const auto contains = [](std::span<const uint8_t> hay, std::span<const uint8_t> needle) {
+        return std::search(hay.begin(), hay.end(), needle.begin(), needle.end()) != hay.end();
+    };
+    // True when the sub-descriptors tile the blob exactly (each length byte is non-zero and lands on the next one).
+    const auto tiles = [](std::span<const uint8_t> d) {
+        std::size_t i = 0;
+        while (i < d.size()) {
+            if (d[i] == 0) return false;
+            i += d[i];
+        }
+        return i == d.size();
+    };
+
+    check(u::mode_from_stored(0) == M::Off && u::mode_from_stored(3) == M::Composite &&
+              u::mode_from_stored(4) == M::Off && u::mode_from_stored(255) == M::Off,
+          "usb: stored mode maps 0..3 and falls back to Off");
+    check(u::has_hid(M::Joystick) && !u::has_hid(M::Serial) && u::has_hid(M::Composite) && !u::has_hid(M::Off),
+          "usb: HID is used by joystick and composite only");
+    check(!u::has_cdc(M::Joystick) && u::has_cdc(M::Serial) && u::has_cdc(M::Composite) && !u::has_cdc(M::Off),
+          "usb: CDC is used by serial and composite only");
+    check(u::is_sim_mode(M::Joystick, true) && !u::is_sim_mode(M::Joystick, false) &&
+              !u::is_sim_mode(M::Serial, true),
+          "usb: sim mode needs the joystick mode and a connected host");
+    check(u::interval_elapsed({110}, {10}, {100}) && !u::interval_elapsed({109}, {10}, {100}),
+          "usb: interval elapses at the boundary");
+    check(u::interval_elapsed({5}, {0xFFFFFFF0u}, {20}), "usb: interval survives the millisecond counter wrapping");
+
+    for (M m : {M::Joystick, M::Serial, M::Composite}) {
+        const auto d = u::device_descriptor(m).view();
+        check(d.size() == 18 && d[0] == 18 && d[1] == 1 && le16(d, 2) == 0x0200 && d[17] == 1,
+              "usb: device descriptor header and single configuration");
+        check(d[7] == 64, "usb: control endpoint packet size is 64");
+    }
+    {
+        const auto joy = u::device_descriptor(M::Joystick).view();
+        const auto ser = u::device_descriptor(M::Serial).view();
+        const auto comp = u::device_descriptor(M::Composite).view();
+        check(le16(joy, 8) == 0x1209 && le16(joy, 10) == 0x4F54, "usb: joystick VID/PID");
+        check(le16(ser, 8) == 0x0483 && le16(ser, 10) == 0x5740, "usb: serial VID/PID");
+        check(le16(comp, 8) == 0x1209 && le16(comp, 10) == 0x4968, "usb: composite VID/PID");
+        check(joy[4] == 0 && ser[4] == 2 && comp[4] == 0xEF && comp[5] == 2 && comp[6] == 1,
+              "usb: device class codes (composite uses IAD)");
+    }
+
+    {
+        const auto cfg = u::config_descriptor(M::Joystick).view();
+        check(cfg.size() == 34 && le16(cfg, 2) == 34 && cfg[4] == 1 && tiles(cfg.subspan(9)),
+              "usb: joystick configuration tiles exactly");
+        check(contains(cfg, std::to_array<uint8_t>({0x22, 56, 0})), "usb: HID report descriptor length is 56");
+        check(contains(cfg, std::to_array<uint8_t>({7, 0x05, 0x81, 0x03, 18, 0, 10})),
+              "usb: HID IN endpoint is 18 bytes every 10 ms");
+    }
+    {
+        const auto cfg = u::config_descriptor(M::Serial).view();
+        check(cfg.size() == 75 && le16(cfg, 2) == 75 && cfg[4] == 2 && tiles(cfg.subspan(9)),
+              "usb: serial configuration tiles exactly");
+        check(contains(cfg, std::to_array<uint8_t>({0x05, 0x24, 0x06, 0, 1})), "usb: CDC union uses interfaces 0 and 1");
+        check(contains(cfg, std::to_array<uint8_t>({7, 0x05, 0x02, 0x02, 64, 0, 0})) &&
+                  contains(cfg, std::to_array<uint8_t>({7, 0x05, 0x82, 0x02, 64, 0, 0})) &&
+                  contains(cfg, std::to_array<uint8_t>({7, 0x05, 0x83, 0x03, 16, 0, 255})),
+              "usb: CDC bulk OUT/IN and notify endpoints");
+    }
+    {
+        const auto cfg = u::config_descriptor(M::Composite).view();
+        check(cfg.size() == 100 && le16(cfg, 2) == 100 && cfg[4] == 3 && tiles(cfg.subspan(9)),
+              "usb: composite configuration tiles exactly");
+        check(contains(cfg, std::to_array<uint8_t>({8, 0x0B, 1, 2, 0x02, 0x02, 0x00, 0})),
+              "usb: IAD starts at the CDC control interface after HID");
+        check(contains(cfg, std::to_array<uint8_t>({9, 0x04, 0, 0, 1, 0x03, 0, 0, 0})),
+              "usb: HID interface is number 0 in composite");
+    }
+
+    {
+        const auto s0 = u::string_descriptor(M::Joystick, 0).view();
+        check(s0.size() == 4 && s0[2] == 0x09 && s0[3] == 0x04, "usb: language ID string is en-US");
+        const auto s2 = u::string_descriptor(M::Joystick, 2).view();
+        check(s2.size() == 32 && s2[0] == 32 && s2[1] == 3 && s2[2] == 'F' && s2[3] == 0 && s2[30] == 'k',
+              "usb: product string is UTF-16LE of the mode name");
+        check(u::string_descriptor(M::Serial, 3).size == 22, "usb: serial string length");
+        check(u::string_descriptor(M::Serial, 4).size == 0, "usb: unknown string index is empty");
+    }
+    {
+        const auto rd = u::kGamepadReportDescriptor;
+        check(rd.size() == 56 && rd[0] == 0x05 && rd[1] == 0x01 && rd[54] == 0xC0 && rd[55] == 0xC0,
+              "usb: gamepad report descriptor framing");
+    }
+
+    {
+        std::array<uint16_t, ferrox::logic::kNumChannels> chs{};
+        chs.fill(1500);
+        ferrox::logic::Switches sw{};
+        auto r = u::build_gamepad_report(chs, sw);
+        check(r[0] == 0 && r[1] == 0 && r[2] == 0x00 && r[3] == 0x04 && r[16] == 0x00 && r[17] == 0x04,
+              "usb: centred channels give zero buttons and axis 1024");
+        chs[0] = 988;
+        chs[1] = 2012;
+        chs[2] = 5000;
+        chs[3] = 100;
+        r = u::build_gamepad_report(chs, sw);
+        check(r[2] == 0 && r[3] == 0 && r[4] == 0xFF && r[5] == 0x07 && r[6] == 0xFF && r[7] == 0x07 &&
+                  r[8] == 0 && r[9] == 0,
+              "usb: axes clamp to 0..2047");
+        chs.fill(1500);
+        chs[13] = 1800;
+        sw.sa = ferrox::logic::SwitchPos::Down;
+        sw.sb = ferrox::logic::SwitchPos::Mid;
+        sw.se = ferrox::logic::SwitchPos::Down;
+        sw.sh = ferrox::logic::SwitchPos::Down;
+        r = u::build_gamepad_report(chs, sw);
+        check(r[0] == (9731 & 0xFF) && r[1] == (9731 >> 8), "usb: switches and CH14 aux map to the expected buttons");
+    }
+
+    check(u::parse_command("") == u::Command::Empty && u::parse_command(" \r\n\t") == u::Command::Empty,
+          "usb cli: blank lines are ignored");
+    check(u::parse_command("  HeLp \r") == u::Command::Help, "usb cli: case-insensitive and trimmed");
+    check(u::parse_command("status") == u::Command::Status && u::parse_command("channels") == u::Command::Channels,
+          "usb cli: status and channels");
+    check(u::parse_command("eeprom") == u::Command::Storage && u::parse_command("storage") == u::Command::Storage,
+          "usb cli: storage and eeprom alias");
+    check(u::parse_command("telem") == u::Command::Telem && u::parse_command("telem off") == u::Command::TelemOff,
+          "usb cli: single frame and telemetry off");
+    check(u::parse_command("stream") == u::Command::Stream && u::parse_command("telem on") == u::Command::Stream &&
+              u::parse_command("telem stream") == u::Command::Stream,
+          "usb cli: stream aliases");
+    check(u::parse_command("dfu") == u::Command::Dfu && u::parse_command("reboot bootloader") == u::Command::Dfu &&
+              u::parse_command("reboot-bootloader") == u::Command::Dfu,
+          "usb cli: DFU aliases");
+    check(u::parse_command("reboot") == u::Command::Reboot, "usb cli: reboot");
+    check(u::parse_command("telem  on") == u::Command::Unknown && u::parse_command("reboot now") == u::Command::Unknown,
+          "usb cli: inner spacing must match and unknown words are rejected");
+
+    {
+        const std::array<uint16_t, 3> ch{1500, 988, 2012};
+        std::array<char, 64> buf{};
+        const std::size_t n = u::format_channels_json(ch, buf);
+        check(std::string_view(buf.data(), n) == "{\"ch\":[1500,988,2012]}\r\n",
+              "usb json: channel dump matches the Rust format");
+        std::array<char, 8> small{};
+        check(u::format_channels_json(ch, small) == 0, "usb json: overflow returns zero bytes");
+    }
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -3831,6 +3982,7 @@ int main() {
     crsf_diag_test();
     buzzer_test();
     wiring_cues_test();
+    usb_logic_test();
     trim_controller_test();
     trim_autosave_test();
     instant_trim_test();

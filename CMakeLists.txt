@@ -46,7 +46,7 @@ if(CMAKE_CROSSCOMPILING)
     target_compile_definitions(i6s_fw PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:STM32F072xB>
         "$<$<COMPILE_LANGUAGE:CXX>:FERROX_FW_VERSION=\"${PROJECT_VERSION}\";FERROX_GIT_HASH=\"${FERROX_GIT_HASH}\">"
-        $<$<BOOL:${USE_USB}>:FERROX_USE_USB=1>)
+        $<$<AND:$<BOOL:${USE_USB}>,$<COMPILE_LANGUAGE:CXX>>:FERROX_USE_USB=1>)
     target_compile_options(i6s_fw PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
