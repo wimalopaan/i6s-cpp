@@ -2289,6 +2289,228 @@ void telemetry_test() {
           "telemetry: disconnected CRSF tile is stale");
 }
 
+void buzzer_test() {
+    using namespace ferrox::logic;
+    using namespace ferrox::logic::buzzer;
+
+    static_assert(pwm_timing(FreqHz{100}) == PwmTiming{9999, 5000});
+    static_assert(trim_note(TrimStep{25}).freq == FreqHz{2500});
+
+    struct Measured {
+        int tones;
+        uint32_t ms;
+    };
+    // Counts off-to-on edges and total length until the player goes idle.
+    const auto measure = [](Player& p) {
+        int tones = 0;
+        uint32_t ms = 0;
+        bool was_on = false;
+        while (p.playing() && ms < 10000) {
+            const bool on = p.output().value != 0;
+            if (on && !was_on) {
+                ++tones;
+            }
+            was_on = on;
+            p.tick(Millis{1});
+            ++ms;
+        }
+        return Measured{tones, ms};
+    };
+
+    for (const ToneStyle style : {ToneStyle::Simple, ToneStyle::Rich}) {
+        check(pattern_for(Cue::None, style).notes.empty(), "buzzer: None has no pattern");
+        for (uint8_t c = static_cast<uint8_t>(Cue::Click); c <= static_cast<uint8_t>(Cue::NavStep); ++c) {
+            const auto pattern = pattern_for(static_cast<Cue>(c), style);
+            check(!pattern.notes.empty(), "buzzer: every cue has a pattern");
+            for (const Note& n : pattern.notes) {
+                check(n.freq.value >= kMinAudibleHz && n.duration.value > 0, "buzzer: preset notes are audible");
+            }
+        }
+    }
+    check(pattern_for(Cue::Click, ToneStyle::Simple).notes[0].freq == FreqHz{kBeepDefaultHz},
+          "buzzer: click uses the default beep frequency");
+    check(pattern_for(Cue::Welcome, ToneStyle::Simple).notes.size() == 1 &&
+              pattern_for(Cue::Welcome, ToneStyle::Simple).notes[0] == pattern_for(Cue::Click, ToneStyle::Simple).notes[0],
+          "buzzer: Simple welcome is a click");
+    check(pattern_for(Cue::Welcome, ToneStyle::Rich).notes.size() == 4, "buzzer: Rich welcome has four notes");
+    check(pattern_for(Cue::WarnBattery, ToneStyle::Simple).repeats == Repeats{1}, "buzzer: Simple battery repeats once");
+    check(pattern_for(Cue::WarnCritical, ToneStyle::Simple).repeats == Repeats{2}, "buzzer: Simple critical repeats twice");
+    check(pattern_for(Cue::WarnBattery, ToneStyle::Rich).repeats == Repeats{0}, "buzzer: Rich battery plays once");
+    check(tone_style_from_u8(0) == ToneStyle::Simple && tone_style_from_u8(1) == ToneStyle::Rich &&
+              tone_style_from_u8(7) == ToneStyle::Rich,
+          "buzzer: style byte maps to Simple or Rich");
+
+    check(trim_note(TrimStep{0}).freq == FreqHz{2000}, "buzzer: trim centre is 2000 Hz");
+    check(trim_note(TrimStep{-25}).freq == FreqHz{1500}, "buzzer: trim low end is 1500 Hz");
+    check(trim_note(TrimStep{127}).freq == FreqHz{2500}, "buzzer: trim high end clamps to 2500 Hz");
+    check(trim_note(TrimStep{-128}).freq == FreqHz{1500}, "buzzer: trim low extreme clamps to 1500 Hz");
+    check(trim_note(TrimStep{1}).duration == DurationMs{25}, "buzzer: trim beep lasts 25 ms");
+
+    check(pwm_timing(FreqHz{2250}) == (PwmTiming{443, 222}), "buzzer: 2250 Hz PWM timing");
+    check(pwm_timing(FreqHz{0}) == (PwmTiming{65534, 32767}), "buzzer: zero frequency gives the slowest period");
+    check(pwm_timing(FreqHz{65535}) == (PwmTiming{14, 7}), "buzzer: high frequency clamps to 10 ticks");
+    check(pwm_timing(FreqHz{1}) == (PwmTiming{65534, 32767}), "buzzer: low frequency clamps to 65535 ticks");
+
+    check(battery_low(BatteryMv{6999}, WarnDeci{70}), "buzzer: 6.999 V is below a 7.0 V threshold");
+    check(!battery_low(BatteryMv{7000}, WarnDeci{70}), "buzzer: 7.000 V is not below a 7.0 V threshold");
+    check(!battery_low(BatteryMv{0}, WarnDeci{0}), "buzzer: zero threshold never warns");
+
+    BatteryWarnTimer bt{};
+    check(!bt.step(false, Millis{0}) && bt.elapsed == ElapsedMs{7000}, "buzzer: battery not low rests at 7 s");
+    check(!bt.step(true, Millis{500}) && bt.elapsed == ElapsedMs{7500}, "buzzer: battery low accumulates");
+    check(!bt.step(true, Millis{500}) && bt.elapsed == ElapsedMs{8000}, "buzzer: battery low reaches 8 s");
+    check(bt.step(true, Millis{500}) && bt.elapsed == ElapsedMs{}, "buzzer: battery fires at 8 s and resets");
+
+    check(rssi_alarm(Rssi{40}, true) == RssiAlarm::None, "buzzer: RSSI 40 is no alarm");
+    check(rssi_alarm(Rssi{39}, true) == RssiAlarm::Low, "buzzer: RSSI 39 is low");
+    check(rssi_alarm(Rssi{20}, true) == RssiAlarm::Low, "buzzer: RSSI 20 is still low");
+    check(rssi_alarm(Rssi{19}, true) == RssiAlarm::Critical, "buzzer: RSSI 19 is critical");
+    check(rssi_alarm(Rssi{0}, true) == RssiAlarm::Critical, "buzzer: RSSI 0 is critical");
+    check(rssi_alarm(Rssi{0}, false) == RssiAlarm::None, "buzzer: no telemetry gives no RSSI alarm");
+
+    RssiWarnTimer rt{};
+    check(!rt.step(RssiAlarm::Critical, Millis{1000}) && !rt.step(RssiAlarm::Critical, Millis{1000}) &&
+              !rt.step(RssiAlarm::Critical, Millis{1000}),
+          "buzzer: critical RSSI is quiet for the first 3 s");
+    check(rt.step(RssiAlarm::Critical, Millis{1000}), "buzzer: critical RSSI fires at 3 s");
+    RssiWarnTimer rl{};
+    for (int i = 0; i < 6; ++i) {
+        check(!rl.step(RssiAlarm::Low, Millis{1000}), "buzzer: low RSSI is quiet before 6 s");
+    }
+    check(rl.step(RssiAlarm::Low, Millis{1000}), "buzzer: low RSSI fires at 6 s");
+    rl.step(RssiAlarm::Low, Millis{1000});
+    check(!rl.step(RssiAlarm::None, Millis{1000}) && rl.elapsed == ElapsedMs{},
+          "buzzer: RSSI recovery resets the timer");
+
+    InactivityTimer it{};
+    bool early = false;
+    for (int i = 0; i < 599; ++i) {
+        early = it.step(false, Millis{1000}) || early;
+    }
+    check(!early, "buzzer: no inactivity beep before 10 minutes");
+    check(!it.step(true, Millis{1000}) && it.idle == ElapsedMs{}, "buzzer: user input resets inactivity");
+    InactivityTimer idle{};
+    int first = 0;
+    for (int i = 1; i <= 700 && first == 0; ++i) {
+        if (idle.step(false, Millis{1000})) {
+            first = i;
+        }
+    }
+    check(first == 630, "buzzer: first inactivity beep 30 s after the 10 minute limit");
+
+    PreflightTimer pf{};
+    check(!pf.step(Millis{799}), "buzzer: preflight waits 800 ms");
+    check(pf.step(Millis{800}), "buzzer: preflight fires at 800 ms");
+    check(!pf.step(Millis{1000}) && pf.step(Millis{1600}), "buzzer: preflight repeats every 800 ms");
+
+    check(arm_cue(ArmEdge{SwitchIndex{0}, true, false, false}) == Cue::None, "buzzer: arm switch 0 is not armable");
+    check(arm_cue(ArmEdge{SwitchIndex{23}, true, false, false}) == Cue::None, "buzzer: arm switch 23 is not armable");
+    check(arm_cue(ArmEdge{SwitchIndex{1}, true, false, false}) == Cue::Armed, "buzzer: arming chimes");
+    check(arm_cue(ArmEdge{SwitchIndex{22}, false, true, false}) == Cue::Disarmed, "buzzer: disarming chimes");
+    check(arm_cue(ArmEdge{SwitchIndex{5}, true, false, true}) == Cue::None, "buzzer: no arm chime while a menu is open");
+    check(arm_cue(ArmEdge{SwitchIndex{5}, true, true, false}) == Cue::None, "buzzer: no arm chime without a change");
+
+    Player warn{};
+    warn.play_cue(Cue::WarnCritical, ToneStyle::Simple);
+    const Measured critical = measure(warn);
+    check(critical.tones == 3 && critical.ms == 320, "buzzer: critical warning plays 3 times with pauses");
+
+    Player battery{};
+    battery.play_cue(Cue::WarnBattery, ToneStyle::Rich);
+    const Measured rich_battery = measure(battery);
+    check(rich_battery.tones == 3 && rich_battery.ms == 270, "buzzer: Rich battery melody has no trailing pause");
+
+    Player arm{};
+    arm.play_cue(Cue::Armed, ToneStyle::Rich);
+    const Measured armed = measure(arm);
+    check(armed.tones == 2 && armed.ms == 130, "buzzer: Rich arm chime lasts 130 ms");
+
+    Player welcome{};
+    welcome.play(Pattern{tables::kWelcome, Repeats{1}});
+    const Measured twice = measure(welcome);
+    check(twice.tones == 7 && twice.ms == 1320,
+          "buzzer: repeats play the whole list again, joined without a gap as the last pause is zero");
+
+    constexpr std::array<Note, 2> zero_pause{{{FreqHz{2000}, DurationMs{10}, PauseMs{0}},
+                                              {FreqHz{2100}, DurationMs{10}, PauseMs{0}}}};
+    Player seq{};
+    seq.play(Pattern{zero_pause, Repeats{0}});
+    for (int i = 0; i < 10; ++i) {
+        seq.tick(Millis{1});
+    }
+    check(seq.output() == FreqHz{2100}, "buzzer: zero pause advances to the next note");
+    seq.tick(Millis{10});
+    check(!seq.playing() && seq.output() == FreqHz{}, "buzzer: pattern ends after its last note");
+
+    Player trim{};
+    trim.play_trim(TrimStep{0});
+    check(trim.output() == FreqHz{2000}, "buzzer: trim plays at 2000 Hz");
+    const Measured trim_run = measure(trim);
+    check(trim_run.tones == 1 && trim_run.ms == 25, "buzzer: trim beep is 25 ms");
+
+    Player vario{};
+    vario.set_vario(Tone{2000, 100, 200});
+    check(vario.is_vario_active() && vario.output() == FreqHz{2000}, "buzzer: vario starts on");
+    vario.tick(Millis{100});
+    check(vario.output() == FreqHz{}, "buzzer: vario pauses after its pulse");
+    vario.tick(Millis{200});
+    check(vario.output() == FreqHz{2000}, "buzzer: vario pulses again after the pause");
+
+    Player drone{};
+    drone.set_vario(Tone{2000, 100, 0});
+    drone.tick(Millis{1000});
+    check(drone.output() == FreqHz{2000}, "buzzer: continuous vario stays on");
+
+    Player same{};
+    same.set_vario(Tone{2000, 100, 200});
+    same.tick(Millis{50});
+    same.set_vario(Tone{2000, 100, 200});
+    same.tick(Millis{50});
+    check(same.output() == FreqHz{}, "buzzer: re-setting the same vario tone keeps its phase");
+    same.set_vario(Tone{2500, 100, 200});
+    check(same.output() == FreqHz{2500}, "buzzer: a new vario tone restarts the pulse");
+
+    Player over{};
+    over.set_vario(Tone{2000, 100, 0});
+    over.play_cue(Cue::Click, ToneStyle::Simple);
+    check(over.output() == FreqHz{kBeepDefaultHz}, "buzzer: tones override the vario");
+    over.tick(Millis{15});
+    check(!over.playing() && over.output() == FreqHz{2000}, "buzzer: vario resumes after a tone");
+
+    over.set_vario(vario::kSilent);
+    check(!over.is_vario_active() && over.output() == FreqHz{}, "buzzer: silent vario is off");
+
+    Player off{};
+    off.set_vario(Tone{2000, 100, 0});
+    off.set_enabled(false);
+    off.play_cue(Cue::Click, ToneStyle::Simple);
+    check(!off.enabled() && !off.playing() && off.output() == FreqHz{}, "buzzer: disabled buzzer is silent");
+    off.set_enabled(true);
+    check(off.output() == FreqHz{}, "buzzer: disabling clears the vario until the caller sets it again");
+    off.set_vario(Tone{2000, 100, 0});
+    check(off.output() == FreqHz{2000}, "buzzer: vario plays again once enabled and set");
+
+    warn.play_cue(Cue::WarnCritical, ToneStyle::Simple);
+    warn.stop();
+    check(!warn.playing() && warn.output() == FreqHz{}, "buzzer: stop silences the pattern");
+
+    calib::Wizard cw{};
+    calib::start(cw);
+    check(cw.cue == Cue::CalibStart, "buzzer: calibration start chimes");
+    storage::RadioConfig radio = storage::default_storage().radio;
+    input::Raw center{};
+    center.fill(storage::kAdcCenter);
+    calib::update(cw, calib::Input{0, 0, center, 10}, radio);
+    check(cw.cue == Cue::None, "buzzer: cue clears on the next update");
+    calib::update(cw, calib::Input{calib::kKeyOk, calib::kKeyOk, center, 10}, radio);
+    check(cw.cue == Cue::CalibAdvance, "buzzer: centre capture chimes");
+    calib::update(cw, calib::Input{0, 0, center, 10}, radio);
+    calib::update(cw, calib::Input{calib::kKeyOk, calib::kKeyOk, center, 10}, radio);
+    check(cw.cue == Cue::CalibReject, "buzzer: limits without travel rejects");
+    calib::update(cw, calib::Input{calib::kKeyCancel, calib::kKeyCancel, center, 10}, radio);
+    check(cw.cue == Cue::Click, "buzzer: cancel in limits clicks");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -2310,6 +2532,7 @@ int main() {
     a7105_radio_test();
     vario_test();
     telemetry_test();
+    buzzer_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

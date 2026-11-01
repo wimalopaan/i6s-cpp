@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "ferrox/logic/buzzer.hpp"
 #include "ferrox/logic/framebuffer.hpp"
 #include "ferrox/logic/input.hpp"
 #include "ferrox/logic/storage.hpp"
@@ -52,6 +53,8 @@ struct Wizard {
     std::array<uint16_t, kAuxSlots> pot_min{};
     std::array<uint16_t, kAuxSlots> pot_max{};
     uint16_t timer_ms{0};
+    // Chime for the last update, for the caller to play. Cleared on every update.
+    buzzer::Cue cue{buzzer::Cue::None};
 };
 
 struct Input {
@@ -109,6 +112,7 @@ constexpr void start(Wizard& w) {
     w.pot_max.fill(storage::kAdcMin);
     w.waiting_release = true;
     w.timer_ms = 0;
+    w.cue = buzzer::Cue::CalibStart;
 }
 
 // 63/64 margin on each side of the travel, as in the OpenTX calibration.
@@ -135,6 +139,7 @@ constexpr void save_endpoints(storage::RadioConfig& radio, const Wizard& w, cons
 
 // Returns true when the calibration was saved. The caller applies it and writes EEPROM.
 constexpr bool update(Wizard& w, const Input& in, storage::RadioConfig& radio) {
+    w.cue = buzzer::Cue::None;
     if (w.waiting_release && (in.held & kKeyOk) == 0) {
         w.waiting_release = false;
     }
@@ -149,9 +154,11 @@ constexpr bool update(Wizard& w, const Input& in, storage::RadioConfig& radio) {
         case Step::Center:
             if (cancel) {
                 w.step = Step::Inactive;
+                w.cue = buzzer::Cue::Click;
                 break;
             }
             if (ok) {
+                w.cue = buzzer::Cue::CalibAdvance;
                 for (std::size_t i = 0; i < kSticks; ++i) {
                     w.stick_center[i] = in.raw[i];
                     w.stick_min[i] = in.raw[i];
@@ -172,6 +179,7 @@ constexpr bool update(Wizard& w, const Input& in, storage::RadioConfig& radio) {
         case Step::Limits: {
             if (cancel) {
                 w.step = Step::Inactive;
+                w.cue = buzzer::Cue::Click;
                 break;
             }
             for (std::size_t i = 0; i < kSticks; ++i) {
@@ -190,7 +198,11 @@ constexpr bool update(Wizard& w, const Input& in, storage::RadioConfig& radio) {
                 save_endpoints(radio, w, pots);
                 w.step = Step::Complete;
                 w.timer_ms = kCompleteMs;
+                w.cue = buzzer::Cue::CalibSuccess;
                 return true;
+            }
+            if (ok) {
+                w.cue = buzzer::Cue::CalibReject;
             }
             break;
         }
