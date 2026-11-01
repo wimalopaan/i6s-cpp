@@ -4,6 +4,7 @@
 #include <span>
 
 #include "ferrox/logic/a7105.hpp"
+#include "ferrox/logic/bind.hpp"
 #include "ferrox/logic/afhds2a.hpp"
 #include "ferrox/logic/afhds2a_radio.hpp"
 #include "ferrox/logic/brr.hpp"
@@ -2837,6 +2838,81 @@ void flight_timer_test() {
     }
 }
 
+void bind_test() {
+    using logic::bind::Action;
+    using logic::bind::Controller;
+    using logic::bind::Input;
+    using logic::bind::Link;
+    using logic::buzzer::Cue;
+    using logic::vario::Millis;
+
+    constexpr uint16_t kBind = logic::kKeyBind;
+    constexpr uint16_t kCancel = logic::safety::kKeyCancel;
+    constexpr Link kLinked{true, false};
+    constexpr Link kBinding{true, true};
+
+    static_assert(logic::bind::binding_shown(kBinding));
+    static_assert(!logic::bind::binding_shown({false, true}));
+    static_assert(!logic::bind::binding_shown(kLinked));
+
+    auto make = [](Link link, uint16_t keys, uint16_t pressed, uint32_t dt_ms, bool menu = false) {
+        Input in{};
+        in.link = link;
+        in.menu_active = menu;
+        in.keys = keys;
+        in.pressed = pressed;
+        in.dt = Millis{dt_ms};
+        return in;
+    };
+
+    Controller c{};
+    check(logic::bind::update(c, make(kLinked, kBind, kBind, 500)).action == Action::None, "bind: no start at 500 ms");
+    check(logic::bind::update(c, make(kLinked, kBind, 0, 499)).action == Action::None, "bind: no start at 999 ms");
+    const auto started = logic::bind::update(c, make(kLinked, kBind, 0, 1));
+    check(started.action == Action::Start, "bind: starts at 1000 ms hold");
+    check(logic::bind::update(c, make(kLinked, kBind, 0, 300)).action == Action::None, "bind: start not repeated");
+    logic::bind::update(c, make(kLinked, 0, 0, 10));
+    check(c == Controller{}, "bind: release resets hold");
+
+    Controller menu_c{};
+    logic::bind::update(menu_c, make(kLinked, kBind, kBind, 600));
+    logic::bind::update(menu_c, make(kLinked, kBind, 0, 2000, true));
+    check(menu_c == Controller{}, "bind: menu open resets hold");
+    check(logic::bind::update(menu_c, make(kLinked, kBind, 0, 500)).action == Action::None,
+          "bind: menu open then hold restarts from zero");
+
+    Controller crsf_c{};
+    check(logic::bind::update(crsf_c, make({false, false}, kBind, kBind, 2000)).action == Action::None,
+          "bind: no start without AFHDS 2A");
+
+    Controller stop_c{};
+    const auto stop_bind = logic::bind::update(stop_c, make(kBinding, 0, kBind, 10));
+    check(stop_bind == logic::bind::Event{Action::Stop, Cue::Click}, "bind: BIND press stops binding with click");
+    const auto stop_cancel = logic::bind::update(stop_c, make(kBinding, kCancel, 0, 10));
+    check(stop_cancel == logic::bind::Event{Action::Stop, Cue::Click}, "bind: CANCEL stops binding with click");
+    const auto idle = logic::bind::update(stop_c, make(kBinding, 0, 0, 10));
+    check(idle == logic::bind::Event{}, "bind: idle while binding does nothing");
+
+    // Footer precedence: bind > trim > timer > default.
+    logic::input::InputState in{};
+    logic::storage::RadioStorage st{};
+    logic::trim::Controller trims{};
+    std::array<uint16_t, logic::kNumChannels> chs{};
+    using logic::dashboard::FooterKind;
+    {
+        logic::dashboard::View v{in, st, trims, chs, false, {}, true, false, false, 0};
+        check(logic::dashboard::footer_kind(v) == FooterKind::Bind, "footer: bind shown while binding");
+        trims.last_active = logic::trim::Axis::Roll;
+        check(logic::dashboard::footer_kind(v) == FooterKind::Bind, "footer: bind beats active trim");
+    }
+    {
+        logic::dashboard::View v{in, st, trims, chs, false, {}, false, false, false, 0};
+        check(logic::dashboard::footer_kind(v) == FooterKind::Trim, "footer: trim shown when not binding");
+        trims.last_active.reset();
+        check(logic::dashboard::footer_kind(v) == FooterKind::Default, "footer: default when idle");
+    }
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -2862,6 +2938,7 @@ int main() {
     trim_controller_test();
     trim_autosave_test();
     flight_timer_test();
+    bind_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

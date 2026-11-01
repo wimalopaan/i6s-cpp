@@ -89,6 +89,7 @@ struct View {
     bool crsf;
     // AFHDS 2A link state, only meaningful when !crsf.
     afhds2a::Telemetry telem{};
+    // Radio is binding, already gated by bind::binding_shown (AFHDS 2A only). Drives the BIND status and footer.
     bool binding = false;
     bool rf_ok = false;
     bool bound = false;
@@ -102,6 +103,22 @@ struct View {
 
 using labels::model_name;
 using labels::model_type_label;
+
+/// Which footer the P1 page shows. Same precedence as Rust `gimbals::render_footer`.
+enum class FooterKind : uint8_t { Bind, Trim, Timer, Default };
+
+constexpr FooterKind footer_kind(const View& v) {
+    if (v.binding) {
+        return FooterKind::Bind;
+    }
+    if (v.trims.last_active) {
+        return FooterKind::Trim;
+    }
+    if (v.timer) {
+        return FooterKind::Timer;
+    }
+    return FooterKind::Default;
+}
 
 // Fixed status text; empty when the RSSI value is shown instead. Same order as Rust `status_bar.rs`.
 constexpr std::string_view rf_status_fixed(const View& v) {
@@ -418,6 +435,18 @@ constexpr void draw_adaptive_layout(Framebuffer& fb, const input::InputState& in
     }
 }
 
+// Shown instead of the page footer while binding. Same text as Rust `widgets::draw_footer` calls in each page.
+constexpr void draw_bind_footer(Framebuffer& fb) { widgets::draw_footer(fb, "[ESC] Finish Bind"); }
+
+// Footer of the pages without trim or timer overlays: bind text while binding, else the page label.
+constexpr void draw_page_footer(Framebuffer& fb, const View& v, std::string_view page, std::string_view title) {
+    if (v.binding) {
+        draw_bind_footer(fb);
+    } else {
+        widgets::draw_footer_split(fb, page, title);
+    }
+}
+
 constexpr void draw_gimbal_page(Framebuffer& fb, const View& v, uint8_t blink_phase) {
     draw_primary_sticks(fb, v);
 
@@ -430,20 +459,26 @@ constexpr void draw_gimbal_page(Framebuffer& fb, const View& v, uint8_t blink_ph
         draw_adaptive_layout(fb, v.in, st);
     }
 
-    if (v.trims.last_active) {
-        const auto axis = *v.trims.last_active;
-        const auto trim_text = format::format_trim(trim::axis_letter(axis), trim::value_of(v.trims.values, axis));
-        widgets::draw_footer_split(fb, trim_text.view(), "Hold OK:Menu");
-    } else if (v.timer) {
-        const auto timer_text = format::format_timer(v.timer->value.value, v.timer->expired);
-        const bool blink_on = (blink_phase & 0x08u) != 0;
-        widgets::draw_footer_three(fb, "P1/5", timer_text.view(), "Hold OK:Menu", v.timer->expired && blink_on);
-    } else {
-        widgets::draw_footer_split(fb, "P1/5", "Hold OK:Menu");
+    switch (footer_kind(v)) {
+        case FooterKind::Bind: draw_bind_footer(fb); break;
+        case FooterKind::Trim: {
+            const auto axis = *v.trims.last_active;
+            const auto trim_text = format::format_trim(trim::axis_letter(axis), trim::value_of(v.trims.values, axis));
+            widgets::draw_footer_split(fb, trim_text.view(), "Hold OK:Menu");
+            break;
+        }
+        case FooterKind::Timer: {
+            const auto timer_text = format::format_timer(v.timer->value.value, v.timer->expired);
+            const bool blink_on = (blink_phase & 0x08u) != 0;
+            widgets::draw_footer_three(fb, "P1/5", timer_text.view(), "Hold OK:Menu", v.timer->expired && blink_on);
+            break;
+        }
+        case FooterKind::Default: widgets::draw_footer_split(fb, "P1/5", "Hold OK:Menu"); break;
     }
 }
 
-constexpr void draw_channel_page(Framebuffer& fb, const std::array<uint16_t, kNumChannels>& chs, bool second_part) {
+constexpr void draw_channel_page(Framebuffer& fb, const View& v, bool second_part) {
+    const auto& chs = v.rf_chs;
     const int base_ch = second_part ? 10 : 0;
     const int rows_per_col = second_part ? 4 : 5;
 
@@ -478,9 +513,9 @@ constexpr void draw_channel_page(Framebuffer& fb, const std::array<uint16_t, kNu
 
     fb.draw_vline({64, 12}, second_part ? 33 : 41, true);
     if (second_part) {
-        widgets::draw_footer_split(fb, "P3/5", "CH 11-18 MONITOR");
+        draw_page_footer(fb, v, "P3/5", "CH 11-18 MONITOR");
     } else {
-        widgets::draw_footer_split(fb, "P2/5", "CH 1-10 MONITOR");
+        draw_page_footer(fb, v, "P2/5", "CH 1-10 MONITOR");
     }
 }
 
@@ -503,7 +538,7 @@ constexpr void draw_model_page(Framebuffer& fb, const View& v) {
     // CRSF telemetry is not ported yet, so its line always shows DISCONNECTED.
     fb.draw_str_6x10({2, 44}, v.crsf ? std::string_view("CRSF: DISCONNECTED") : afhds_link_line(v), false);
 
-    widgets::draw_footer_split(fb, "P4/5", "MODEL DASHBOARD");
+    draw_page_footer(fb, v, "P4/5", "MODEL DASHBOARD");
 }
 
 // AFHDS 2A sensor page, same layout as Rust `telemetry.rs` (AFHDS branch). CRSF is not ported yet.
@@ -570,11 +605,7 @@ constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
     const auto min_rx_text = format::format_vbat(v.stats.min_rx_v_mv);
     fb.draw_str_6x10({92, 44}, min_rx_ok ? min_rx_text.view() : std::string_view("----"), false);
 
-    if (v.binding) {
-        widgets::draw_footer(fb, "[ESC] Finish Bind");
-    } else {
-        widgets::draw_footer_split(fb, "P5/5", "TELEMETRY SENSORS");
-    }
+    draw_page_footer(fb, v, "P5/5", "TELEMETRY SENSORS");
 }
 
 // Centered box shown after a timer reset: a hold progress bar, then a confirmation toast.
@@ -601,8 +632,8 @@ constexpr void render(Framebuffer& fb, PageState& s, const View& v) {
 
     switch (s.page) {
         case 0: draw_gimbal_page(fb, v, s.blink_phase); break;
-        case 1: draw_channel_page(fb, v.rf_chs, false); break;
-        case 2: draw_channel_page(fb, v.rf_chs, true); break;
+        case 1: draw_channel_page(fb, v, false); break;
+        case 2: draw_channel_page(fb, v, true); break;
         case 3: draw_model_page(fb, v); break;
         default: draw_telemetry_page(fb, v); break;
     }

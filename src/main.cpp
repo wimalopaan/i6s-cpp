@@ -14,6 +14,7 @@
 #include "ferrox/hw/rf.hpp"
 #include "ferrox/hw/st7567.hpp"
 #include "ferrox/logic/dashboard.hpp"
+#include "ferrox/logic/bind.hpp"
 #include "ferrox/logic/brr.hpp"
 #include "ferrox/logic/buzzer.hpp"
 #include "ferrox/logic/calib.hpp"
@@ -65,9 +66,6 @@ ferrox::logic::input::InputState sample_inputs() {
 // Holding OK this long on the dashboard opens the menu.
 constexpr uint32_t kMenuHoldMs = 1200;
 
-// Holding BIND this long on the dashboard starts binding.
-constexpr uint32_t kBindHoldMs = 1000;
-
 // Model names shown in the model list, filled from EEPROM when the list is opened.
 ferrox::logic::menu::ModelNames g_model_names{};
 
@@ -86,6 +84,8 @@ ferrox::logic::trim::AutoSave g_trim_save{};
 
 // Flight timer state machine; runs on the active model and resets when the model changes.
 ferrox::logic::flight_timer::State g_flight_timer{};
+// BIND key hold timer; starts and stops AFHDS 2A binding on the dashboard.
+ferrox::logic::bind::Controller g_bind{};
 
 ferrox::logic::flight_timer::Config timer_config(const ferrox::logic::storage::ModelConfig& m) {
     return {.limit = {m.timer_secs}, .source = {m.timer_source}, .arm = {m.arm_switch}};
@@ -293,8 +293,6 @@ int main() {
     bool ok_armed = false;
     uint32_t ok_press_ms = 0;
     uint32_t last_loop_ms = time::millis();
-    uint32_t bind_hold_ms = 0;
-    bool bind_was_held = false;
     bool rx_id_dirty = false;
     bool prev_armed = logic::flight::is_armed(model.arm_switch, sample_inputs().switches);
 
@@ -315,9 +313,6 @@ int main() {
         g_buzzer.tick(logic::buzzer::Millis{dt_ms});
 
         const bool afhds = g_rf_ok && g_storage.active_model.rf_protocol == 0;
-        if (afhds && hw::rf::is_binding() && (pressed & (logic::kKeyBind | logic::calib::kKeyCancel)) != 0) {
-            hw::rf::set_bind_mode(false);
-        }
 
         if (logic::calib::active(g_calib_wizard)) {
             const logic::calib::Input cal_in{pressed, g_keys, input.raw, dt_ms};
@@ -336,18 +331,6 @@ int main() {
             if (ok_armed && (g_keys & logic::kKeyOk) != 0 && now - ok_press_ms >= kMenuHoldMs) {
                 logic::menu::open(menu_state);
                 ok_armed = false;
-            }
-            if (afhds && !hw::rf::is_binding()) {
-                if ((g_keys & logic::kKeyBind) != 0) {
-                    bind_hold_ms += dt_ms;
-                    if (bind_hold_ms >= kBindHoldMs && !bind_was_held) {
-                        hw::rf::set_bind_mode(true);
-                        bind_was_held = true;
-                    }
-                } else {
-                    bind_hold_ms = 0;
-                    bind_was_held = false;
-                }
             }
         } else {
             const auto ev = logic::menu::update(menu_state, logic::menu::Input{pressed, g_keys, now}, g_storage);
@@ -392,6 +375,21 @@ int main() {
         }
 
         const bool menu_open = menu_state.screen != logic::menu::Screen::Closed || logic::calib::active(g_calib_wizard);
+        const auto bind_ev = logic::bind::update(
+            g_bind, logic::bind::Input{
+                        .link = {afhds, hw::rf::is_binding()},
+                        .menu_active = menu_open,
+                        .keys = g_keys,
+                        .pressed = pressed,
+                        .dt = logic::vario::Millis{dt_ms},
+                    });
+        switch (bind_ev.action) {
+            case logic::bind::Action::Start: hw::rf::set_bind_mode(true); break;
+            case logic::bind::Action::Stop: hw::rf::set_bind_mode(false); break;
+            case logic::bind::Action::None: break;
+        }
+        play_buzzer_cue(bind_ev.cue);
+
         if (!menu_open) {
             const auto trim_ev = g_trims.update(g_keys, logic::vario::Millis{dt_ms});
             switch (trim_ev.kind) {
@@ -437,7 +435,7 @@ int main() {
         if (now - last_draw_ms >= 100) {
             g_fb.clear();
             const auto rf_telem = g_rf_ok ? hw::rf::get_telemetry() : logic::afhds2a::Telemetry{};
-            const bool rf_binding = g_rf_ok && hw::rf::is_binding();
+            const bool rf_binding = logic::bind::binding_shown({afhds, hw::rf::is_binding()});
             const bool rf_bound = g_rf_ok && hw::rf::is_bound();
             const uint32_t rf_sent = g_rf_ok ? hw::rf::packets_sent() : 0u;
             if (g_rf_ok) {
