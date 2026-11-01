@@ -131,6 +131,9 @@ inline void poll_telemetry(uint32_t now_ms) {
         return;
     }
 
+    if (uart::take_rx_idle()) {
+        g_framer.reset();
+    }
     g_framer.check_stall(now_ms);
 
     std::size_t count = 0;

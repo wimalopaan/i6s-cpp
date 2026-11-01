@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 
+#include "ferrox/arch/critical.hpp"
 #include "ferrox/arch/regs.hpp"
 #include "ferrox/hw/gpio.hpp"
 #include "ferrox/logic/brr.hpp"
@@ -23,9 +24,14 @@ inline constexpr std::size_t kRxBufSize = 256;
 inline constexpr std::size_t kTxBufSize = 64;
 static_assert((kRxBufSize & (kRxBufSize - 1)) == 0, "RX ring size must be a power of two");
 
+// Raw NVIC priority byte (0x40). CMSIS NVIC_SetPriority would shift it by 6 on Cortex-M0.
+inline constexpr uint8_t kIrqPriorityRaw = 0x40;
+
 inline constinit uint8_t g_rx_buf[kRxBufSize]{};
 inline constinit uint8_t g_tx_buf[kTxBufSize]{};
 inline constinit std::size_t g_rx_tail = 0;
+inline constinit volatile bool g_tx_busy = false;
+inline constinit volatile bool g_rx_idle_pending = false;
 inline constinit volatile bool g_active_high = true;
 inline constinit volatile bool g_power_on = false;
 inline constinit volatile bool g_half_duplex = false;
@@ -114,14 +120,22 @@ inline void set_uart_enabled(bool enabled, uint8_t baud_index, Duplex duplex) {
 
         DMA1_Channel7->CCR = 0;
         DMA1_Channel7->CPAR = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&USART2->TDR));
+        g_tx_busy = false;
+        g_rx_idle_pending = false;
 
-        USART2->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE;
+        NVIC_ClearPendingIRQ(USART2_IRQn);
+        reinterpret_cast<volatile uint8_t*>(&NVIC->IP[0])[USART2_IRQn] = kIrqPriorityRaw;
+        NVIC_EnableIRQ(USART2_IRQn);
+
+        USART2->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_IDLEIE | USART_CR1_TCIE;
     } else {
+        NVIC_DisableIRQ(USART2_IRQn);
         DMA1_Channel6->CCR = 0;
         DMA1_Channel7->CCR = 0;
         USART2->CR1 = 0;
         USART2->CR3 = 0;
         g_rx_tail = 0;
+        g_tx_busy = false;
 
         RCC->APB1ENR &= ~RCC_APB1ENR_USART2EN;
         set_mode_mask<Port::D>(1u << kTxPin, Mode::Input);
@@ -130,16 +144,15 @@ inline void set_uart_enabled(bool enabled, uint8_t baud_index, Duplex duplex) {
     }
 }
 
-/// Queues up to kTxBufSize bytes for DMA transmission. Waits a bounded time for a previous
-/// transfer to finish. Returns the number of bytes queued (0 if the transmitter stayed busy).
+/// Queues up to kTxBufSize bytes for DMA transmission. Waits a bounded time for the previous
+/// frame to leave the wire (TC interrupt). Returns the number of bytes queued (0 if still busy).
 inline std::size_t write_bytes(std::span<const uint8_t> bytes) {
     uint32_t timeout = 50'000;
-    while ((DMA1_Channel7->CCR & DMA_CCR_EN) != 0 && DMA1_Channel7->CNDTR != 0) {
+    while (g_tx_busy) {
         if (--timeout == 0) {
             return 0;
         }
     }
-    DMA1_Channel7->CCR = 0;
 
     const std::size_t n = std::min(bytes.size(), kTxBufSize);
     if (n == 0) {
@@ -152,10 +165,34 @@ inline std::size_t write_bytes(std::span<const uint8_t> bytes) {
         g_echo_skip = g_echo_skip + static_cast<uint32_t>(n);
     }
 
+    USART2->ICR = USART_ICR_TCCF;
+    g_tx_busy = true;
+    DMA1_Channel7->CCR = 0;
     DMA1_Channel7->CMAR = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_tx_buf));
     DMA1_Channel7->CNDTR = static_cast<uint32_t>(n);
     DMA1_Channel7->CCR = DMA_CCR_MINC | DMA_CCR_DIR | DMA_CCR_EN;
     return n;
+}
+
+/// Returns true once after the RX line went idle (end of a received burst).
+inline bool take_rx_idle() {
+    arch::CriticalSection cs;
+    const bool pending = g_rx_idle_pending;
+    g_rx_idle_pending = false;
+    return pending;
+}
+
+/// USART2 interrupt body: TC frees the transmitter, IDLE marks the end of an RX burst.
+inline void on_irq() {
+    const uint32_t isr = USART2->ISR;
+    if ((isr & USART_ISR_TC) != 0) {
+        USART2->ICR = USART_ICR_TCCF;
+        g_tx_busy = false;
+    }
+    if ((isr & USART_ISR_IDLE) != 0) {
+        USART2->ICR = USART_ICR_IDLECF;
+        g_rx_idle_pending = true;
+    }
 }
 
 /// Returns the next received byte. Half-duplex echoes of our own transmissions are dropped.
