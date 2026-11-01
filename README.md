@@ -7,7 +7,7 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 ## Ported
 
 - Chip: clock (48 MHz), reset flags, DFU entry, UID, watchdog, SysTick
-- Peripherals: GPIO, ADC (DMA), USART, keys, LCD (ST7567), buzzer (TIM1), trainer PPM (TIM15)
+- Peripherals: GPIO, ADC (DMA), USART (DMA, CRSF/half-duplex), keys, LCD (ST7567), buzzer (TIM1), trainer PPM (TIM15)
 - CRSF: framing, telemetry parser, RC frames, parameter menu engine
 - AFHDS 2A: protocol logic, A7105 driver, radio state machine, ISRs
 - Storage: I2C EEPROM, A/B radio slots, model slots, legacy v1–v4 migration
