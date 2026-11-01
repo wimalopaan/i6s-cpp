@@ -81,6 +81,8 @@ ferrox::logic::buzzer::RssiWarnTimer g_rssi_warn{};
 ferrox::logic::trim::Controller g_trims{};
 // Trim auto-save trigger; decides when g_trims is written to the active model's EEPROM slot.
 ferrox::logic::trim::AutoSave g_trim_save{};
+// Rising edge of an InstantTrim aux switch; tracked even while a menu is open, as in Rust.
+ferrox::logic::trim::InstantEdge g_instant_edge{};
 
 // Flight timer state machine; runs on the active model and resets when the model changes.
 ferrox::logic::flight_timer::State g_flight_timer{};
@@ -312,6 +314,9 @@ int main() {
         g_buzzer.set_enabled(g_storage.radio.audio_enabled != 0);
         g_buzzer.tick(logic::buzzer::Millis{dt_ms});
 
+        const bool instant_rising =
+            g_instant_edge.update(logic::trim::instant_switch_down(g_storage.radio, input.raw));
+
         const bool afhds = g_rf_ok && g_storage.active_model.rf_protocol == 0;
 
         if (logic::calib::active(g_calib_wizard)) {
@@ -399,6 +404,16 @@ int main() {
                 case logic::trim::Event::Kind::Center: play_buzzer_cue(logic::buzzer::Cue::TrimCenter); break;
                 case logic::trim::Event::Kind::Limit: play_buzzer_cue(logic::buzzer::Cue::TrimLimit); break;
                 case logic::trim::Event::Kind::None: break;
+            }
+            if (instant_rising) {
+                const auto sticks = logic::flight::flight_controls(input.gimbals, stick_mode);
+                const auto result = g_trims.instant_trim(logic::trim::InstantSticks{
+                    .roll = sticks.aileron, .pitch = sticks.elevator, .yaw = sticks.rudder});
+                switch (result) {
+                    case logic::trim::InstantResult::Adjusted: play_buzzer_cue(logic::buzzer::Cue::InstantTrim); break;
+                    case logic::trim::InstantResult::Reset: play_buzzer_cue(logic::buzzer::Cue::TrimCenter); break;
+                    case logic::trim::InstantResult::None: break;
+                }
             }
         }
 

@@ -6,7 +6,9 @@
 #include <optional>
 
 #include "ferrox/logic/channels.hpp"
+#include "ferrox/logic/input.hpp"
 #include "ferrox/logic/power.hpp"
+#include "ferrox/logic/storage.hpp"
 #include "ferrox/logic/vario.hpp"
 
 namespace ferrox::logic::trim {
@@ -90,6 +92,51 @@ struct Event {
     // New trim value; set for Kind::Step only.
     int8_t value = 0;
     constexpr bool operator==(const Event&) const = default;
+};
+
+/// Stick deflection (-1000..+1000) of the three axes that instant trim reads.
+struct InstantSticks {
+    int16_t roll = 0;
+    int16_t pitch = 0;
+    int16_t yaw = 0;
+    constexpr bool operator==(const InstantSticks&) const = default;
+};
+
+/// Outcome of one instant trim press. Adjusted and Reset each have their own buzzer cue.
+enum class InstantResult : uint8_t { None, Adjusted, Reset };
+
+/// Trim steps for one stick deflection: 40 counts per step, rounded half away from zero (Rust `round_step`).
+constexpr int8_t instant_step(int16_t stick) {
+    const int32_t v = stick;
+    return static_cast<int8_t>(v >= 0 ? (v + 20) / 40 : (v - 20) / 40);
+}
+
+/// Raw reading at or above which an InstantTrim switch counts as pressed (Rust `raw_val >= 2048`).
+inline constexpr uint16_t kInstantTrimRaw = 2048;
+
+/// True while an auxiliary channel set to InstantTrim is switched down. Only the first 10 aux channels
+/// are checked (6 without the external ADC), as in Rust.
+constexpr bool instant_switch_down(const storage::RadioConfig& radio, const input::Raw& raw) {
+    const std::size_t count = radio.ext_adc != 0 ? input::kAuxCount : 6;
+    for (std::size_t ch = 0; ch < count; ++ch) {
+        if (input::resolve_mode(ch, radio.adc_modes[ch]) == input::AdcMode::InstantTrim &&
+            raw[input::aux_index_to_raw(ch)] >= kInstantTrimRaw) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Rising-edge detector for the instant trim switches (Rust `prev_instant_trim_active`).
+/// It runs on every tick, also while a menu is open, so the edge is not missed.
+struct InstantEdge {
+    bool prev = false;
+
+    constexpr bool update(bool active) {
+        const bool rising = active && !prev;
+        prev = active;
+        return rising;
+    }
 };
 
 /// Trim key state machine (Rust `TrimController`). Keys 0..7 of the key matrix are the
@@ -183,7 +230,37 @@ struct Controller {
         return {Event::Kind::Step, slot};
     }
 
+    /// Instant trim (Rust `main.rs` section 7), run on the rising edge of an InstantTrim switch outside menus.
+    /// Sticks off centre add their rounded deflection to roll, pitch and yaw. Sticks centred reset those three
+    /// trims if any is set. Throttle is not changed.
+    constexpr InstantResult instant_trim(const InstantSticks& sticks) {
+        const int8_t d_roll = instant_step(sticks.roll);
+        const int8_t d_pitch = instant_step(sticks.pitch);
+        const int8_t d_yaw = instant_step(sticks.yaw);
+        if (d_roll != 0 || d_pitch != 0 || d_yaw != 0) {
+            add_clamped(values.roll, d_roll);
+            add_clamped(values.pitch, d_pitch);
+            add_clamped(values.yaw, d_yaw);
+            last_active = d_roll != 0 ? Axis::Roll : (d_pitch != 0 ? Axis::Pitch : Axis::Yaw);
+            active_ms = kActiveMs;
+            return InstantResult::Adjusted;
+        }
+        if (values.roll != 0 || values.pitch != 0 || values.yaw != 0) {
+            values.roll = 0;
+            values.pitch = 0;
+            values.yaw = 0;
+            last_active = Axis::Roll;
+            active_ms = kActiveMs;
+            return InstantResult::Reset;
+        }
+        return InstantResult::None;
+    }
+
 private:
+    static constexpr void add_clamped(int8_t& slot, int8_t delta) {
+        slot = static_cast<int8_t>(std::clamp<int>(slot + delta, kTrimMin, kTrimMax));
+    }
+
     constexpr void release() {
         prev_keys = 0;
         hold_ms = 0;

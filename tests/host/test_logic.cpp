@@ -2336,6 +2336,12 @@ void buzzer_test() {
     check(pattern_for(Cue::WarnBattery, ToneStyle::Simple).repeats == Repeats{1}, "buzzer: Simple battery repeats once");
     check(pattern_for(Cue::WarnCritical, ToneStyle::Simple).repeats == Repeats{2}, "buzzer: Simple critical repeats twice");
     check(pattern_for(Cue::WarnBattery, ToneStyle::Rich).repeats == Repeats{0}, "buzzer: Rich battery plays once");
+    check(pattern_for(Cue::InstantTrim, ToneStyle::Simple).notes.size() == 1 &&
+              pattern_for(Cue::InstantTrim, ToneStyle::Simple).notes[0] == pattern_for(Cue::InstantTrim, ToneStyle::Rich).notes[0] &&
+              pattern_for(Cue::InstantTrim, ToneStyle::Simple).notes[0].freq == FreqHz{2400} &&
+              pattern_for(Cue::InstantTrim, ToneStyle::Simple).repeats == Repeats{2} &&
+              pattern_for(Cue::InstantTrim, ToneStyle::Rich).repeats == Repeats{2},
+          "buzzer: instant trim is a 2400 Hz tone twice in both styles");
     check(tone_style_from_u8(0) == ToneStyle::Simple && tone_style_from_u8(1) == ToneStyle::Rich &&
               tone_style_from_u8(7) == ToneStyle::Rich,
           "buzzer: style byte maps to Simple or Rich");
@@ -2671,6 +2677,94 @@ void trim_autosave_test() {
     check(ticks_until_save(s, v, false) == 100, "trim save: a change after reset is saved after 2000 ms");
 }
 
+void instant_trim_test() {
+    using logic::trim::Axis;
+    using logic::trim::Controller;
+    using logic::trim::InstantEdge;
+    using logic::trim::InstantResult;
+    using logic::trim::InstantSticks;
+    using logic::trim::instant_step;
+    using logic::trim::instant_switch_down;
+    using logic::trim::kInstantTrimRaw;
+    namespace storage = logic::storage;
+    namespace input = logic::input;
+
+    check(instant_step(0) == 0 && instant_step(19) == 0 && instant_step(20) == 1 && instant_step(59) == 1 &&
+              instant_step(60) == 2 && instant_step(-19) == 0 && instant_step(-20) == -1 &&
+              instant_step(-60) == -2 && instant_step(1000) == 25 && instant_step(-1000) == -25,
+          "instant trim: stick steps round half away from zero, 40 counts per step");
+
+    // Sticks deflected: roll +10, pitch -5, yaw 0. Roll is the axis shown in the footer.
+    Controller c{};
+    check(c.instant_trim(InstantSticks{400, -200, 0}) == InstantResult::Adjusted && c.values.roll == 10 &&
+              c.values.pitch == -5 && c.values.yaw == 0 && c.last_active == Axis::Roll &&
+              c.active_ms == Controller::kActiveMs,
+          "instant trim: deflected sticks add the rounded steps and show the roll footer");
+
+    Controller pitch_first{};
+    check(pitch_first.instant_trim(InstantSticks{0, 100, 50}) == InstantResult::Adjusted &&
+              pitch_first.values.pitch == 3 && pitch_first.values.yaw == 1 &&
+              pitch_first.last_active == Axis::Pitch,
+          "instant trim: footer picks pitch before yaw when roll is unchanged");
+
+    Controller yaw_only{};
+    check(yaw_only.instant_trim(InstantSticks{0, 0, -50}) == InstantResult::Adjusted &&
+              yaw_only.values.yaw == -1 && yaw_only.last_active == Axis::Yaw,
+          "instant trim: footer shows yaw when only yaw moves");
+
+    Controller clamp{};
+    clamp.values = {24, -24, 0, 0};
+    check(clamp.instant_trim(InstantSticks{1000, -1000, 0}) == InstantResult::Adjusted && clamp.values.roll == 25 &&
+              clamp.values.pitch == -25,
+          "instant trim: steps are clamped to +-25");
+
+    Controller throttle{};
+    throttle.throttle_enabled = true;
+    throttle.values.throttle = 7;
+    throttle.instant_trim(InstantSticks{400, 0, 0});
+    check(throttle.values.throttle == 7, "instant trim: throttle is never changed");
+
+    // Sticks centred with trims set: all three reset, footer shows roll, and the Reset cue is used.
+    Controller reset{};
+    reset.values = {5, -3, 9, 4};
+    check(reset.instant_trim(InstantSticks{0, 0, 0}) == InstantResult::Reset && reset.values.roll == 0 &&
+              reset.values.pitch == 0 && reset.values.yaw == 0 && reset.values.throttle == 9 &&
+              reset.last_active == Axis::Roll && reset.active_ms == Controller::kActiveMs,
+          "instant trim: centred sticks reset roll, pitch and yaw, keep throttle");
+
+    // Small deflection inside the rounding dead zone with trims set counts as centred, as in Rust.
+    Controller dead_zone{};
+    dead_zone.values = {2, 0, 0, 0};
+    check(dead_zone.instant_trim(InstantSticks{19, 0, 0}) == InstantResult::Reset && dead_zone.values.roll == 0,
+          "instant trim: deflection that rounds to zero resets set trims");
+
+    Controller idle{};
+    check(idle.instant_trim(InstantSticks{0, 0, 0}) == InstantResult::None && idle.active_ms == 0 &&
+              !idle.last_active,
+          "instant trim: centred sticks with zero trims do nothing");
+
+    InstantEdge edge{};
+    check(edge.update(true) && !edge.update(true) && !edge.update(false) && edge.update(true),
+          "instant trim: fires once per press, on the rising edge");
+
+    storage::RadioConfig radio = storage::default_storage().radio;
+    input::Raw raw{};
+    check(!instant_switch_down(radio, raw), "instant trim: default modes never fire");
+
+    radio.adc_modes[4] = 6;  // VRA as InstantTrim, reads raw index 6
+    raw[6] = kInstantTrimRaw - 1;
+    check(!instant_switch_down(radio, raw), "instant trim: switch below 2048 is up");
+    raw[6] = kInstantTrimRaw;
+    check(instant_switch_down(radio, raw), "instant trim: switch at 2048 is down");
+
+    radio.adc_modes[6] = 6;  // VRC as InstantTrim, reads raw index 11 (external ADC)
+    raw = {};
+    raw[11] = 4000;
+    check(!instant_switch_down(radio, raw), "instant trim: external ADC channels are ignored without ext ADC");
+    radio.ext_adc = 1;
+    check(instant_switch_down(radio, raw), "instant trim: external ADC channels count with ext ADC");
+}
+
 void flight_timer_test() {
     using logic::flight_timer::Config;
     using logic::flight_timer::Input;
@@ -2937,6 +3031,7 @@ int main() {
     buzzer_test();
     trim_controller_test();
     trim_autosave_test();
+    instant_trim_test();
     flight_timer_test();
     bind_test();
     if (failures == 0) {

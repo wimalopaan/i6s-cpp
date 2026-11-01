@@ -114,6 +114,7 @@ enum class Cue : uint8_t {
     TimerElapsed,
     NavStep,
     TimerReset,
+    InstantTrim,
 };
 
 namespace tables {
@@ -185,6 +186,7 @@ inline constexpr std::array<Note, 3> kTimerElapsed{{
 }};
 inline constexpr std::array<Note, 1> kNavStep{{{FreqHz{2200}, DurationMs{30}, PauseMs{0}}}};
 inline constexpr std::array<Note, 1> kTimerReset{{{FreqHz{2400}, DurationMs{100}, PauseMs{0}}}};
+inline constexpr std::array<Note, 1> kInstantTrim{{{FreqHz{2400}, DurationMs{60}, PauseMs{40}}}};
 
 }  // namespace tables
 
@@ -217,6 +219,8 @@ constexpr Pattern pattern_for(Cue cue, ToneStyle style) {
         case Cue::TimerElapsed: return rich ? single(tables::kTimerElapsed) : single(tables::kTimerElapsedSimple);
         case Cue::NavStep: return single(tables::kNavStep);
         case Cue::TimerReset: return single(tables::kTimerReset);
+        // Rust plays this raw tone pattern in both tone styles.
+        case Cue::InstantTrim: return Pattern{tables::kInstantTrim, Repeats{2}};
     }
     return {};
 }
