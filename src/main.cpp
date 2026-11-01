@@ -37,6 +37,9 @@
 #include "ferrox/logic/trainer.hpp"
 #include "ferrox/logic/trim.hpp"
 #include "ferrox/time/systick.hpp"
+#if FERROX_USE_USB
+#include "ferrox/hw/usb.hpp"
+#endif
 
 namespace {
 
@@ -327,6 +330,12 @@ int main() {
 
     hw::lcd::init();
     apply_lcd_settings(g_storage.radio);
+#if FERROX_USE_USB
+    if (const auto usb_mode = logic::usb::mode_from_stored(g_storage.radio.usb_mode);
+        usb_mode != logic::usb::UsbMode::Off) {
+        hw::usb::start(usb_mode);
+    }
+#endif
 
     hw::trainer::init();
     apply_trainer_config(g_storage.radio);

@@ -3,6 +3,9 @@
 #include "ferrox/hw/trainer.hpp"
 #include "ferrox/hw/uart.hpp"
 #include "ferrox/time/systick.hpp"
+#if FERROX_USE_USB
+#include "ferrox/hw/usb.hpp"
+#endif
 
 extern "C" {
 
@@ -25,5 +28,11 @@ void TIM16_IRQHandler() {
 void TIM15_IRQHandler() {
     ferrox::hw::trainer::on_tim15();
 }
+
+#if FERROX_USE_USB
+void USB_IRQHandler() {
+    ferrox::hw::usb::on_irq();
+}
+#endif
 
 }  // extern "C"
