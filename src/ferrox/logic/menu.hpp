@@ -271,8 +271,13 @@ constexpr bool repeat_step(Repeat& r, KeyState key, uint32_t now) {
     return false;
 }
 
-constexpr uint8_t window_scroll(std::size_t selected, std::size_t visible) {
-    return static_cast<uint8_t>(selected >= visible ? selected - visible + 1 : 0);
+struct ItemIndex {
+    std::size_t value;
+    friend constexpr bool operator==(const ItemIndex&, const ItemIndex&) = default;
+};
+
+constexpr uint8_t window_scroll(ItemIndex selected, Rows visible) {
+    return static_cast<uint8_t>(selected.value >= visible.value ? selected.value - visible.value + 1 : 0);
 }
 
 constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
@@ -288,7 +293,7 @@ constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
             s.screen = Screen::ModelSelect;
             s.models = ListPos{};
             s.models.selected = active_model;
-            s.models.scroll = window_scroll(active_model, kListVisible);
+            s.models.scroll = window_scroll({active_model}, {kListVisible});
             return {Action::EnterModelSelect, 0};
         }
         if (s.main.selected == kItemModelSetup) {
@@ -783,7 +788,7 @@ constexpr Event update_mixer_line(State& s, const Nav& n, storage::ModelConfig& 
             const std::size_t row = wing_gvars_row(m) + 1u + s.mix_idx;
             s.screen = Screen::WingMixer;
             s.wing.selected = static_cast<uint8_t>(row);
-            s.wing.scroll = window_scroll(row, kListVisible);
+            s.wing.scroll = window_scroll({row}, {kListVisible});
             return {};
         }
         if (n.up != n.down) {
@@ -1094,11 +1099,21 @@ constexpr format::Text<10> name_text(const ModelName& name) {
     return t;
 }
 
-constexpr format::Text<8> counter_text(std::size_t cur, std::size_t total) {
+struct Ordinal {
+    std::size_t value;
+    friend constexpr bool operator==(const Ordinal&, const Ordinal&) = default;
+};
+
+struct Total {
+    std::size_t value;
+    friend constexpr bool operator==(const Total&, const Total&) = default;
+};
+
+constexpr format::Text<8> counter_text(Ordinal cur, Total total) {
     format::Text<8> t;
-    format::detail::push_uint(t, static_cast<unsigned>(cur));
+    format::detail::push_uint(t, static_cast<unsigned>(cur.value));
     t.push('/');
-    format::detail::push_uint(t, static_cast<unsigned>(total));
+    format::detail::push_uint(t, static_cast<unsigned>(total.value));
     return t;
 }
 
@@ -1157,7 +1172,7 @@ constexpr void render_main(Framebuffer& fb, const State& s) {
         draw_icon_row(fb, static_cast<int>(slot), idx == s.main.selected, glyphs::kMenuGlyphs[idx], kMainItems[idx]);
     }
     widgets::draw_scrollbar(fb, {s.main.selected}, {static_cast<int>(kMainItems.size())}, {13, 40});
-    const auto pos = counter_text(s.main.selected + 1u, kMainItems.size());
+    const auto pos = counter_text({s.main.selected + 1u}, {kMainItems.size()});
     widgets::draw_footer_split(fb, "[OK] Select   [ESC] Exit", pos.view());
 }
 
@@ -1172,7 +1187,7 @@ constexpr void render_models(Framebuffer& fb, const State& s, const ModelNames& 
         const bool active = idx == st.radio.active_model;
         const auto& name = active ? st.active_model.name : names[idx];
         const auto label = model_row_text(idx, name, active);
-        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.models.selected, label.view(), {}, 0);
+        widgets::draw_list_row(fb, {static_cast<int>(slot)}, idx == s.models.selected, label.view(), {}, {0});
     }
     widgets::draw_scrollbar(fb, {s.models.selected}, {static_cast<int>(storage::kNumModels)}, {14, 36});
     widgets::draw_footer(fb, "[OK] Load     [ESC] Back");
@@ -1188,7 +1203,7 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
         switch (static_cast<SetupRow>(row)) {
             case SetupRow::Name: {
                 const auto name = name_text(m.name);
-                widgets::draw_list_row(fb, row, selected, "Name:", name.view(), kValueX);
+                widgets::draw_list_row(fb, {row}, selected, "Name:", name.view(), {kValueX});
                 if (s.editing && row == s.setup.selected) {
                     const int char_x = kValueX + s.name_cursor * 6;
                     const uint8_t c = m.name[s.name_cursor];
@@ -1199,20 +1214,20 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
                 break;
             }
             case SetupRow::Type:
-                widgets::draw_list_row(fb, row, selected, "Type:", labels::model_type_label(m.model_type), kValueX);
+                widgets::draw_list_row(fb, {row}, selected, "Type:", labels::model_type_label(m.model_type), {kValueX});
                 break;
             case SetupRow::ArmSwitch: {
                 const std::string_view arm =
                     m.arm_switch == 0 ? std::string_view{"NONE"} : labels::switch_cond_label(m.arm_switch);
-                widgets::draw_list_row(fb, row, selected, "Arm Sw:", arm, 52);
+                widgets::draw_list_row(fb, {row}, selected, "Arm Sw:", arm, {52});
                 break;
             }
             case SetupRow::Timer: {
                 if (m.timer_secs == 0) {
-                    widgets::draw_list_row(fb, row, selected, "Timer:", "OFF", kValueX);
+                    widgets::draw_list_row(fb, {row}, selected, "Timer:", "OFF", {kValueX});
                 } else {
                     const auto t = timer_text(m.timer_secs);
-                    widgets::draw_list_row(fb, row, selected, "Timer:", t.view(), kValueX);
+                    widgets::draw_list_row(fb, {row}, selected, "Timer:", t.view(), {kValueX});
                 }
                 break;
             }
@@ -1247,8 +1262,19 @@ constexpr format::Text<6> to_text(std::string_view sv) {
     return t;
 }
 
-constexpr format::Text<6> dr_value(const storage::ModelConfig& m, std::size_t axis, std::size_t idx) {
-    switch (idx) {
+struct Axis {
+    std::size_t value;
+    friend constexpr bool operator==(const Axis&, const Axis&) = default;
+};
+
+struct DrField {
+    std::size_t value;
+    friend constexpr bool operator==(const DrField&, const DrField&) = default;
+};
+
+constexpr format::Text<6> dr_value(const storage::ModelConfig& m, Axis axis_sel, DrField field) {
+    const std::size_t axis = axis_sel.value;
+    switch (field.value) {
         case 0: return to_text(labels::kDrSwitchNames[std::min<std::size_t>(m.dr_switch, 6)]);
         case 1: return to_text(labels::kAxisNames[axis]);
         case 2: return to_text(format::format_int(m.dr_high[axis]).view());
@@ -1265,9 +1291,9 @@ constexpr void render_dual_rate(Framebuffer& fb, const State& s, const storage::
         if (idx >= kDrFields) {
             break;
         }
-        const format::Text<6> value = dr_value(m, s.axis, idx);
-        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.dual_rate.selected, kDrLabels[idx], value.view(),
-                               60);
+        const format::Text<6> value = dr_value(m, {s.axis}, {idx});
+        widgets::draw_list_row(fb, {static_cast<int>(slot)}, idx == s.dual_rate.selected, kDrLabels[idx], value.view(),
+                               {60});
     }
     widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Value" : "[OK] Edit   [ESC] Exit");
 }
@@ -1411,7 +1437,7 @@ constexpr void render_radio_setup(Framebuffer& fb, const State& s, const storage
             break;
         }
         const auto value = radio_value(r, idx);
-        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.radio.selected, kRadioLabels[idx], value.view(), 0);
+        widgets::draw_list_row(fb, {static_cast<int>(slot)}, idx == s.radio.selected, kRadioLabels[idx], value.view(), {0});
     }
     widgets::draw_scrollbar(fb, {s.radio.selected}, {static_cast<int>(kRadioRows)}, {14, 36});
     widgets::draw_footer(fb, "[OK] Toggle/Cycle   [ESC] Back");
@@ -1426,8 +1452,8 @@ constexpr void render_input_setup(Framebuffer& fb, const State& s, const storage
             break;
         }
         const std::size_t mode = std::min<std::size_t>(r.adc_modes[idx], kAdcModeCount - 1);
-        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.input_setup.selected, kAuxInputNames[idx],
-                               kAdcModeNames[mode], 0);
+        widgets::draw_list_row(fb, {static_cast<int>(slot)}, idx == s.input_setup.selected, kAuxInputNames[idx],
+                               kAdcModeNames[mode], {0});
     }
     widgets::draw_scrollbar(fb, {s.input_setup.selected}, {static_cast<int>(count)}, {14, 36});
     widgets::draw_footer(fb, "[OK] Cycle Mode    [ESC] Back");
@@ -1452,8 +1478,8 @@ constexpr void render_aux(Framebuffer& fb, const State& s, const storage::ModelC
         label.push(':');
         const uint8_t src = m.aux_channels[idx];
         const std::size_t src_idx = std::min<std::size_t>(src, labels::kSourceNames.size() - 1);
-        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.aux.selected, label.view(),
-                               labels::kSourceNames[src_idx], 48);
+        widgets::draw_list_row(fb, {static_cast<int>(slot)}, idx == s.aux.selected, label.view(),
+                               labels::kSourceNames[src_idx], {48});
     }
     if (s.editing) {
         widgets::draw_footer(fb, "[OK] Done   [UP/DN] Source");
@@ -1470,8 +1496,8 @@ constexpr void render_channel_reverse(Framebuffer& fb, const State& s, const sto
             break;
         }
         const bool reversed = (m.channel_reverse & (1u << idx)) != 0;
-        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.reverse.selected, labels::kChannelNames[idx],
-                               reversed ? "REVERSE" : "NORMAL ", 76);
+        widgets::draw_list_row(fb, {static_cast<int>(slot)}, idx == s.reverse.selected, labels::kChannelNames[idx],
+                               reversed ? "REVERSE" : "NORMAL ", {76});
     }
     widgets::draw_scrollbar(fb, {s.reverse.selected}, {static_cast<int>(kNumChannels)}, {14, 36});
     widgets::draw_footer(fb, "[OK] Toggle   [ESC] Back");
@@ -1486,7 +1512,7 @@ constexpr void render_monitor(Framebuffer& fb, const State& s, const Live& live,
         const int us = std::clamp<int>(live.rf[ch], kMinUs, kMinUs + kSpanUs);
         const int fill = std::min((us - kMinUs) * 38 / kSpanUs, 38);
         const auto label = labels::channel_label(ch, m);
-        widgets::draw_gauge_row(fb, 12 + static_cast<int>(row) * 7, label.view(), fill, static_cast<uint16_t>(us));
+        widgets::draw_gauge_row(fb, {12 + static_cast<int>(row) * 7}, label.view(), {fill}, static_cast<uint16_t>(us));
     }
     widgets::draw_footer(fb, "[UP/DN] Page  [ESC] Back");
 }
@@ -1497,7 +1523,7 @@ constexpr void render_diag(Framebuffer& fb, const State& s, const Live& live) {
     for (std::size_t row = 0; row < kDiagRows[s.page]; ++row) {
         const uint16_t raw = std::min<uint16_t>(live.adc[start + row], kAdcFullScale);
         const int fill = std::min(static_cast<int>(raw) * 38 / static_cast<int>(kAdcFullScale), 38);
-        widgets::draw_gauge_row(fb, 13 + static_cast<int>(row) * 7, kDiagNames[s.page][row], fill, raw);
+        widgets::draw_gauge_row(fb, {13 + static_cast<int>(row) * 7}, kDiagNames[s.page][row], {fill}, raw);
     }
     widgets::draw_footer(fb, "[UP/DN/OK] Page  [ESC] Back");
 }
@@ -1582,16 +1608,16 @@ constexpr void render_wing_mixer(Framebuffer& fb, const State& s, const storage:
         const int row = static_cast<int>(slot);
         const int y = 14 + row * 9;
         if (idx == 0) {
-            widgets::draw_list_row(fb, row, sel, "Wing:", labels::kTemplateNames[std::min<std::size_t>(m.wing_tail_mix, 3)], 36);
+            widgets::draw_list_row(fb, {row}, sel, "Wing:", labels::kTemplateNames[std::min<std::size_t>(m.wing_tail_mix, 3)], {36});
         } else if (wing_has_diff(m) && idx == 1) {
             const format::Text<6> diff = signed_percent(m.template_diff);
-            widgets::draw_list_row(fb, row, sel, "Diff:", diff.view(), 36);
+            widgets::draw_list_row(fb, {row}, sel, "Diff:", diff.view(), {36});
         } else if (idx == gvars_row) {
-            widgets::draw_list_row(fb, row, sel, "GVars: [Edit GV1..5]", {}, 0);
+            widgets::draw_list_row(fb, {row}, sel, "GVars: [Edit GV1..5]", {}, {0});
         } else {
             const std::size_t mi = idx - (gvars_row + 1);
             const storage::MixLine& mix = m.mixes[mi];
-            widgets::draw_list_row(fb, row, sel, mix_label(mi).view(), {}, 0);
+            widgets::draw_list_row(fb, {row}, sel, mix_label(mi).view(), {}, {0});
             if (mix.target_ch == 0) {
                 fb.draw_str_6x10(Point{32, y}, "[DISABLED]", sel);
             } else {
@@ -1618,7 +1644,7 @@ constexpr void render_mixer_line(Framebuffer& fb, const State& s, const storage:
             break;
         }
         const format::Text<11> value = mix_value(mix, idx);
-        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.mix_line.selected, kMixLabels[idx], value.view(), 56);
+        widgets::draw_list_row(fb, {static_cast<int>(slot)}, idx == s.mix_line.selected, kMixLabels[idx], value.view(), {56});
     }
     widgets::draw_scrollbar(fb, {static_cast<int>(s.mix_line.selected)}, {static_cast<int>(kMixFields)}, {14, 36});
     widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Value" : "[OK] Edit   [ESC] Back");
@@ -1632,7 +1658,7 @@ constexpr void render_global_vars(Framebuffer& fb, const State& s, const storage
             break;
         }
         const format::Text<5> value = format::format_percent(m.gvars[idx]);
-        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.gvars.selected, kGvarLabels[idx], value.view(), 56);
+        widgets::draw_list_row(fb, {static_cast<int>(slot)}, idx == s.gvars.selected, kGvarLabels[idx], value.view(), {56});
     }
     widgets::draw_scrollbar(fb, {static_cast<int>(s.gvars.selected)}, {static_cast<int>(m.gvars.size())}, {14, 36});
     widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Value" : "[OK] Edit   [ESC] Back");

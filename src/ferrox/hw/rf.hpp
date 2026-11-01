@@ -123,7 +123,7 @@ inline void set_rx_id(logic::afhds2a::RxId id) {
     g_radio->set_rx_id(id);
 }
 
-inline void set_rx_settings(uint16_t rate_hz, bool ppm_out, bool sbus) {
+inline void set_rx_settings(uint16_t rate_hz, logic::afhds2a::PpmOut ppm_out, logic::afhds2a::SbusOut sbus) {
     arch::CriticalSection cs;
     g_radio->set_rx_settings(rate_hz, ppm_out, sbus);
 }

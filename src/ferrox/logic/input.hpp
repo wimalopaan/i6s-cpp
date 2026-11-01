@@ -20,6 +20,16 @@ inline constexpr uint16_t kBatteryRawIndex = 10;  // PC0
 
 using Raw = std::array<uint16_t, kRawCount>;
 
+struct AdcReading {
+    uint16_t value;
+    friend constexpr bool operator==(const AdcReading&, const AdcReading&) = default;
+};
+
+struct Deadband {
+    uint16_t value;
+    friend constexpr bool operator==(const Deadband&, const Deadband&) = default;
+};
+
 /// Normalized physical gimbals (-1000..+1000): rh=PA0, rv=PA1, lv=PA2, lh=PA3.
 struct Gimbals {
     int16_t rh = 0;
@@ -160,18 +170,18 @@ struct AxisCalib {
     }
 
     /// Normalizes a center-detented pot: solid zero inside the detent window.
-    constexpr int16_t normalize_detent(uint16_t raw, uint16_t window) {
-        const uint16_t s = filter_raw(raw);
+    constexpr int16_t normalize_detent(AdcReading raw, Deadband window) {
+        const uint16_t s = filter_raw(raw.value);
         int32_t val = 0;
-        if (static_cast<uint16_t>(std::abs(int32_t{s} - center)) <= window) {
+        if (static_cast<uint16_t>(std::abs(int32_t{s} - center)) <= window.value) {
             val = 0;
         } else if (s < center) {
-            const uint16_t active_center = sat_sub(center, window);
+            const uint16_t active_center = sat_sub(center, window.value);
             const int32_t span = std::max<int32_t>(sat_sub(active_center, min), 100);
             const int32_t delta = int32_t{s} - active_center;
             val = std::clamp((delta * 1000) / span, -1000, 0);
         } else {
-            const uint16_t active_center = sat_add(center, window);
+            const uint16_t active_center = sat_add(center, window.value);
             const int32_t span = std::max<int32_t>(sat_sub(max, active_center), 100);
             const int32_t delta = int32_t{s} - active_center;
             val = std::clamp((delta * 1000) / span, 0, 1000);
@@ -259,15 +269,15 @@ constexpr Switches decode_switches(const Raw& raw, const BoardSwitches& board, c
     }
 
     if (c.ext_adc) {
-        const auto ext = [&](std::size_t aux_idx, std::size_t raw_idx) {
+        const auto ext = [&](std::size_t aux_idx) {
             const AdcMode m = mode(aux_idx);
-            return (m == AdcMode::ThreePos || m == AdcMode::TwoPos) ? decode_switch_for(m, raw[raw_idx])
+            return (m == AdcMode::ThreePos || m == AdcMode::TwoPos) ? decode_switch_for(m, raw[aux_idx + 5])
                                                                     : SwitchPos::Up;
         };
-        s.swi = ext(6, 11);
-        s.swj = ext(7, 12);
-        s.swk = ext(8, 13);
-        s.swl = ext(9, 14);
+        s.swi = ext(6);
+        s.swj = ext(7);
+        s.swk = ext(8);
+        s.swl = ext(9);
     }
     return s;
 }
@@ -290,7 +300,7 @@ constexpr InputState process(const Raw& raw, const BoardSwitches& board, Calibra
         const AdcMode mode = resolve_mode(i, c.adc_modes[i]);
         int16_t v = 0;
         switch (mode) {
-            case AdcMode::PotDetent: v = c.aux[i].normalize_detent(r, kDetentDeadband); break;
+            case AdcMode::PotDetent: v = c.aux[i].normalize_detent({r}, {kDetentDeadband}); break;
             case AdcMode::TwoPos:
             case AdcMode::InstantTrim: v = r < 2048 ? -1000 : 1000; break;
             case AdcMode::ThreePos: {

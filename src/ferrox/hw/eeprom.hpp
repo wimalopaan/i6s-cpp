@@ -39,8 +39,8 @@ struct I2c2Eeprom {
         RCC->APB1ENR |= RCC_APB1ENR_I2C2EN;
 
         set_mode_mask<Port::B>((1u << 10) | (1u << 11), Mode::Alternate);
-        set_alt_function<Port::B>(10, 1);
-        set_alt_function<Port::B>(11, 1);
+        set_alt_function<Port::B>({10}, {1});
+        set_alt_function<Port::B>({11}, {1});
         set_open_drain_mask<Port::B>((1u << 10) | (1u << 11), true);
         set_high_speed_mask<Port::B>((1u << 10) | (1u << 11));
         set_pull_mask<Port::B>((1u << 10) | (1u << 11), Pull::Up);

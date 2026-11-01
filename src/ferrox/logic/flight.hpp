@@ -51,7 +51,7 @@ constexpr std::array<uint16_t, kNumChannels> rf_channels(const input::InputState
     const FlightControls c = flight_controls(in.gimbals, sm);
     const auto thr_in = static_cast<uint16_t>(std::clamp<int32_t>((c.throttle + kMixerMax) / 2, 0, kMixerMax));
     const uint16_t thr = curve::evaluate(thr_in, model.thr_curve_pts, model.thr_curve_smooth != 0, model.thr_curve);
-    return mixer::compute_channels(c.aileron, c.elevator, thr, c.rudder,
+    return mixer::compute_channels({c.aileron, c.elevator, thr, c.rudder},
                                    std::span<const int16_t>(in.aux_pots).subspan<4, 6>(), in.switches, model,
                                    trims, throttle_trim_mode);
 }

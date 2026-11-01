@@ -103,7 +103,7 @@ void apply_rf_link() {
     }
     const auto& model = g_storage.active_model;
     hw::rf::set_rf_power(model.rf_power);
-    hw::rf::set_rx_settings(model.servo_rate_hz, model.rx_out_mode == 1, model.rx_serial_proto == 1);
+    hw::rf::set_rx_settings(model.servo_rate_hz, {model.rx_out_mode == 1}, {model.rx_serial_proto == 1});
     set_rf_silenced(model.rf_protocol == 1);
 }
 
@@ -169,7 +169,9 @@ void run_preflight(const ferrox::logic::storage::ModelConfig& model) {
             return;
         }
 
-        hw::crsf::update_channels(time::millis(), safety::kSafeIdleChannels, model.crsf_arm_mode != 0, false);
+        hw::crsf::update_channels(time::millis(), safety::kSafeIdleChannels,
+                                  ferrox::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
+                                  ferrox::logic::crsf::ArmedState{false});
         hw::crsf::poll_telemetry(time::millis());
         __WFI();
     }
@@ -339,7 +341,8 @@ int main() {
             logic::flight::rf_channels(input, stick_mode, model, no_trim, g_storage.radio.throttle_trim);
         const bool crsf = model.rf_protocol == 1;
         if (crsf) {
-            hw::crsf::update_channels(now, channels, model.crsf_arm_mode != 0, armed);
+            hw::crsf::update_channels(now, channels, ferrox::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
+                                      ferrox::logic::crsf::ArmedState{armed});
         } else if (afhds) {
             hw::rf::publish_channels(channels);
         }

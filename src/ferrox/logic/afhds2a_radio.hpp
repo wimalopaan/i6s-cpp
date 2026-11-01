@@ -199,7 +199,7 @@ struct Radio {
         link.telemetry.connected = false;
     }
 
-    constexpr void set_rx_settings(uint16_t rate_hz, bool ppm_out, bool sbus) {
+    constexpr void set_rx_settings(uint16_t rate_hz, PpmOut ppm_out, SbusOut sbus) {
         link.set_rx_settings(rate_hz, ppm_out, sbus);
     }
 

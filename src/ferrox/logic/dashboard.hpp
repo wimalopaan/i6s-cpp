@@ -333,7 +333,19 @@ struct RowMetrics {
     int pot_w{0};
 };
 
-constexpr RowMetrics adaptive_metrics(std::size_t sw_count, std::size_t pot_count) {
+struct SwitchCount {
+    std::size_t value;
+    friend constexpr bool operator==(const SwitchCount&, const SwitchCount&) = default;
+};
+
+struct PotCount {
+    std::size_t value;
+    friend constexpr bool operator==(const PotCount&, const PotCount&) = default;
+};
+
+constexpr RowMetrics adaptive_metrics(SwitchCount sw_count_arg, PotCount pot_count_arg) {
+    const std::size_t sw_count = sw_count_arg.value;
+    const std::size_t pot_count = pot_count_arg.value;
     const int sw = static_cast<int>(sw_count);
     if (pot_count == 0) {
         const int spacing = sw <= 1 ? 124 : std::min(124 / sw, 14);
@@ -372,7 +384,7 @@ constexpr void draw_adaptive_slot(Framebuffer& fb, int x, bool compact, const Sw
 
 constexpr void draw_adaptive_layout(Framebuffer& fb, const input::InputState& in, const storage::RadioStorage& st) {
     const auto layout = build_adaptive_layout(in, st);
-    const auto m = adaptive_metrics(layout.switch_count, layout.pot_count);
+    const auto m = adaptive_metrics({layout.switch_count}, {layout.pot_count});
 
     for (std::size_t i = 0; i < layout.switch_count; ++i) {
         const int x = 2 + static_cast<int>(i) * m.spacing;
@@ -390,7 +402,7 @@ constexpr void draw_adaptive_layout(Framebuffer& fb, const input::InputState& in
     }
 
     if (layout.pot_count == 1) {
-        widgets::draw_single_pot_bar(fb, {m.pot_start_x, 46}, m.pot_w, layout.pots[0]);
+        widgets::draw_single_pot_bar(fb, {m.pot_start_x, 46}, {m.pot_w}, {layout.pots[0]});
     } else if (layout.pot_count == 2) {
         widgets::draw_split_pot_bar(fb, {m.pot_start_x, 46}, m.pot_w, {layout.pots[0]}, {layout.pots[1]});
     } else {

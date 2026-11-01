@@ -28,6 +28,24 @@ constexpr WingTail wing_tail_from(uint8_t val) {
 
 using ChannelValues = std::array<int32_t, kNumChannels>;
 using Sticks = std::array<int16_t, 4>;  // Roll, Pitch, Throttle, Yaw (conditioned)
+
+struct StickInputs {
+    int16_t roll = 0;
+    int16_t pitch = 0;
+    uint16_t throttle = 0;
+    int16_t yaw = 0;
+    friend constexpr bool operator==(const StickInputs&, const StickInputs&) = default;
+};
+
+struct TimerLatch {
+    bool value = false;
+    friend constexpr bool operator==(const TimerLatch&, const TimerLatch&) = default;
+};
+
+struct TimerArmed {
+    bool value = false;
+    friend constexpr bool operator==(const TimerArmed&, const TimerArmed&) = default;
+};
 using GVars = std::array<int16_t, 5>;
 
 constexpr int32_t clamp_mix(int32_t v) {
@@ -130,9 +148,9 @@ constexpr bool is_dr_high(uint8_t dr_switch, const Switches& s) {
 }
 
 /// Flight timer trigger. `latched` is updated for the THt mode.
-constexpr bool is_timer_active(uint8_t timer_source, int16_t throttle, bool& latched,
-                               const Switches& s, bool is_armed) {
-    if (!is_armed) {
+constexpr bool is_timer_active(uint8_t timer_source, int16_t throttle, TimerLatch& latched,
+                               const Switches& s, TimerArmed is_armed) {
+    if (!is_armed.value) {
         return false;
     }
     switch (timer_source) {
@@ -140,9 +158,9 @@ constexpr bool is_timer_active(uint8_t timer_source, int16_t throttle, bool& lat
         case 1: return throttle > -900;
         case 2:
             if (throttle > -900) {
-                latched = true;
+                latched.value = true;
             }
-            return latched;
+            return latched.value;
         case 3: return true;
         default:
             if (timer_source >= 4 && timer_source <= 17) {
@@ -198,9 +216,9 @@ constexpr int32_t evaluate_source(uint8_t src, const Sticks& sticks, std::span<c
 /// Full mixer pipeline: conditioning, wing/tail templates, aux mapping, matrix mixes,
 /// output scaling, trims, safety interlocks and channel reversing.
 constexpr std::array<uint16_t, kNumChannels> compute_channels(
-    int16_t raw_roll, int16_t raw_pitch, uint16_t curved_throttle, int16_t raw_yaw,
-    std::span<const int16_t> pots, const Switches& sw, const storage::ModelConfig& model,
-    const trim::TrimValues& trims, uint8_t throttle_trim_mode) {
+    StickInputs inputs, std::span<const int16_t> pots, const Switches& sw,
+    const storage::ModelConfig& model, const trim::TrimValues& trims, uint8_t throttle_trim_mode) {
+    const auto [raw_roll, raw_pitch, curved_throttle, raw_yaw] = inputs;
     // Stage 1 and 2: dual rates and expo.
     const bool high_rate = is_dr_high(model.dr_switch, sw);
     const auto& rates = high_rate ? model.dr_high : model.dr_low;

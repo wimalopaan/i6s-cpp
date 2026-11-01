@@ -64,7 +64,7 @@ inline void init_bus() {
     set_mode_mask<Port::E>(kSpiPinMask, Mode::Alternate);
     set_high_speed_mask<Port::E>(kSpiPinMask | (1u << kCsnPin));
     for (uint32_t pin : {13u, 14u, 15u}) {
-        set_alt_function<Port::E>(pin, kSpiAf);
+        set_alt_function<Port::E>({pin}, {kSpiAf});
     }
 
     SPI1->CR1 = 0;
@@ -94,10 +94,20 @@ inline uint8_t read_reg(uint8_t addr) {
     return v;
 }
 
-inline void write_reg(uint8_t addr, uint8_t val) {
+struct RegAddr {
+    uint8_t value;
+    friend constexpr bool operator==(const RegAddr&, const RegAddr&) = default;
+};
+
+struct RegValue {
+    uint8_t value;
+    friend constexpr bool operator==(const RegValue&, const RegValue&) = default;
+};
+
+inline void write_reg(RegAddr addr, RegValue val) {
     csn_low();
-    transfer(logic::a7105::cmd_write(addr));
-    transfer(val);
+    transfer(logic::a7105::cmd_write(addr.value));
+    transfer(val.value);
     csn_high();
 }
 
@@ -120,7 +130,7 @@ inline void write_fifo(std::span<const uint8_t> data, uint8_t channel) {
         transfer(b);
     }
     csn_high();
-    write_reg(logic::a7105::kRegPllI, channel);
+    write_reg({logic::a7105::kRegPllI}, {channel});
     strobe(logic::a7105::kStrobeTx);
 }
 
@@ -143,7 +153,7 @@ inline uint8_t read_raw_rssi() {
 }
 
 inline void set_power(uint8_t tx_test) {
-    write_reg(logic::a7105::kRegTxTest, tx_test);
+    write_reg({logic::a7105::kRegTxTest}, {tx_test});
 }
 
 /// Front-end switch. Off puts both RX_EN and TX_EN in the disabled state.
@@ -172,12 +182,12 @@ inline bool reset() {
         for (int i = 0; i < 2000; ++i) {
             __NOP();
         }
-        write_reg(kRegMode, 0x00);
+        write_reg({kRegMode}, {0x00});
         for (int i = 0; i < 16000; ++i) {
             __NOP();
         }
-        write_reg(kRegGpio1, kGpio1SdoOutput);
-        write_reg(kRegGpio2, kGpio2Wtr);
+        write_reg({kRegGpio1}, {kGpio1SdoOutput});
+        write_reg({kRegGpio2}, {kGpio2Wtr});
         set_front_end(logic::afhds2a::FrontEnd::Off);
         if (read_reg(kRegPllII) == kChipSignature) {
             strobe(kStrobeStandby);
@@ -202,22 +212,22 @@ inline void init_regs() {
     write_id(kSyncId);
     for (std::size_t addr = 0; addr < kAfhds2aInit.size(); ++addr) {
         if (kAfhds2aInit[addr] != kSkipEntry) {
-            write_reg(static_cast<uint8_t>(addr), kAfhds2aInit[addr]);
+            write_reg({static_cast<uint8_t>(addr)}, {kAfhds2aInit[addr]});
         }
     }
     strobe(kStrobeStandby);
 
-    write_reg(kRegCalc, kCalcIfBank);
+    write_reg({kRegCalc}, {kCalcIfBank});
     wait_calc_done();
-    write_reg(kRegVcoCurcal, kVcoCurcal);
-    write_reg(kRegVcoSbcalII, kVcoSbcalII);
-    write_reg(kRegPllI, 0x00);
-    write_reg(kRegCalc, kCalcVcoBank);
+    write_reg({kRegVcoCurcal}, {kVcoCurcal});
+    write_reg({kRegVcoSbcalII}, {kVcoSbcalII});
+    write_reg({kRegPllI}, {0x00});
+    write_reg({kRegCalc}, {kCalcVcoBank});
     wait_calc_done();
-    write_reg(kRegPllI, 0xA0);
-    write_reg(kRegCalc, kCalcVcoBank);
+    write_reg({kRegPllI}, {0xA0});
+    write_reg({kRegCalc}, {kCalcVcoBank});
     wait_calc_done();
-    write_reg(kRegVcoSbcalI, kVcoSbcalIDefault);
+    write_reg({kRegVcoSbcalI}, {kVcoSbcalIDefault});
 
     set_front_end(logic::afhds2a::FrontEnd::TxEn);
     set_power(kPowerHigh);

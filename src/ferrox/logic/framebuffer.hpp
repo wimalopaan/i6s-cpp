@@ -42,7 +42,7 @@ public:
             return;
         }
         const uint8_t mask = bit_mask(p.y);
-        uint8_t& b = px_[index(p.x, p.y)];
+        uint8_t& b = px_[index(p)];
         b = on ? static_cast<uint8_t>(b | mask) : static_cast<uint8_t>(b & ~mask);
     }
 
@@ -60,7 +60,7 @@ public:
         for (int py = y0; py < y1; ++py) {
             const uint8_t mask = bit_mask(py);
             for (int px = x0; px < x1; ++px) {
-                uint8_t& b = px_[index(px, py)];
+                uint8_t& b = px_[index({px, py})];
                 b = on ? static_cast<uint8_t>(b | mask) : static_cast<uint8_t>(b & ~mask);
             }
         }
@@ -133,8 +133,8 @@ public:
     }
 
 private:
-    static constexpr std::size_t index(int x, int y) {
-        return static_cast<std::size_t>((y / 8) * kWidth + x);
+    static constexpr std::size_t index(Point p) {
+        return static_cast<std::size_t>((p.y / 8) * kWidth + p.x);
     }
 
     static constexpr uint8_t bit_mask(int y) { return static_cast<uint8_t>(1u << (y % 8)); }

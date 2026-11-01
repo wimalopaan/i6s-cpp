@@ -75,7 +75,7 @@ inline void set_uart_enabled(bool enabled, uint8_t baud_index, Duplex duplex) {
 
         set_mode_mask<Port::D>(1u << kTxPin, Mode::Alternate);
         set_high_speed_mask<Port::D>(1u << kTxPin);
-        set_alt_function<Port::D>(kTxPin, 0);
+        set_alt_function<Port::D>({kTxPin}, {0});
 
         if (g_half_duplex) {
             set_open_drain_mask<Port::D>(1u << kTxPin, true);
@@ -86,7 +86,7 @@ inline void set_uart_enabled(bool enabled, uint8_t baud_index, Duplex duplex) {
             set_pull_mask<Port::D>(1u << kTxPin, Pull::None);
             set_mode_mask<Port::A>(1u << kRxPin, Mode::Alternate);
             set_pull_mask<Port::A>(1u << kRxPin, Pull::Up);
-            set_alt_function<Port::A>(kRxPin, 1);
+            set_alt_function<Port::A>({kRxPin}, {1});
         }
 
         USART2->CR1 = 0;

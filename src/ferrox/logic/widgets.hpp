@@ -53,6 +53,32 @@ struct Range {
     friend constexpr bool operator==(const Range&, const Range&) = default;
 };
 
+struct RowY {
+    int value;
+    friend constexpr bool operator==(const RowY&, const RowY&) = default;
+};
+
+struct Width {
+    int value;
+    friend constexpr bool operator==(const Width&, const Width&) = default;
+};
+
+struct Slot {
+    int value;
+    friend constexpr bool operator==(const Slot&, const Slot&) = default;
+};
+
+struct ValueX {
+    int value;
+    friend constexpr bool operator==(const ValueX&, const ValueX&) = default;
+};
+
+struct Track {
+    int min_pos;
+    int travel;
+    friend constexpr bool operator==(const Track&, const Track&) = default;
+};
+
 // Header: centred 6x10 title at y = 2, divider at y = 11.
 constexpr void draw_header(Framebuffer& fb, std::string_view title) {
     const int x = std::max((kWidth - static_cast<int>(title.size()) * 6) / 2, 2);
@@ -136,25 +162,26 @@ constexpr std::array<char, 4> format_u16_4(uint16_t value) {
 }
 
 // Label at (2, y), framed bar at (44, y + 1) 40x5, value at (90, y).
-constexpr void draw_gauge_row(Framebuffer& fb, int y, std::string_view label, int fill_width, uint16_t val) {
+constexpr void draw_gauge_row(Framebuffer& fb, RowY row, std::string_view label, Width fill_width, uint16_t val) {
+    const int y = row.value;
     fb.draw_str_4x6({2, y}, label, false);
-    draw_bar_gauge(fb, {{44, y + 1}, {40, 5}}, fill_width);
+    draw_bar_gauge(fb, {{44, y + 1}, {40, 5}}, fill_width.value);
     const auto digits = format_u16_4(val);
     fb.draw_str_4x6({90, y}, std::string_view(digits.data(), digits.size()), false);
 }
 
 // List row in a 4-slot view: highlighted 124x9 bar at y = 14 + slot * 9 when selected.
 // An empty value draws no value; value_x <= 0 right-aligns the value to x = 124.
-constexpr void draw_list_row(Framebuffer& fb, int slot, bool selected, std::string_view label,
-                             std::string_view value, int value_x) {
-    const int y = 14 + slot * 9;
+constexpr void draw_list_row(Framebuffer& fb, Slot slot, bool selected, std::string_view label,
+                             std::string_view value, ValueX value_x) {
+    const int y = 14 + slot.value * 9;
     if (selected) {
         fb.fill_rect({{2, y}, {124, 9}}, true);
     }
 
     fb.draw_str_6x10({4, y}, label, selected);
     if (!value.empty()) {
-        const int vx = value_x <= 0 ? 124 - static_cast<int>(value.size()) * 6 : value_x;
+        const int vx = value_x.value <= 0 ? 124 - static_cast<int>(value.size()) * 6 : value_x.value;
         fb.draw_str_6x10({vx, y}, value, selected);
     }
 }
@@ -175,8 +202,8 @@ constexpr void draw_scrollbar(Framebuffer& fb, Index selected, Count count, Span
 }
 
 // Maps -1000..+1000 onto a cursor position in [min_pos, max_pos].
-constexpr int cursor_position(int val, int min_pos, int travel) {
-    return min_pos + ((val + 1000) * travel + 1000) / 2000;
+constexpr int cursor_position(int val, Track track) {
+    return track.min_pos + ((val + 1000) * track.travel + 1000) / 2000;
 }
 
 // Channel monitor gauge with centre ticks, trim tick and cursor.
@@ -194,7 +221,7 @@ constexpr void draw_channel_gauge(Framebuffer& fb, Rect r, Deflection deflection
     const int min_pos = x + 2;
     const int max_pos = x + width - 3;
     const int travel = max_pos - min_pos;
-    const int cursor = cursor_position(val, min_pos, travel);
+    const int cursor = cursor_position(val, {min_pos, travel});
 
     if (trim != 0) {
         const int trim_x = center_x + (trim * (travel / 2)) / 25;
@@ -224,39 +251,41 @@ constexpr void draw_split_pot_bar(Framebuffer& fb, Point p, int width, PotPositi
     const int min_pos = x + 2;
     const int travel = std::max(width - 5, 1);
 
-    const int c1 = cursor_position(vr1.value, min_pos, travel);
+    const int c1 = cursor_position(vr1.value, {min_pos, travel});
     fb.fill_rect({{c1 - 1, y + 1}, {3, 2}}, true);
 
-    const int c2 = cursor_position(vr2.value, min_pos, travel);
+    const int c2 = cursor_position(vr2.value, {min_pos, travel});
     fb.fill_rect({{c2 - 1, y + 4}, {3, 2}}, true);
 }
 
 // Single pot bar (width x 7) with centre tick and cursor.
-constexpr void draw_single_pot_bar(Framebuffer& fb, Point p, int width, int val) {
+constexpr void draw_single_pot_bar(Framebuffer& fb, Point p, Width width, PotPosition val) {
     const auto [x, y] = p;
-    if (width < 8) {
+    const int w = width.value;
+    if (w < 8) {
         return;
     }
-    fb.draw_rect({p, {width, 7}}, true);
-    fb.draw_vline({x + width / 2, y + 1}, 5, true);
+    fb.draw_rect({p, {w, 7}}, true);
+    fb.draw_vline({x + w / 2, y + 1}, 5, true);
 
     const int min_pos = x + 2;
-    const int travel = std::max(width - 5, 1);
-    const int c = cursor_position(val, min_pos, travel);
+    const int travel = std::max(w - 5, 1);
+    const int c = cursor_position(val.value, {min_pos, travel});
     fb.fill_rect({{c - 1, y + 1}, {3, 5}}, true);
 }
 
 // Borderless pot lane (3 px high) with a baseline and a 2 px cursor.
-constexpr void draw_pot_track(Framebuffer& fb, Point p, int width, int val) {
+constexpr void draw_pot_track(Framebuffer& fb, Point p, Width width, PotPosition val) {
     const auto [x, y] = p;
-    if (width < 6) {
+    const int w = width.value;
+    if (w < 6) {
         return;
     }
-    fb.draw_hline({x, y + 1}, width, true);
+    fb.draw_hline({x, y + 1}, w, true);
 
     const int min_pos = x + 1;
-    const int travel = std::max(width - 3, 1);
-    const int c = cursor_position(val, min_pos, travel);
+    const int travel = std::max(w - 3, 1);
+    const int c = cursor_position(val.value, {min_pos, travel});
     fb.fill_rect({{c - 1, y}, {2, 3}}, true);
 }
 
@@ -269,9 +298,9 @@ constexpr void draw_multi_pot_bar(Framebuffer& fb, Point p, int width, std::span
     }
 
     if (count == 3) {
-        draw_pot_track(fb, {x, y}, width, pots[0]);
-        draw_pot_track(fb, {x, y + 3}, width, pots[1]);
-        draw_pot_track(fb, {x, y + 6}, width, pots[2]);
+        draw_pot_track(fb, {x, y}, {width}, {pots[0]});
+        draw_pot_track(fb, {x, y + 3}, {width}, {pots[1]});
+        draw_pot_track(fb, {x, y + 6}, {width}, {pots[2]});
     } else if (count <= 6) {
         constexpr int kColGap = 2;
         const int col_w = std::max((width - kColGap) / 2, 6);
@@ -282,11 +311,11 @@ constexpr void draw_multi_pot_bar(Framebuffer& fb, Point p, int width, std::span
 
         for (int row = 0; row < left_count; ++row) {
             const int ry = left_count == 2 ? y + 1 + row * 4 : y + row * 3;
-            draw_pot_track(fb, {x, ry}, col_w, pots[static_cast<std::size_t>(row)]);
+            draw_pot_track(fb, {x, ry}, {col_w}, {pots[static_cast<std::size_t>(row)]});
         }
         for (int row = 0; row < right_count; ++row) {
             const int ry = right_count == 2 ? y + 1 + row * 4 : y + row * 3;
-            draw_pot_track(fb, {right_x, ry}, col_w, pots[static_cast<std::size_t>(left_count + row)]);
+            draw_pot_track(fb, {right_x, ry}, {col_w}, {pots[static_cast<std::size_t>(left_count + row)]});
         }
     } else {
         constexpr int kColGap = 2;
@@ -297,7 +326,7 @@ constexpr void draw_multi_pot_bar(Framebuffer& fb, Point p, int width, std::span
             const int col = i / rows_per_col;
             const int row = i % rows_per_col;
             const int cx = x + col * (col_w + kColGap);
-            draw_pot_track(fb, {cx, y + row * 3}, col_w, pots[static_cast<std::size_t>(i)]);
+            draw_pot_track(fb, {cx, y + row * 3}, {col_w}, {pots[static_cast<std::size_t>(i)]});
         }
     }
 }

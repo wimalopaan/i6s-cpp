@@ -131,7 +131,7 @@ void crsf_framer_test() {
     std::array<uint16_t, 16> channels{};
     channels.fill(1500);
     std::array<uint8_t, crsf::kRcExtFrameSize> frame{};
-    const std::size_t len = crsf::build_rc_frame(channels, false, false, frame);
+    const std::size_t len = crsf::build_rc_frame(channels, {false}, {false}, frame);
     check(len == crsf::kRcFrameSize, "standard RC frame must be 26 bytes");
 
     crsf::Framer framer;
@@ -158,6 +158,7 @@ void crsf_framer_test() {
 
 void crsf_menu_test() {
     namespace menu = logic::crsf::menu;
+    namespace crsf = logic::crsf;
 
     // Select: parent 0, type 0x09, name "Mode", options "A;B;C", value 1
     constexpr std::array<uint8_t, 14> select{0x00, 0x09, 'M', 'o', 'd', 'e', 0x00,
@@ -184,7 +185,7 @@ void crsf_menu_test() {
         return menu::encode_value(e, 0x1234, enc) == 2 && enc[0] == 0x02 && enc[1] == 0x00;
     }());
 
-    static_assert(menu::next_param_for_folder(0, 0, 3, [] {
+    static_assert(menu::next_param_for_folder(crsf::ParamId{0}, menu::FolderId{0}, menu::ParamCount{3}, [] {
         std::array<uint8_t, menu::kMaxParamMap> m{};
         m.fill(menu::kNoParent);
         m[1] = 0;
@@ -194,28 +195,28 @@ void crsf_menu_test() {
     }(), true) == 1);
 
     menu::Loader loader;
-    const auto a0 = loader.start(0xEE, 2, 0);
+    const auto a0 = loader.start(crsf::DeviceAddr{0xEE}, menu::ParamCount{2}, 0);
     check(a0.kind == menu::Action::Kind::Read && a0.param == 0, "loader must start with param 0");
 
     // Param 0 root folder with child 1, sent as a single frame.
     const std::array<uint8_t, 6> root{0xFF, 0x0B, 'R', 0x00, 0x01, 0xFF};
-    auto step = loader.on_entry(0xEE, 0, 0, root, 10);
+    auto step = loader.on_entry(crsf::DeviceAddr{0xEE}, crsf::ParamId{0}, menu::ChunksRemain{0}, root, 10);
     check(step.kind == menu::Action::Kind::Read && step.param == 1, "root folder must read child param 1");
 
     // Multi-chunk param 1: first chunk requests the rest, second completes it.
     const std::array<uint8_t, 3> part1{0x00, 0x00, 'T'};
-    step = loader.on_entry(0xEE, 1, 1, part1, 20);
+    step = loader.on_entry(crsf::DeviceAddr{0xEE}, crsf::ParamId{1}, menu::ChunksRemain{1}, part1, 20);
     check(step.kind == menu::Action::Kind::Read && step.arg == 1, "first chunk must request chunk 1");
     const std::array<uint8_t, 2> part2{0x00, 0x00};
-    step = loader.on_entry(0xEE, 1, 0, part2, 30);
+    step = loader.on_entry(crsf::DeviceAddr{0xEE}, crsf::ParamId{1}, menu::ChunksRemain{0}, part2, 30);
     check(step.kind == menu::Action::Kind::Done && loader.state == menu::Loader::State::Ready,
           "last param in root must finish loading");
     check(loader.entries[1] && loader.entries[1]->name.len == 1, "param 1 must be stored");
 
     // Retry path on a fresh load with no reply: retries, then give up on param 1.
     menu::Loader retry;
-    retry.start(0xEE, 1, 0);
-    retry.on_entry(0xEE, 0, 0, root, 10);
+    retry.start(crsf::DeviceAddr{0xEE}, menu::ParamCount{1}, 0);
+    retry.on_entry(crsf::DeviceAddr{0xEE}, crsf::ParamId{0}, menu::ChunksRemain{0}, root, 10);
     step = retry.tick(10 + 500);
     check(step.kind == menu::Action::Kind::Read && step.param == 1, "timeout must retry param 1");
     for (int i = 0; i < 10 && step.kind != menu::Action::Kind::Done; ++i) {
@@ -226,15 +227,15 @@ void crsf_menu_test() {
 
     menu::Command cmd;
     cmd.start(2, 0);
-    cmd.on_status(2, static_cast<uint8_t>(menu::CmdStatus::ConfirmationNeeded), 0, 10);
+    cmd.on_status(crsf::ParamId{2}, menu::CmdStatus::ConfirmationNeeded, menu::TimeoutByte{0}, 10);
     check(cmd.kind == menu::Command::Kind::WaitingConfirm, "confirmation-needed must wait for confirm");
     const auto confirm = cmd.confirm(20);
     check(confirm.kind == menu::Action::Kind::Write && confirm.arg == 4, "confirm must write 4");
-    cmd.on_status(2, static_cast<uint8_t>(menu::CmdStatus::Progress), 5, 30);
+    cmd.on_status(crsf::ParamId{2}, menu::CmdStatus::Progress, menu::TimeoutByte{5}, 30);
     check(cmd.kind == menu::Command::Kind::Running && cmd.poll_interval_ms == 500, "progress runs with 500 ms poll");
     const auto poll = cmd.tick(30 + 500);
     check(poll.kind == menu::Action::Kind::Write && poll.arg == 6, "running command must poll");
-    cmd.on_status(2, static_cast<uint8_t>(menu::CmdStatus::Ready), 0, 600);
+    cmd.on_status(crsf::ParamId{2}, menu::CmdStatus::Ready, menu::TimeoutByte{0}, 600);
     check(cmd.kind == menu::Command::Kind::Completed, "ready must complete command");
     cmd.tick(600 + 2500);
     check(cmd.kind == menu::Command::Kind::Idle, "completed command must go idle after display time");
@@ -346,7 +347,7 @@ void mixer_test() {
 
     auto run = [&](int16_t roll, int16_t pitch, uint16_t thr, int16_t yaw, std::span<const int16_t> pots,
                    const Switches& sw, const ModelConfig& m) {
-        return mx::compute_channels(roll, pitch, thr, yaw, pots, sw, m, no_trim, 0);
+        return mx::compute_channels({roll, pitch, thr, yaw}, pots, sw, m, no_trim, 0);
     };
 
     // Dual rates and expo.
@@ -494,17 +495,17 @@ void mixer_test() {
     check(run(0, 0, 1000, 0, pots0, flight, armed)[2] == logic::kChannelMaxUs, "armed throttle output");
 
     // Flight timer trigger modes.
-    bool latched = false;
-    check(!mx::is_timer_active(0, 500, latched, sw_default, true), "timer off");
-    check(!mx::is_timer_active(1, -950, latched, sw_default, true) &&
-              mx::is_timer_active(1, -850, latched, sw_default, true),
+    mx::TimerLatch latched{};
+    check(!mx::is_timer_active(0, 500, latched, sw_default, {true}), "timer off");
+    check(!mx::is_timer_active(1, -950, latched, sw_default, {true}) &&
+              mx::is_timer_active(1, -850, latched, sw_default, {true}),
           "THs threshold");
-    latched = false;
-    check(!mx::is_timer_active(2, -1000, latched, sw_default, true), "THt idle not latched");
-    check(mx::is_timer_active(2, -500, latched, sw_default, true), "THt latches on throttle");
-    check(mx::is_timer_active(2, -1000, latched, sw_default, true), "THt keeps running at idle");
-    check(mx::is_timer_active(3, -1000, latched, sw_default, true), "timer always on");
-    check(!mx::is_timer_active(3, 0, latched, sw_default, false), "timer inhibited when disarmed");
+    latched.value = false;
+    check(!mx::is_timer_active(2, -1000, latched, sw_default, {true}), "THt idle not latched");
+    check(mx::is_timer_active(2, -500, latched, sw_default, {true}), "THt latches on throttle");
+    check(mx::is_timer_active(2, -1000, latched, sw_default, {true}), "THt keeps running at idle");
+    check(mx::is_timer_active(3, -1000, latched, sw_default, {true}), "timer always on");
+    check(!mx::is_timer_active(3, 0, latched, sw_default, {false}), "timer inhibited when disarmed");
 }
 
 void input_test() {
@@ -521,11 +522,11 @@ void input_test() {
     detent.min = 1000;
     detent.center = 2048;
     detent.max = 3000;
-    check(detent.normalize_detent(2048, in::kDetentDeadband) == 0, "detent center is zero");
-    check(detent.normalize_detent(2048 - 15, in::kDetentDeadband) == 0, "detent low edge is zero");
-    check(detent.normalize_detent(2048 + 15, in::kDetentDeadband) == 0, "detent high edge is zero");
-    check(detent.normalize_detent(1000, in::kDetentDeadband) == -1000, "detent min is -1000");
-    check(detent.normalize_detent(3000, in::kDetentDeadband) == 1000, "detent max is +1000");
+    check(detent.normalize_detent({2048}, {in::kDetentDeadband}) == 0, "detent center is zero");
+    check(detent.normalize_detent({2048 - 15}, {in::kDetentDeadband}) == 0, "detent low edge is zero");
+    check(detent.normalize_detent({2048 + 15}, {in::kDetentDeadband}) == 0, "detent high edge is zero");
+    check(detent.normalize_detent({1000}, {in::kDetentDeadband}) == -1000, "detent min is -1000");
+    check(detent.normalize_detent({3000}, {in::kDetentDeadband}) == 1000, "detent max is +1000");
 
     check(in::decode_switch_6pos(100) == 1 && in::decode_switch_6pos(1000) == 2 &&
               in::decode_switch_6pos(1700) == 3 && in::decode_switch_6pos(2400) == 4 &&
@@ -743,7 +744,7 @@ void display_test() {
           "footer divider at y=55");
 
     fb.clear();
-    widgets::draw_list_row(fb, 1, true, "A", "", 0);
+    widgets::draw_list_row(fb, {1}, true, "A", "", {0});
     check((fb.data()[2 * 128 + 2] & 0x80) != 0 && (fb.data()[3 * 128 + 125] & 0x80) != 0 &&
               (fb.data()[2 * 128 + 126] & 0x80) == 0 && (fb.data()[4 * 128 + 2] & 0x01) == 0,
           "selected list row highlight 2..125 x 23..31");
@@ -794,7 +795,7 @@ void dashboard_test() {
     bool layout_ok = true;
     for (std::size_t sw = 0; sw <= 16; ++sw) {
         for (std::size_t pots = 0; pots <= 10; ++pots) {
-            const auto m = logic::dashboard::adaptive_metrics(sw, pots);
+            const auto m = logic::dashboard::adaptive_metrics({sw}, {pots});
             if (m.pot_w < 0 || m.pot_start_x > 126 + 2) {
                 layout_ok = false;
             }
@@ -808,7 +809,7 @@ void dashboard_test() {
     }
     check(layout_ok, "adaptive layout never overlaps switches and pots");
 
-    const auto ten_sw_two_pots = logic::dashboard::adaptive_metrics(10, 2);
+    const auto ten_sw_two_pots = logic::dashboard::adaptive_metrics({10}, {2});
     check(ten_sw_two_pots.compact && ten_sw_two_pots.spacing == 8 && ten_sw_two_pots.pot_start_x == 85,
           "10 switches + 2 pots layout matches Rust math");
 
@@ -1695,13 +1696,13 @@ void afhds2a_test() {
     check(st[0] == af::kPacketSettings && st[9] == 0xFD && st[10] == 0xFF, "afhds2a: settings header");
     check(st[11] == 0x32 && st[12] == 0x00 && st[13] == 0x00, "afhds2a: default 50 Hz PWM");
     check(st[18] == 0x05 && st[19] == 0xDC && st[21] == 0xDE, "afhds2a: center 1500us and iBUS default");
-    link.set_rx_settings(400, true, true);
+    link.set_rx_settings(400, {true}, {true});
     st = af::build_settings(link.tx_id, link.rx_id, link.settings);
     check(st[11] == 0x90 && st[12] == 0x01 && st[13] == 0x01 && st[21] == 0xDD, "afhds2a: 400 Hz PPM SBUS");
     check(link.next == af::PacketKind::Settings, "afhds2a: settings change queues a settings packet");
-    link.set_rx_settings(30, false, false);
+    link.set_rx_settings(30, {false}, {false});
     check(link.settings.rate_hz == 50, "afhds2a: rate clamped to 50 Hz");
-    link.set_rx_settings(500, false, false);
+    link.set_rx_settings(500, {false}, {false});
     check(link.settings.rate_hz == 400, "afhds2a: rate clamped to 400 Hz");
 
     link.set_rf_power(4);

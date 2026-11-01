@@ -86,12 +86,22 @@ constexpr uint16_t us_to_crsf(uint16_t us) {
     return static_cast<uint16_t>(val);
 }
 
+struct ArmModeSwitch {
+    bool value = false;
+    friend constexpr bool operator==(const ArmModeSwitch&, const ArmModeSwitch&) = default;
+};
+
+struct ArmedState {
+    bool value = false;
+    friend constexpr bool operator==(const ArmedState&, const ArmedState&) = default;
+};
+
 /// Builds an RC channels frame (type 0x16) from the first 16 channels.
 /// With `arm_mode_switch` the 27-byte ExpressLRS variant with arm flag is produced.
 /// Returns the number of valid bytes in `out`.
 template <std::size_t N>
-constexpr std::size_t build_rc_frame(const std::array<uint16_t, N>& channels, bool arm_mode_switch,
-                                     bool armed, std::array<uint8_t, kRcExtFrameSize>& out) {
+constexpr std::size_t build_rc_frame(const std::array<uint16_t, N>& channels, ArmModeSwitch arm_mode_switch,
+                                     ArmedState armed, std::array<uint8_t, kRcExtFrameSize>& out) {
     static_assert(N >= 16, "CRSF RC frame needs 16 channels");
     out = {};
     out[0] = kSyncByte;
@@ -108,9 +118,9 @@ constexpr std::size_t build_rc_frame(const std::array<uint16_t, N>& channels, bo
         }
     }
 
-    if (arm_mode_switch) {
+    if (arm_mode_switch.value) {
         out[1] = 25;
-        out[25] = armed ? kChannelsStatusArmed : 0;
+        out[25] = armed.value ? kChannelsStatusArmed : 0;
         out[26] = crc8(std::span<const uint8_t>(out.data() + 2, 24));
         return kRcExtFrameSize;
     }
@@ -386,25 +396,45 @@ constexpr std::size_t build_ping(std::array<uint8_t, 6>& out) {
     return out.size();
 }
 
+struct DeviceAddr {
+    uint8_t value = 0;
+    friend constexpr bool operator==(const DeviceAddr&, const DeviceAddr&) = default;
+};
+
+struct FrameType {
+    uint8_t value = 0;
+    friend constexpr bool operator==(const FrameType&, const FrameType&) = default;
+};
+
+struct ParamId {
+    uint8_t value = 0;
+    friend constexpr bool operator==(const ParamId&, const ParamId&) = default;
+};
+
+struct ParamArg {
+    uint8_t value = 0;
+    friend constexpr bool operator==(const ParamArg&, const ParamArg&) = default;
+};
+
 /// Extended parameter read/write frame with a single value or chunk byte. Returns 8 bytes.
-constexpr std::size_t build_param_ext(uint8_t target, uint8_t type, uint8_t param, uint8_t value,
+constexpr std::size_t build_param_ext(DeviceAddr target, FrameType type, ParamId param, ParamArg value,
                                       std::array<uint8_t, 8>& out) {
-    out = {kSyncByte, 6, type, target, kAddrRadioTransmitter, param, value, 0};
+    out = {kSyncByte, 6, type.value, target.value, kAddrRadioTransmitter, param.value, value.value, 0};
     out[7] = crc8(std::span<const uint8_t>(out.data() + 2, 5));
     return out.size();
 }
 
 /// Parameter write with an arbitrary payload. Returns the frame length.
-constexpr std::size_t build_param_write_multi(uint8_t target, uint8_t param,
+constexpr std::size_t build_param_write_multi(DeviceAddr target, ParamId param,
                                               std::span<const uint8_t> payload,
                                               std::array<uint8_t, 16>& out) {
     out = {};
     out[0] = kSyncByte;
     out[1] = static_cast<uint8_t>(5 + payload.size());
     out[2] = kTypeParamWrite;
-    out[3] = target;
+    out[3] = target.value;
     out[4] = kAddrRadioTransmitter;
-    out[5] = param;
+    out[5] = param.value;
     for (std::size_t i = 0; i < payload.size(); ++i) {
         out[6 + i] = payload[i];
     }

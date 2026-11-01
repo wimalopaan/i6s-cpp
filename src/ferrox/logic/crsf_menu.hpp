@@ -213,6 +213,36 @@ constexpr std::size_t encode_value(const Entry& e, int32_t v, std::array<uint8_t
     }
 }
 
+struct ChunksRemain {
+    uint8_t value = 0;
+    friend constexpr bool operator==(const ChunksRemain&, const ChunksRemain&) = default;
+};
+
+struct ParamCount {
+    uint8_t value = 0;
+    friend constexpr bool operator==(const ParamCount&, const ParamCount&) = default;
+};
+
+struct FolderId {
+    uint8_t value = 0;
+    friend constexpr bool operator==(const FolderId&, const FolderId&) = default;
+};
+
+struct TimeoutByte {
+    uint8_t value = 0;
+    friend constexpr bool operator==(const TimeoutByte&, const TimeoutByte&) = default;
+};
+
+struct Now {
+    uint32_t value = 0;
+    friend constexpr bool operator==(const Now&, const Now&) = default;
+};
+
+struct Deadline {
+    uint32_t value = 0;
+    friend constexpr bool operator==(const Deadline&, const Deadline&) = default;
+};
+
 /// Reassembles a multi-chunk parameter stream into a fixed buffer.
 struct Reassembler {
     enum class Result : uint8_t { Ignored, NeedMore, Complete };
@@ -231,20 +261,20 @@ struct Reassembler {
 
     constexpr std::span<const uint8_t> bytes() const { return {buf.data(), len}; }
 
-    constexpr Result feed(uint8_t param_id, uint8_t chunks_remain, std::span<const uint8_t> data) {
-        if (current_chunk > 0 && chunks_remain != expect_remain) {
+    constexpr Result feed(ParamId param_id, ChunksRemain chunks_remain, std::span<const uint8_t> data) {
+        if (current_chunk > 0 && chunks_remain.value != expect_remain) {
             return Result::Ignored;
         }
-        if (current_chunk == 0 || param != param_id) {
+        if (current_chunk == 0 || param != param_id.value) {
             len = 0;
-            param = param_id;
+            param = param_id.value;
         }
         const std::size_t n = std::min(data.size(), buf.size() - len);
         std::copy_n(data.begin(), n, buf.begin() + len);
         len += n;
-        if (chunks_remain > 0) {
+        if (chunks_remain.value > 0) {
             ++current_chunk;
-            expect_remain = chunks_remain - 1;
+            expect_remain = chunks_remain.value - 1;
             return Result::NeedMore;
         }
         return Result::Complete;
@@ -253,13 +283,13 @@ struct Reassembler {
 
 /// Next parameter id after current_id that belongs to target_folder. Legacy devices without
 /// a root folder (no parent info) return every unmapped parameter.
-constexpr std::optional<uint8_t> next_param_for_folder(uint8_t current_id, uint8_t target_folder,
-                                                       uint8_t param_count,
+constexpr std::optional<uint8_t> next_param_for_folder(ParamId current_id, FolderId target_folder,
+                                                       ParamCount param_count,
                                                        const std::array<uint8_t, kMaxParamMap>& parent_map,
                                                        bool has_root_folder) {
-    for (uint16_t id = static_cast<uint16_t>(current_id) + 1; id <= param_count; ++id) {
+    for (uint16_t id = static_cast<uint16_t>(current_id.value) + 1; id <= param_count.value; ++id) {
         const uint8_t parent = id < kMaxParamMap ? parent_map[id] : kNoParent;
-        if (parent == target_folder || (!has_root_folder && parent == kNoParent)) {
+        if (parent == target_folder.value || (!has_root_folder && parent == kNoParent)) {
             return static_cast<uint8_t>(id);
         }
     }
@@ -267,8 +297,8 @@ constexpr std::optional<uint8_t> next_param_for_folder(uint8_t current_id, uint8
 }
 
 /// True if now has reached or passed deadline (wrap-safe for 32-bit millisecond counters).
-constexpr bool due(uint32_t now, uint32_t deadline) {
-    return static_cast<int32_t>(now - deadline) >= 0;
+constexpr bool due(Now now, Deadline deadline) {
+    return static_cast<int32_t>(now.value - deadline.value) >= 0;
 }
 
 /// Frame the caller must transmit, or nothing.
@@ -301,9 +331,9 @@ struct Loader {
 
     constexpr uint32_t timeout() const { return device == kAddrCrsfReceiver ? 1000 : 500; }
 
-    constexpr Action start(uint8_t dev, uint8_t count, uint32_t now) {
-        device = dev;
-        param_count = count;
+    constexpr Action start(DeviceAddr dev, ParamCount count, uint32_t now) {
+        device = dev.value;
+        param_count = count.value;
         folder = 0;
         has_root_folder = true;
         parent_map.fill(kNoParent);
@@ -322,13 +352,13 @@ struct Loader {
     }
 
     /// Handles a PARAM_ENTRY frame. origin is the sender address, data is the chunk payload.
-    constexpr Action on_entry(uint8_t origin, uint8_t param_id, uint8_t chunks_remain,
+    constexpr Action on_entry(DeviceAddr origin, ParamId param_id, ChunksRemain chunks_remain,
                               std::span<const uint8_t> data, uint32_t now) {
         completed.reset();
-        if (origin != device) {
+        if (origin.value != device) {
             return {};
         }
-        if (state == State::Loading && param_id != loading_id) {
+        if (state == State::Loading && param_id.value != loading_id) {
             return {};
         }
         switch (chunks.feed(param_id, chunks_remain, data)) {
@@ -337,7 +367,7 @@ struct Loader {
             case Reassembler::Result::NeedMore:
                 retry = 0;
                 next_req_ms = now + timeout();
-                return {Action::Kind::Read, param_id, chunks.current_chunk};
+                return {Action::Kind::Read, param_id.value, chunks.current_chunk};
             case Reassembler::Result::Complete:
                 break;
         }
@@ -345,36 +375,36 @@ struct Loader {
         const auto parsed = parse_entry(chunks.bytes());
         if (parsed && parsed->type == Type::Folder) {
             // Folder entries list their child ids after the name, terminated by 0xFF.
-            if (param_id == 0) {
+            if (param_id.value == 0) {
                 has_root_folder = true;
             }
             const auto c = chunks.bytes();
             for (std::size_t i = find_nul(c, 2) + 1; i < c.size() && c[i] != 0xFF; ++i) {
                 if (c[i] < kMaxParamMap) {
-                    parent_map[c[i]] = param_id;
+                    parent_map[c[i]] = param_id.value;
                 }
             }
         }
         chunks.reset();
         retry = 0;
-        completed = param_id;
+        completed = param_id.value;
         if (parsed) {
-            if (param_id < kMaxParamMap) {
-                parent_map[param_id] = parsed->parent;
+            if (param_id.value < kMaxParamMap) {
+                parent_map[param_id.value] = parsed->parent;
             }
-            if (param_id < kMaxParams) {
-                entries[param_id] = parsed;
+            if (param_id.value < kMaxParams) {
+                entries[param_id.value] = parsed;
             }
         }
-        if (state == State::Loading && param_id == loading_id) {
-            return advance(now, param_id);
+        if (state == State::Loading && param_id.value == loading_id) {
+            return advance(now, param_id.value);
         }
         return {};
     }
 
     /// Retry and timeout handling. Call periodically with the current millisecond time.
     constexpr Action tick(uint32_t now) {
-        if (state != State::Loading || !due(now, next_req_ms)) {
+        if (state != State::Loading || !due(Now{now}, Deadline{next_req_ms})) {
             return {};
         }
         const uint8_t max_retries = loading_id == 0 ? 2 : 4;
@@ -403,7 +433,8 @@ struct Loader {
 
     /// Continues with the next parameter in the current folder, or finishes.
     constexpr Action advance(uint32_t now, uint8_t after_id) {
-        const auto next = next_param_for_folder(after_id, folder, param_count, parent_map, has_root_folder);
+        const auto next = next_param_for_folder(ParamId{after_id}, FolderId{folder}, ParamCount{param_count},
+                                                parent_map, has_root_folder);
         if (!next) {
             state = State::Ready;
             return {Action::Kind::Done, 0, 0};
@@ -422,7 +453,8 @@ struct Loader {
         }
         folder = folder_id;
         state = State::Loading;
-        const auto first = next_param_for_folder(0, folder, param_count, parent_map, has_root_folder);
+        const auto first = next_param_for_folder(ParamId{0}, FolderId{folder}, ParamCount{param_count},
+                                                 parent_map, has_root_folder);
         if (!first) {
             state = State::Ready;
             return {Action::Kind::Done, 0, 0};
@@ -471,12 +503,12 @@ struct Command {
     }
 
     /// Applies a status frame for the given command parameter.
-    constexpr void on_status(uint8_t id, uint8_t status, uint8_t timeout_byte, uint32_t now) {
-        if (id != param || (kind != Kind::Starting && kind != Kind::Running)) {
+    constexpr void on_status(ParamId id, CmdStatus status, TimeoutByte timeout_byte, uint32_t now) {
+        if (id.value != param || (kind != Kind::Starting && kind != Kind::Running)) {
             return;
         }
-        poll_interval_ms = timeout_byte > 0 ? static_cast<uint32_t>(timeout_byte) * 100 : kCmdDefaultPollMs;
-        switch (static_cast<CmdStatus>(status)) {
+        poll_interval_ms = timeout_byte.value > 0 ? static_cast<uint32_t>(timeout_byte.value) * 100 : kCmdDefaultPollMs;
+        switch (status) {
             case CmdStatus::ConfirmationNeeded:
                 kind = Kind::WaitingConfirm;
                 break;
@@ -498,20 +530,20 @@ struct Command {
     constexpr Action tick(uint32_t now) {
         switch (kind) {
             case Kind::Starting:
-                if (due(now, deadline_ms)) {
+                if (due(Now{now}, Deadline{deadline_ms})) {
                     kind = Kind::Idle;
                 }
                 break;
             case Kind::Running:
-                if (due(now, deadline_ms)) {
+                if (due(Now{now}, Deadline{deadline_ms})) {
                     kind = Kind::Idle;
-                } else if (due(now, poll_at_ms)) {
+                } else if (due(Now{now}, Deadline{poll_at_ms})) {
                     poll_at_ms = now + poll_interval_ms;
                     return {Action::Kind::Write, param, static_cast<uint8_t>(CmdStatus::Poll)};
                 }
                 break;
             case Kind::Completed:
-                if (due(now, deadline_ms)) {
+                if (due(Now{now}, Deadline{deadline_ms})) {
                     kind = Kind::Idle;
                 }
                 break;

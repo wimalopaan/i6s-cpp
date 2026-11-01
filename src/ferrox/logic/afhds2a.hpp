@@ -107,9 +107,19 @@ constexpr uint16_t clamp_channel_us(uint16_t us) {
     return us < kChannelMinUs ? kChannelMinUs : (us > kChannelMaxUs ? kChannelMaxUs : us);
 }
 
-constexpr RxSettings make_rx_settings(uint16_t rate_hz, bool ppm_out, bool sbus) {
+struct PpmOut {
+    bool value = false;
+    constexpr bool operator==(const PpmOut&) const = default;
+};
+
+struct SbusOut {
+    bool value = false;
+    constexpr bool operator==(const SbusOut&) const = default;
+};
+
+constexpr RxSettings make_rx_settings(uint16_t rate_hz, PpmOut ppm_out, SbusOut sbus) {
     const uint16_t r = rate_hz < kRateMinHz ? kRateMinHz : (rate_hz > kRateMaxHz ? kRateMaxHz : rate_hz);
-    return RxSettings{r, ppm_out, sbus};
+    return RxSettings{r, ppm_out.value, sbus.value};
 }
 
 // RF power index is cyclic in the UI; out-of-range values fall back to 0.
@@ -243,7 +253,7 @@ struct Link {
 
     constexpr explicit Link(TxId uid) : tx_id(uid) {}
 
-    constexpr void set_rx_settings(uint16_t rate_hz, bool ppm_out, bool sbus) {
+    constexpr void set_rx_settings(uint16_t rate_hz, PpmOut ppm_out, SbusOut sbus) {
         settings = make_rx_settings(rate_hz, ppm_out, sbus);
         next = PacketKind::Settings;
     }

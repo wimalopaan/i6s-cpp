@@ -58,7 +58,7 @@ inline bool is_enabled() {
 /// Sends an RC channels frame every 10 ms (100 Hz).
 template <std::size_t N>
 inline void update_channels(uint32_t now_ms, const std::array<uint16_t, N>& channels,
-                            bool arm_mode_switch, bool armed) {
+                            logic::crsf::ArmModeSwitch arm_mode_switch, logic::crsf::ArmedState armed) {
     if (!g_enabled || static_cast<uint32_t>(now_ms - g_last_tx_ms) < kTxPeriodMs) {
         return;
     }
@@ -78,13 +78,14 @@ inline void perform(const MenuAction& a) {
     if (a.kind == MenuAction::Kind::Read) {
         std::array<uint8_t, 8> frame{};
         const std::size_t n = logic::crsf::build_param_ext(
-            g_menu.device, logic::crsf::kTypeParamRead, a.param, a.arg, frame);
+            logic::crsf::DeviceAddr{g_menu.device}, logic::crsf::FrameType{logic::crsf::kTypeParamRead},
+            logic::crsf::ParamId{a.param}, logic::crsf::ParamArg{a.arg}, frame);
         uart::write_bytes(std::span<const uint8_t>(frame.data(), n));
     } else if (a.kind == MenuAction::Kind::Write) {
         const std::array<uint8_t, 1> payload{a.arg};
         std::array<uint8_t, 16> frame{};
-        const std::size_t n =
-            logic::crsf::build_param_write_multi(g_menu.device, a.param, payload, frame);
+        const std::size_t n = logic::crsf::build_param_write_multi(
+            logic::crsf::DeviceAddr{g_menu.device}, logic::crsf::ParamId{a.param}, payload, frame);
         uart::write_bytes(std::span<const uint8_t>(frame.data(), n));
     }
 }
@@ -98,7 +99,7 @@ inline void on_device_info(std::span<const uint8_t> p, uint32_t now_ms) {
     if (count_idx >= p.size()) {
         return;
     }
-    perform(g_menu.start(p[1], p[count_idx], now_ms));
+    perform(g_menu.start(logic::crsf::DeviceAddr{p[1]}, logic::crsf::menu::ParamCount{p[count_idx]}, now_ms));
 }
 
 /// Parameter entry (0x2B): payload is [dest, origin, param, chunks_remain, chunk...].
@@ -106,7 +107,8 @@ inline void on_param_entry(std::span<const uint8_t> p, uint32_t now_ms) {
     if (p.size() < 4) {
         return;
     }
-    perform(g_menu.on_entry(p[1], p[2], p[3], p.subspan(4), now_ms));
+    perform(g_menu.on_entry(logic::crsf::DeviceAddr{p[1]}, logic::crsf::ParamId{p[2]},
+                            logic::crsf::menu::ChunksRemain{p[3]}, p.subspan(4), now_ms));
 
     if (!g_menu.completed) {
         return;
@@ -115,7 +117,9 @@ inline void on_param_entry(std::span<const uint8_t> p, uint32_t now_ms) {
     if (id < logic::crsf::menu::kMaxParams && g_menu.entries[id] &&
         g_menu.entries[id]->type == logic::crsf::menu::Type::Command) {
         const auto& e = *g_menu.entries[id];
-        g_command.on_status(id, static_cast<uint8_t>(e.value), e.cmd_timeout, now_ms);
+        g_command.on_status(logic::crsf::ParamId{id},
+                            static_cast<logic::crsf::menu::CmdStatus>(static_cast<uint8_t>(e.value)),
+                            logic::crsf::menu::TimeoutByte{e.cmd_timeout}, now_ms);
     }
 }
 
@@ -193,7 +197,8 @@ inline bool menu_set_value(uint8_t param, int32_t value) {
     }
     std::array<uint8_t, 16> frame{};
     const std::size_t len = logic::crsf::build_param_write_multi(
-        g_menu.device, param, std::span<const uint8_t>(bytes.data(), n), frame);
+        logic::crsf::DeviceAddr{g_menu.device}, logic::crsf::ParamId{param},
+        std::span<const uint8_t>(bytes.data(), n), frame);
     uart::write_bytes(std::span<const uint8_t>(frame.data(), len));
     return true;
 }

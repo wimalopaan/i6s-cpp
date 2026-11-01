@@ -84,7 +84,7 @@ inline void init_backlight_pwm() {
     RCC->APB1ENR |= RCC_APB1ENR_TIM3EN;
 
     set_mode_mask<Port::C>(1u << 9, Mode::Alternate);
-    set_alt_function<Port::C>(9, 0);
+    set_alt_function<Port::C>({9}, {0});
 
     // 48 MHz / (PSC + 1) = 1 MHz tick, ARR + 1 = 1000 ticks -> 1 kHz PWM on TIM3_CH4.
     TIM3->PSC = 47;

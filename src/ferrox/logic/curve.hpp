@@ -15,8 +15,23 @@ constexpr std::size_t point_count(uint8_t pts) {
     return pts == 9 ? 9 : (pts == 7 ? 7 : 5);
 }
 
+struct Knots {
+    int32_t p0 = 0;
+    int32_t p1 = 0;
+    int32_t p2 = 0;
+    int32_t p3 = 0;
+    friend constexpr bool operator==(const Knots&, const Knots&) = default;
+};
+
+struct Fraction {
+    int32_t value = 0;
+    friend constexpr bool operator==(const Fraction&, const Fraction&) = default;
+};
+
 /// Catmull-Rom cubic between p1 and p2 at t (0..256 fixed point). Result clamped to 0..1000.
-constexpr int32_t catmull_rom(int32_t p0, int32_t p1, int32_t p2, int32_t p3, int32_t t) {
+constexpr int32_t catmull_rom(Knots k, Fraction frac) {
+    const auto [p0, p1, p2, p3] = k;
+    const int32_t t = frac.value;
     const int32_t t2 = (t * t) / 256;
     const int32_t t3 = (t2 * t) / 256;
     const int32_t h00 = 2 * t3 - 3 * t2 + 256;
@@ -56,7 +71,7 @@ constexpr uint16_t evaluate_n(int32_t x, bool smooth, const Points& c) {
     // Boundary segments extrapolate the missing neighbour linearly.
     const int32_t p0 = i > 0 ? pts[i - 1] : 2 * pts[0] - pts[1];
     const int32_t p3 = i + 2 < N ? pts[i + 2] : 2 * pts[N - 1] - pts[N - 2];
-    return static_cast<uint16_t>(catmull_rom(p0, pts[i], pts[i + 1], p3, dx * 256 / span));
+    return static_cast<uint16_t>(catmull_rom(Knots{p0, pts[i], pts[i + 1], p3}, Fraction{dx * 256 / span}));
 }
 
 /// Maps the input 0..1000 through the curve. Output 0..1000.
