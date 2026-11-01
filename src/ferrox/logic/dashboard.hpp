@@ -82,7 +82,7 @@ constexpr void track_session(SessionStats& s, const afhds2a::Telemetry& t) {
 struct View {
     const input::InputState& in;
     const storage::RadioStorage& storage;
-    const trim::TrimValues& trims;
+    const trim::Controller& trims;
     const std::array<uint16_t, kNumChannels>& rf_chs;
     bool crsf;
     // AFHDS 2A link state, only meaningful when !crsf.
@@ -197,7 +197,7 @@ constexpr void draw_stick_row(Framebuffer& fb, int y, std::string_view label, Re
 
 constexpr void draw_primary_sticks(Framebuffer& fb, const View& v) {
     const auto& g = v.in.gimbals;
-    const auto& t = v.trims;
+    const auto& t = v.trims.values;
     const auto& radio = v.storage.radio;
 
     const bool general = static_cast<mixer::ModelType>(v.storage.active_model.model_type) == mixer::ModelType::General;
@@ -425,7 +425,13 @@ constexpr void draw_gimbal_page(Framebuffer& fb, const View& v) {
         draw_adaptive_layout(fb, v.in, st);
     }
 
-    widgets::draw_footer_split(fb, "P1/5", "Hold OK:Menu");
+    if (v.trims.last_active) {
+        const auto axis = *v.trims.last_active;
+        const auto trim_text = format::format_trim(trim::axis_letter(axis), trim::value_of(v.trims.values, axis));
+        widgets::draw_footer_split(fb, trim_text.view(), "Hold OK:Menu");
+    } else {
+        widgets::draw_footer_split(fb, "P1/5", "Hold OK:Menu");
+    }
 }
 
 constexpr void draw_channel_page(Framebuffer& fb, const std::array<uint16_t, kNumChannels>& chs, bool second_part) {

@@ -819,9 +819,8 @@ void dashboard_test() {
     logic::input::InputState in{};
     in.battery_mv = 7400;
     logic::storage::RadioStorage st{};
-    logic::trim::TrimValues trims{};
+    logic::trim::Controller trims{};
     std::array<uint16_t, logic::kNumChannels> chs{};
-    chs.fill(1500);
     logic::dashboard::View view{in, st, trims, chs, true, {}, false, false, false, 0};
 
     {
@@ -2511,6 +2510,89 @@ void buzzer_test() {
     check(cw.cue == Cue::Click, "buzzer: cancel in limits clicks");
 }
 
+void trim_controller_test() {
+    using logic::trim::Axis;
+    using logic::trim::Controller;
+    using logic::trim::Event;
+    using Kind = Event::Kind;
+    using logic::vario::Millis;
+
+    const Controller defaults{};
+    check(defaults.values.roll == 0 && defaults.values.pitch == 0 && defaults.values.throttle == 0 &&
+              defaults.values.yaw == 0 && !defaults.last_active && !defaults.throttle_enabled,
+          "trim: defaults are centred, no active axis and throttle locked");
+
+    check(logic::trim::axis_letter(Axis::Roll) == 'A' && logic::trim::axis_letter(Axis::Pitch) == 'E' &&
+              logic::trim::axis_letter(Axis::Throttle) == 'T' && logic::trim::axis_letter(Axis::Yaw) == 'R',
+          "trim: axis footer letters match Rust format_trim");
+    check(logic::format::format_trim(logic::trim::axis_letter(Axis::Roll), 5).view() == "TRM A:+05",
+          "trim: footer text shows the signed value");
+
+    Controller c{};
+    check(c.update(0x01, Millis{0}) == Event{Kind::Step, 1}, "trim: roll+ press steps to +1");
+    check(c.values.roll == 1 && c.last_active == Axis::Roll && c.active_ms == Controller::kActiveMs,
+          "trim: stepped axis is shown for 1.5 s");
+    check(logic::trim::value_of(c.values, Axis::Roll) == 1, "trim: value_of reads the stepped axis");
+
+    bool quiet = true;
+    for (int i = 0; i < 6; ++i) {
+        quiet = quiet && c.update(0x01, Millis{50}) == Event{};
+    }
+    check(quiet && c.values.roll == 1, "trim: no auto-repeat before the 350 ms hold delay");
+    check(c.update(0x01, Millis{50}) == Event{}, "trim: hold delay reached, first repeat waits 90 ms");
+    check(c.update(0x01, Millis{50}) == Event{Kind::Step, 2}, "trim: auto-repeat steps every 90 ms");
+    check(c.update(0x01, Millis{50}) == Event{}, "trim: repeat timer restarts after a repeat");
+
+    check(c.update(0, Millis{50}) == Event{} && c.hold_ms == 0 && c.repeat_ms == 0,
+          "trim: release clears hold and repeat state");
+    check(c.update(0x01, Millis{0}) == Event{Kind::Step, 3}, "trim: a new press steps at once after release");
+    c.update(0, Millis{0});
+
+    check(c.update(0x06, Millis{0}) == Event{Kind::Step, 2} && c.values.roll == 2 && c.values.pitch == 0,
+          "trim: simultaneous presses use the lowest bit only");
+    c.update(0, Millis{0});
+
+    check(c.update(0x100, Millis{0}) == Event{} && c.values.roll == 2, "trim: key bits above 7 are ignored");
+
+    c.values.pitch = 1;
+    check(c.update(0x08, Millis{0}) == Event{Kind::Center} && c.values.pitch == 0,
+          "trim: a step to zero plays the centre cue");
+    c.update(0, Millis{0});
+
+    c.values.yaw = 25;
+    c.last_active.reset();
+    c.active_ms = 0;
+    check(c.update(0x40, Millis{0}) == Event{Kind::Limit} && c.values.yaw == 25 && !c.last_active,
+          "trim: stepping past +25 plays the limit cue and changes nothing");
+    c.update(0, Millis{0});
+    c.values.yaw = -25;
+    check(c.update(0x80, Millis{0}) == Event{Kind::Limit} && c.values.yaw == -25,
+          "trim: stepping past -25 plays the limit cue");
+    c.update(0, Millis{0});
+
+    check(c.update(0x10, Millis{0}) == Event{Kind::Limit} && c.values.throttle == 0,
+          "trim: throttle trim is locked while disabled");
+    c.update(0, Millis{0});
+    c.throttle_enabled = true;
+    check(c.update(0x10, Millis{0}) == Event{Kind::Step, 1} && c.values.throttle == 1,
+          "trim: throttle trim steps once enabled");
+    c.update(0, Millis{0});
+
+    const int8_t roll_before = c.values.roll;
+    check(c.update(0x43, Millis{0}) == Event{} && c.values.roll == roll_before,
+          "trim: DFU combination locks trim processing");
+    check(c.update(0x01, Millis{0}).kind == Kind::Step,
+          "trim: a key still held after the DFU lockout steps as a new press");
+    c.update(0, Millis{0});
+
+    c.last_active = Axis::Pitch;
+    c.active_ms = Controller::kActiveMs;
+    check(c.update(0, Millis{1000}) == Event{} && c.last_active == Axis::Pitch && c.active_ms == 500,
+          "trim: active timer counts down");
+    check(c.update(0, Millis{500}) == Event{} && !c.last_active && c.active_ms == 0,
+          "trim: active axis clears when the timer runs out");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -2533,6 +2615,7 @@ int main() {
     vario_test();
     telemetry_test();
     buzzer_test();
+    trim_controller_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

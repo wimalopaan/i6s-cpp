@@ -1,9 +1,13 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
+#include <optional>
 
 #include "ferrox/logic/channels.hpp"
+#include "ferrox/logic/power.hpp"
+#include "ferrox/logic/vario.hpp"
 
 namespace ferrox::logic::trim {
 
@@ -43,5 +47,147 @@ constexpr uint16_t apply_throttle(uint16_t base_us, int8_t trim, uint8_t mode) {
             return static_cast<uint16_t>(std::clamp<uint16_t>(base_us, kChannelMinUs, kChannelMaxUs));
     }
 }
+
+/// Trim axes in Rust `ActiveTrim` order (without None).
+enum class Axis : uint8_t { Roll, Pitch, Throttle, Yaw };
+
+/// Footer letter of an axis (Rust `format_trim`).
+constexpr char axis_letter(Axis axis) {
+    switch (axis) {
+        case Axis::Roll: return 'A';
+        case Axis::Pitch: return 'E';
+        case Axis::Throttle: return 'T';
+        case Axis::Yaw: return 'R';
+    }
+    return ' ';
+}
+
+constexpr int8_t value_of(const TrimValues& values, Axis axis) {
+    switch (axis) {
+        case Axis::Roll: return values.roll;
+        case Axis::Pitch: return values.pitch;
+        case Axis::Throttle: return values.throttle;
+        case Axis::Yaw: return values.yaw;
+    }
+    return 0;
+}
+
+constexpr int8_t& value_of(TrimValues& values, Axis axis) {
+    switch (axis) {
+        case Axis::Roll: return values.roll;
+        case Axis::Pitch: return values.pitch;
+        case Axis::Throttle: return values.throttle;
+        case Axis::Yaw: return values.yaw;
+    }
+    return values.roll;
+}
+
+/// Audio result of one trim update. At most one per update.
+struct Event {
+    enum class Kind : uint8_t { None, Step, Center, Limit };
+    Kind kind = Kind::None;
+    // New trim value; set for Kind::Step only.
+    int8_t value = 0;
+    constexpr bool operator==(const Event&) const = default;
+};
+
+/// Trim key state machine (Rust `TrimController`). Keys 0..7 of the key matrix are the
+/// trim rockers: Roll +/-, Pitch +/-, Throttle +/-, Yaw +/-.
+struct Controller {
+    // Rust: hold 350 ms before auto-repeat, then one step every 90 ms.
+    static constexpr uint32_t kHoldDelayMs = 350;
+    static constexpr uint32_t kRepeatMs = 90;
+    // Rust: the footer shows the last changed trim for 1.5 s.
+    static constexpr uint32_t kActiveMs = 1500;
+
+    TrimValues values{};
+    std::optional<Axis> last_active{};
+    uint32_t active_ms = 0;
+    // Rust: throttle trim is locked until the radio setup enables it.
+    bool throttle_enabled = false;
+    uint8_t prev_keys = 0;
+    uint32_t hold_ms = 0;
+    uint32_t repeat_ms = 0;
+
+    /// Runs one update from the raw key matrix. Not called while a menu is open (as in Rust).
+    constexpr Event update(uint16_t keys, vario::Millis dt) {
+        if (active_ms > 0) {
+            active_ms = active_ms > dt.value ? active_ms - dt.value : 0;
+            if (active_ms == 0) {
+                last_active.reset();
+            }
+        }
+
+        // Both horizontal trims inward is the DFU request, so trims are locked out.
+        if (is_dfu_requested(keys)) {
+            release();
+            return {};
+        }
+
+        const auto trim_keys = static_cast<uint8_t>(keys & 0xFFu);
+        if (trim_keys == 0) {
+            release();
+            return {};
+        }
+
+        std::optional<uint8_t> trigger{};
+        if (trim_keys != prev_keys) {
+            const auto newly = static_cast<uint8_t>(trim_keys & ~prev_keys);
+            if (newly != 0) {
+                trigger = static_cast<uint8_t>(std::countr_zero(newly));
+            }
+            prev_keys = trim_keys;
+            hold_ms = 0;
+            repeat_ms = 0;
+        } else {
+            hold_ms += dt.value;
+            if (hold_ms >= kHoldDelayMs) {
+                repeat_ms += dt.value;
+                if (repeat_ms >= kRepeatMs) {
+                    repeat_ms = 0;
+                    trigger = static_cast<uint8_t>(std::countr_zero(trim_keys));
+                }
+            }
+        }
+
+        if (!trigger) {
+            return {};
+        }
+        return step_key(*trigger);
+    }
+
+    /// Steps the trim of one key: even bits add a step, odd bits subtract one.
+    constexpr Event step_key(uint8_t key) {
+        const auto axis = static_cast<Axis>(key / 2);
+        const int8_t delta = (key % 2 == 0) ? 1 : -1;
+        return step(axis, delta);
+    }
+
+    constexpr Event step(Axis axis, int8_t delta) {
+        if (axis == Axis::Throttle && !throttle_enabled) {
+            return {Event::Kind::Limit, 0};
+        }
+
+        int8_t& slot = value_of(values, axis);
+        if ((delta > 0 && slot >= kTrimMax) || (delta < 0 && slot <= kTrimMin)) {
+            return {Event::Kind::Limit, 0};
+        }
+
+        slot = static_cast<int8_t>(std::clamp<int>(slot + delta, kTrimMin, kTrimMax));
+        last_active = axis;
+        active_ms = kActiveMs;
+        if (slot == 0) {
+            return {Event::Kind::Center, 0};
+        }
+        return {Event::Kind::Step, slot};
+    }
+
+private:
+    constexpr void release() {
+        prev_keys = 0;
+        hold_ms = 0;
+        repeat_ms = 0;
+    }
+};
 
 }  // namespace ferrox::logic::trim

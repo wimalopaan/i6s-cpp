@@ -42,7 +42,7 @@ constexpr bool is_armed(uint8_t arm_switch, const Switches& sw) {
 }
 
 /// Mixer output for one model: 18 channels in µs, ready for the RF output.
-/// Trims are passed in by the caller; the trim key state machine is not ported yet.
+/// Trims are passed in by the caller; the trim key state machine lives in logic/trim.hpp.
 constexpr std::array<uint16_t, kNumChannels> rf_channels(const input::InputState& in,
                                                          safety::StickMode sm,
                                                          const storage::ModelConfig& model,

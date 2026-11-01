@@ -78,6 +78,14 @@ ferrox::hw::buzzer::Output g_buzzer_out{};
 ferrox::logic::buzzer::BatteryWarnTimer g_battery_warn{};
 ferrox::logic::buzzer::RssiWarnTimer g_rssi_warn{};
 
+// Trim key state machine. Values come from the active model; throttle_enabled from the radio setup.
+ferrox::logic::trim::Controller g_trims{};
+
+void load_trims_from_model() {
+    const auto& t = g_storage.active_model.trims;
+    g_trims.values = {t[0], t[1], t[2], t[3]};
+}
+
 // Plays a cue in the stored tone style. Cue::None is a no-op.
 void play_buzzer_cue(ferrox::logic::buzzer::Cue cue) {
     g_buzzer.play_cue(cue, ferrox::logic::buzzer::tone_style_from_u8(g_storage.radio.tone_style));
@@ -154,10 +162,13 @@ void apply_lcd_settings(const ferrox::logic::storage::RadioConfig& r) {
 void switch_model(uint8_t index) {
     using namespace ferrox::logic::storage;
     using Dev = ferrox::hw::I2c2Eeprom;
+    g_storage.active_model.trims = {g_trims.values.roll, g_trims.values.pitch, g_trims.values.throttle,
+                                    g_trims.values.yaw};
     save_active_model<Dev>(g_storage);
     g_storage.radio.active_model = index;
     save_radio_config<Dev>(g_storage);
     load_active_model<Dev>(g_storage);
+    load_trims_from_model();
 }
 
 // Blocks until sticks and switches are safe (or the cancel key is pressed), sending failsafe pulses meanwhile.
@@ -231,6 +242,8 @@ int main() {
     }
 
     const auto& model = g_storage.active_model;
+    load_trims_from_model();
+    g_trims.throttle_enabled = g_storage.radio.throttle_trim != 0;
     apply_crsf_config();
 
     const bool bind_on_boot = !was_watchdog_reset && (hw::keys::scan_keys() & logic::kKeyBind) != 0;
@@ -259,7 +272,6 @@ int main() {
     }
 
     const auto stick_mode = logic::safety::stick_mode_from(g_storage.radio.stick_mode);
-    const logic::trim::TrimValues no_trim{};
     uint32_t last_draw_ms = 0;
     uint16_t prev_keys = 0;
     logic::menu::State menu_state{};
@@ -339,6 +351,7 @@ int main() {
                 case logic::menu::Action::SaveRadioConfig:
                     logic::storage::save_radio_config<hw::I2c2Eeprom>(g_storage);
                     apply_lcd_settings(g_storage.radio);
+                    g_trims.throttle_enabled = g_storage.radio.throttle_trim != 0;
                     break;
                 case logic::menu::Action::StartCalibration:
                     logic::calib::start(g_calib_wizard);
@@ -363,8 +376,21 @@ int main() {
             rx_id_dirty = false;
         }
 
+        const bool menu_open = menu_state.screen != logic::menu::Screen::Closed || logic::calib::active(g_calib_wizard);
+        if (!menu_open) {
+            const auto trim_ev = g_trims.update(g_keys, logic::vario::Millis{dt_ms});
+            switch (trim_ev.kind) {
+                case logic::trim::Event::Kind::Step:
+                    g_buzzer.play_trim(logic::buzzer::TrimStep{trim_ev.value});
+                    break;
+                case logic::trim::Event::Kind::Center: play_buzzer_cue(logic::buzzer::Cue::TrimCenter); break;
+                case logic::trim::Event::Kind::Limit: play_buzzer_cue(logic::buzzer::Cue::TrimLimit); break;
+                case logic::trim::Event::Kind::None: break;
+            }
+        }
+
         const auto channels =
-            logic::flight::rf_channels(input, stick_mode, model, no_trim, g_storage.radio.throttle_trim);
+            logic::flight::rf_channels(input, stick_mode, model, g_trims.values, g_storage.radio.throttle_trim);
         const bool crsf = model.rf_protocol == 1;
         if (crsf) {
             hw::crsf::update_channels(now, channels, ferrox::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
@@ -387,7 +413,7 @@ int main() {
                 logic::calib::render(g_fb, g_calib_wizard, input.raw, g_storage.radio, model.model_type);
             } else if (menu_state.screen == logic::menu::Screen::Closed) {
                 render(g_fb, page_state,
-                       View{input, g_storage, no_trim, channels, crsf, rf_telem, rf_binding, g_rf_ok, rf_bound, now,
+                       View{input, g_storage, g_trims, channels, crsf, rf_telem, rf_binding, g_rf_ok, rf_bound, now,
                             rf_sent, g_rf_stats});
             } else {
                 logic::menu::render(g_fb, menu_state, g_model_names, g_storage,
@@ -397,7 +423,6 @@ int main() {
             last_draw_ms = now;
         }
 
-        const bool menu_open = menu_state.screen != logic::menu::Screen::Closed || logic::calib::active(g_calib_wizard);
         play_buzzer_cue(logic::buzzer::arm_cue(logic::buzzer::ArmEdge{
             .arm_switch = logic::buzzer::SwitchIndex{model.arm_switch},
             .is_armed = armed,
