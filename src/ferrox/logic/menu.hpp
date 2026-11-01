@@ -13,6 +13,7 @@
 #include "ferrox/logic/glyphs.hpp"
 #include "ferrox/logic/input.hpp"
 #include "ferrox/logic/labels.hpp"
+#include "ferrox/logic/model_copy.hpp"
 #include "ferrox/logic/power.hpp"
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
@@ -46,8 +47,8 @@ inline constexpr std::size_t kItemModelSelect = 0;
 inline constexpr std::size_t kItemModelSetup = 1;
 
 // Rows of the model setup screen. Each row maps to one slot of the 4-row view.
-enum class SetupRow : uint8_t { Name = 0, Type, ArmSwitch, Timer };
-inline constexpr std::size_t kSetupRows = 4;
+enum class SetupRow : uint8_t { Name = 0, Type, ArmSwitch, Timer, Copy };
+inline constexpr std::size_t kSetupRows = 5;
 inline constexpr uint8_t kNameLen = 10;
 inline constexpr uint8_t kModelTypeCount = 5;
 inline constexpr uint8_t kArmSwitchCount = 23;
@@ -123,6 +124,7 @@ enum class Action : uint8_t {
     SaveActiveModel,
     SaveRadioConfig,   // caller persists the radio config and applies LCD backlight and contrast
     StartCalibration,  // menu closes; caller starts the calibration wizard
+    CopyActiveModel,   // index = destination slot; caller copies the active model there
 };
 
 struct Event {
@@ -167,6 +169,7 @@ struct State {
     uint8_t page{0};  // page of the channel monitor or analog diagnostics
     bool editing{false};
     uint8_t name_cursor{0};
+    model_copy::Picker copy{};  // destination chosen on the Copy row
     Repeat up{};
     Repeat down{};
 };
@@ -369,13 +372,13 @@ constexpr Event update_models(State& s, const Nav& n) {
     return {};
 }
 
-constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m) {
+constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, model_copy::SrcSlot active) {
     const auto row = static_cast<SetupRow>(s.setup.selected);
     const Event save{Action::SaveActiveModel, 0};
 
     if (!s.editing) {
         if (n.up != n.down) {
-            step_list(s.setup, kSetupRows, Rows{kSetupRows}, nav_dir(n));
+            step_list(s.setup, kSetupRows, Rows{kListVisible}, nav_dir(n));
         }
         if (n.cancel) {
             s.screen = Screen::Main;
@@ -393,6 +396,10 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m) {
                 case SetupRow::ArmSwitch:
                 case SetupRow::Timer:
                     s.editing = true;
+                    break;
+                case SetupRow::Copy:
+                    s.editing = true;
+                    s.copy = model_copy::open(active);
                     break;
             }
         }
@@ -447,6 +454,17 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m) {
             }
             break;
         case SetupRow::Type:
+            break;
+        case SetupRow::Copy:
+            switch (model_copy::update(s.copy, model_copy::Keys{n.up, n.down, n.ok, n.cancel})) {
+                case model_copy::Outcome::Choosing: break;
+                case model_copy::Outcome::Cancelled:
+                    s.editing = false;
+                    break;
+                case model_copy::Outcome::Copy:
+                    s.editing = false;
+                    return {Action::CopyActiveModel, static_cast<uint8_t>(s.copy.dst.value)};
+            }
             break;
     }
     return {};
@@ -1073,7 +1091,7 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
     switch (s.screen) {
         case Screen::Main: return update_main(s, n, st.radio.active_model);
         case Screen::ModelSelect: return update_models(s, n);
-        case Screen::ModelSetup: return update_setup(s, n, st.active_model);
+        case Screen::ModelSetup: return update_setup(s, n, st.active_model, model_copy::active_slot(st));
         case Screen::DualRate: return update_dual_rate(s, n, st.active_model, st.radio);
         case Screen::ThrottleCurve: return update_throttle_curve(s, n, st.active_model);
         case Screen::AuxChannels: return update_aux(s, n, st.active_model, st.radio);
@@ -1201,14 +1219,18 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
     widgets::draw_header(fb, "MODEL SETUP");
     constexpr int kValueX = 40;
 
-    for (int row = 0; row < static_cast<int>(kSetupRows); ++row) {
-        const bool selected = !s.editing && row == s.setup.selected;
-        const int y = 14 + row * 9;
-        switch (static_cast<SetupRow>(row)) {
+    for (std::size_t slot = 0; slot < kListVisible; ++slot) {
+        const std::size_t idx = s.setup.scroll + slot;
+        if (idx >= kSetupRows) {
+            break;
+        }
+        const int y = 14 + static_cast<int>(slot) * 9;
+        const bool selected = !s.editing && idx == s.setup.selected;
+        switch (static_cast<SetupRow>(idx)) {
             case SetupRow::Name: {
                 const auto name = name_text(m.name);
-                widgets::draw_list_row(fb, {row}, selected, "Name:", name.view(), {kValueX});
-                if (s.editing && row == s.setup.selected) {
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Name:", name.view(), {kValueX});
+                if (s.editing && idx == s.setup.selected) {
                     const int char_x = kValueX + s.name_cursor * 6;
                     const uint8_t c = m.name[s.name_cursor];
                     const std::array<char, 1> one{c == 0 ? ' ' : static_cast<char>(c)};
@@ -1218,30 +1240,44 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
                 break;
             }
             case SetupRow::Type:
-                widgets::draw_list_row(fb, {row}, selected, "Type:", labels::model_type_label(m.model_type), {kValueX});
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Type:",
+                                       labels::model_type_label(m.model_type), {kValueX});
                 break;
             case SetupRow::ArmSwitch: {
                 const std::string_view arm =
                     m.arm_switch == 0 ? std::string_view{"NONE"} : labels::switch_cond_label(m.arm_switch);
-                widgets::draw_list_row(fb, {row}, selected, "Arm Sw:", arm, {52});
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Arm Sw:", arm, {52});
                 break;
             }
             case SetupRow::Timer: {
                 if (m.timer_secs == 0) {
-                    widgets::draw_list_row(fb, {row}, selected, "Timer:", "OFF", {kValueX});
+                    widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Timer:", "OFF", {kValueX});
                 } else {
                     const auto t = timer_text(m.timer_secs);
-                    widgets::draw_list_row(fb, {row}, selected, "Timer:", t.view(), {kValueX});
+                    widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Timer:", t.view(), {kValueX});
+                }
+                break;
+            }
+            case SetupRow::Copy: {
+                if (s.editing && idx == s.setup.selected) {
+                    const auto target = model_copy::target_label(s.copy.dst);
+                    widgets::draw_list_row(fb, {static_cast<int>(slot)}, true, "", target.view(), {kValueX});
+                } else {
+                    widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Copy:", "[OK Duplicate]",
+                                           {kValueX});
                 }
                 break;
             }
         }
     }
+    widgets::draw_scrollbar(fb, {s.setup.selected}, {static_cast<int>(kSetupRows)}, {14, 36});
 
     if (!s.editing) {
         widgets::draw_footer(fb, "[OK] Select    [ESC] Back");
     } else if (static_cast<SetupRow>(s.setup.selected) == SetupRow::Name) {
         widgets::draw_footer(fb, "[OK] Next Char [ESC] Done");
+    } else if (static_cast<SetupRow>(s.setup.selected) == SetupRow::Copy) {
+        widgets::draw_footer(fb, "[OK] Duplicate [ESC] Cancel");
     } else {
         widgets::draw_footer(fb, "[OK] Done   [UP/DN] Value");
     }

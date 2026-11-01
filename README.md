@@ -53,7 +53,10 @@ Flight timer (pure logic, host-tested in `flight_timer_test()`): `logic/flight_t
 
 Bind (pure logic, host-tested in `bind_test()`): `logic/bind.hpp` ports the BIND key of Rust `main.rs` section 5 for AFHDS 2A. Holding BIND for 1 s on the dashboard starts binding once per hold (`Controller`, not repeated while held). While binding, a BIND press or CANCEL stops it with a click. A hold is ignored while a menu or calibration is open, and the hold resets. Binding is shown only when the link is AFHDS 2A (`binding_shown`, as in Rust `!is_crsf && rf::is_binding()`). On every dashboard page, the "[ESC] Finish Bind" footer replaces the page footer while binding, and it takes precedence over the trim and flight timer footers (`footer_kind`: bind > trim > timer > default, as in Rust `gimbals::render_footer`). `main.cpp` drives `hw::rf::set_bind_mode` from the controller. Deviations from Rust: the 2400 Hz / 150 ms start tone is not played, and a short BIND tap that cycles to the next page is not ported. Not tested on hardware.
 
-Not yet ported: model setup rows copy, protocol and reset, USB, trainer, arm chimes, custom telemetry slots, CRSF telemetry on P5.
+Model setup copy (pure logic, host-tested in `model_copy_test()`): `logic/model_copy.hpp` ports the Copy row of the model setup screen (row 5, Rust `screens/model.rs`). OK on the row opens a destination picker that starts on the slot after the active model and wraps over all 20 slots. UP and DOWN move it, OK copies the active model to the chosen slot through `storage::save_model_to_slot`, and ESC cancels with no write. While choosing, the row reads `Copy -> M01`-style (1-based) and the footer shows `[OK] Duplicate [ESC] Cancel`. The strong types `SrcSlot` and `DstSlot` keep the source and destination apart. The menu returns `Action::CopyActiveModel` with the destination, and `main.cpp` performs the write. The model setup screen now scrolls over 5 rows. Deviations from Rust: the active model stays in place, since only the active slot is held in memory, so the source must be the active slot (`copy_model` returns false otherwise); no menu tone is played, because menu sounds are not wired. Not tested on hardware.
+
+Not yet ported: protocol and reset, USB, trainer, arm chimes, custom telemetry slots, CRSF telemetry on P5.
+
 
 
 ## Build

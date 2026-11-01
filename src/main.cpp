@@ -23,6 +23,7 @@
 #include "ferrox/logic/input.hpp"
 #include "ferrox/logic/menu.hpp"
 #include "ferrox/logic/mixer.hpp"
+#include "ferrox/logic/model_copy.hpp"
 #include "ferrox/logic/power.hpp"
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
@@ -364,6 +365,10 @@ int main() {
                     logic::storage::save_radio_config<hw::I2c2Eeprom>(g_storage);
                     apply_lcd_settings(g_storage.radio);
                     g_trims.throttle_enabled = g_storage.radio.throttle_trim != 0;
+                    break;
+                case logic::menu::Action::CopyActiveModel:
+                    logic::model_copy::copy_model<hw::I2c2Eeprom>(
+                        g_storage, logic::model_copy::active_slot(g_storage), logic::model_copy::DstSlot{ev.index});
                     break;
                 case logic::menu::Action::StartCalibration:
                     logic::calib::start(g_calib_wizard);

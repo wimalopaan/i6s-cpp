@@ -20,6 +20,7 @@
 #include "ferrox/logic/labels.hpp"
 #include "ferrox/logic/menu.hpp"
 #include "ferrox/logic/mixer.hpp"
+#include "ferrox/logic/model_copy.hpp"
 #include "ferrox/logic/power.hpp"
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
@@ -3089,6 +3090,81 @@ void bind_test() {
     }
 }
 
+void model_copy_test() {
+    namespace mc = logic::model_copy;
+    namespace mn = logic::menu;
+    namespace st = logic::storage;
+    using Dev = test_eeprom::FakeEeprom;
+    using mn::Action;
+
+    // Picker: opens on the slot after the source and wraps in both directions.
+    check(mc::open(mc::SrcSlot{2}).dst == mc::DstSlot{3}, "copy picker must open on source + 1");
+    check(mc::open(mc::SrcSlot{19}).dst == mc::DstSlot{0}, "copy picker must wrap from the last slot");
+    mc::Picker w = mc::open(mc::SrcSlot{0});
+    mc::update(w, mc::Keys{.down = true});
+    check(w.dst == mc::DstSlot{0}, "down from slot 1 must reach slot 0");
+    mc::update(w, mc::Keys{.down = true});
+    check(w.dst == mc::DstSlot{19}, "down from slot 0 must wrap to slot 19");
+    mc::update(w, mc::Keys{.up = true});
+    check(w.dst == mc::DstSlot{0}, "up from slot 19 must wrap to slot 0");
+    check(mc::update(w, mc::Keys{.ok = true}) == mc::Outcome::Copy, "OK must confirm the copy");
+    check(mc::update(w, mc::Keys{.cancel = true}) == mc::Outcome::Cancelled, "ESC must cancel the copy");
+    check(mc::update(w, mc::Keys{.up = true, .cancel = true}) == mc::Outcome::Cancelled,
+          "ESC must win over a same-tick move");
+    check(mc::update(w, mc::Keys{}) == mc::Outcome::Choosing, "idle tick must keep choosing");
+
+    check(std::string_view{mc::target_label(mc::DstSlot{0}).view()} == "Copy -> M01", "label must show slot 1 as M01");
+    check(std::string_view{mc::target_label(mc::DstSlot{19}).view()} == "Copy -> M20",
+          "label must show slot 20 as M20");
+
+    // Copy writes the in-memory active model to the destination slot only.
+    st::RadioStorage rs = st::default_storage();
+    rs.radio.active_model = 2;
+    rs.active_model.name = {'C', 'O', 'P', 'Y', ' ', ' ', ' ', ' ', ' ', ' '};
+    rs.active_model.timer_secs = 90;
+    check(mc::active_slot(rs) == mc::SrcSlot{2}, "active slot must follow the radio config");
+    rs.radio.active_model = 99;
+    check(mc::active_slot(rs) == mc::SrcSlot{0}, "out-of-range active slot must clamp to 0");
+    rs.radio.active_model = 2;
+
+    check(!mc::copy_model<Dev>(rs, mc::SrcSlot{3}, mc::DstSlot{5}), "copy from a non-active slot must fail");
+    check(!mc::copy_model<Dev>(rs, mc::SrcSlot{2}, mc::DstSlot{20}), "copy to an out-of-range slot must fail");
+    check(mc::copy_model<Dev>(rs, mc::SrcSlot{2}, mc::DstSlot{5}), "copy must succeed");
+    st::ModelConfig got{};
+    check(st::load_slot<Dev>(st::model_slot_addr(5).value(), got) == st::Status::Ok && got.name[0] == 'C' &&
+              got.timer_secs == 90,
+          "copy must write the active model to the destination slot");
+    check(rs.radio.active_model == 2 && rs.active_model.name[0] == 'C',
+          "copy must leave the active model unchanged");
+
+    Dev::fail_writes = true;
+    check(!mc::copy_model<Dev>(rs, mc::SrcSlot{2}, mc::DstSlot{6}), "failing EEPROM must report copy failure");
+    Dev::fail_writes = false;
+
+    // Menu flow: Copy row is reached by wrapping up from Name, OK opens the picker, OK confirms.
+    mn::State s{};
+    s.screen = mn::Screen::ModelSetup;
+    auto press = [&](uint16_t key, uint32_t now) {
+        const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
+        mn::update(s, mn::Input{0, 0, now + 1}, rs);
+        return e;
+    };
+    press(mn::kKeyUp, 10);
+    check(s.setup.selected == 4 && s.setup.scroll == 1, "up from Name must wrap to the Copy row and scroll");
+    const mn::Event open_ev = press(mn::kKeyOk, 20);
+    check(open_ev.action == Action::None && s.editing && s.copy.dst == mc::DstSlot{3},
+          "OK on Copy must open the picker at source + 1");
+    press(mn::kKeyUp, 30);
+    check(s.copy.dst == mc::DstSlot{4}, "up on the picker must move the destination");
+    const mn::Event cancel_ev = press(mn::kKeyCancel, 40);
+    check(cancel_ev.action == Action::None && !s.editing, "ESC on the picker must cancel without a copy");
+    press(mn::kKeyOk, 50);
+    press(mn::kKeyUp, 60);
+    const mn::Event copy_ev = press(mn::kKeyOk, 70);
+    check(copy_ev.action == Action::CopyActiveModel && copy_ev.index == 4 && !s.editing,
+          "OK on the picker must request a copy to the chosen slot");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -3116,6 +3192,7 @@ int main() {
     instant_trim_test();
     flight_timer_test();
     bind_test();
+    model_copy_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }
