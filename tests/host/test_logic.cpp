@@ -840,6 +840,23 @@ void dashboard_test() {
         check(logic::dashboard::afhds_link_line(link_view) == "AFHDS2A: CONNECTED", "model page shows link state");
         check(logic::dashboard::sensor_fresh(link_view, linked.last_rx_voltage_ms), "fresh telemetry is not stale");
         check(!logic::dashboard::sensor_fresh(stale_view, linked.last_rx_voltage_ms), "telemetry older than 2.5 s is stale");
+
+        logic::dashboard::SessionStats stats{};
+        logic::afhds2a::Telemetry sample{};
+        logic::dashboard::track_session(stats, sample);
+        check(!stats.seen, "session stats ignore disconnected samples");
+        sample.connected = true;
+        sample.rssi = 80;
+        sample.rx_voltage_mv = 5000;
+        logic::dashboard::track_session(stats, sample);
+        sample.rssi = 60;
+        sample.rx_voltage_mv = 0;
+        logic::dashboard::track_session(stats, sample);
+        sample.rssi = 90;
+        sample.rx_voltage_mv = 4800;
+        logic::dashboard::track_session(stats, sample);
+        check(stats.min_rssi == 60, "session minimum RSSI tracks lowest sample");
+        check(stats.min_rx_v_mv == 4800, "session minimum RX voltage ignores zero samples");
     }
 
     logic::display::Framebuffer fb{};

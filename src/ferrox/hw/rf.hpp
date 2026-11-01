@@ -153,6 +153,11 @@ inline logic::afhds2a::Telemetry get_telemetry() {
     return g_radio->link.telemetry;
 }
 
+inline uint32_t packets_sent() {
+    arch::CriticalSection cs;
+    return g_radio->packets_sent;
+}
+
 /// TIM16 update: build and send the next frame.
 inline void on_tim16() {
     TIM16->SR = 0;

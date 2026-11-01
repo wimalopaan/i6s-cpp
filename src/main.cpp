@@ -46,6 +46,7 @@ ferrox::logic::display::Framebuffer g_fb{};
 
 // RF radio init result, and whether the A7105 is currently silenced (starts silenced, as in hw::rf).
 bool g_rf_ok = false;
+ferrox::logic::dashboard::SessionStats g_rf_stats{};
 bool g_rf_silenced = true;
 
 ferrox::logic::input::BoardSwitches read_board_switches() {
@@ -349,11 +350,16 @@ int main() {
             const auto rf_telem = g_rf_ok ? hw::rf::get_telemetry() : logic::afhds2a::Telemetry{};
             const bool rf_binding = g_rf_ok && hw::rf::is_binding();
             const bool rf_bound = g_rf_ok && hw::rf::is_bound();
+            const uint32_t rf_sent = g_rf_ok ? hw::rf::packets_sent() : 0u;
+            if (g_rf_ok) {
+                logic::dashboard::track_session(g_rf_stats, rf_telem);
+            }
             if (logic::calib::active(g_calib_wizard)) {
                 logic::calib::render(g_fb, g_calib_wizard, input.raw, g_storage.radio, model.model_type);
             } else if (menu_state.screen == logic::menu::Screen::Closed) {
                 render(g_fb, page_state,
-                       View{input, g_storage, no_trim, channels, crsf, rf_telem, rf_binding, g_rf_ok, rf_bound, now});
+                       View{input, g_storage, no_trim, channels, crsf, rf_telem, rf_binding, g_rf_ok, rf_bound, now,
+                            rf_sent, g_rf_stats});
             } else {
                 logic::menu::render(g_fb, menu_state, g_model_names, g_storage,
                                     logic::menu::Live{channels, input.raw, chip::kProfile.name});

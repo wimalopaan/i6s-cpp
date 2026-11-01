@@ -51,6 +51,31 @@ constexpr void handle_keys(PageState& s, uint16_t newly_pressed) {
     }
 }
 
+// Session minimums for the telemetry page. Updated from connected samples, never reset (as in Rust).
+struct SessionStats {
+    bool seen = false;
+    uint8_t min_rssi = 100;
+    uint16_t min_rx_v_mv = 0xFFFF;
+};
+
+constexpr void track_session(SessionStats& s, const afhds2a::Telemetry& t) {
+    if (!t.connected) {
+        return;
+    }
+    if (!s.seen) {
+        s.seen = true;
+        s.min_rssi = t.rssi;
+        if (t.rx_voltage_mv > 0) {
+            s.min_rx_v_mv = t.rx_voltage_mv;
+        }
+        return;
+    }
+    s.min_rssi = std::min(s.min_rssi, t.rssi);
+    if (t.rx_voltage_mv > 0 && t.rx_voltage_mv < s.min_rx_v_mv) {
+        s.min_rx_v_mv = t.rx_voltage_mv;
+    }
+}
+
 struct View {
     const input::InputState& in;
     const storage::RadioStorage& storage;
@@ -63,6 +88,8 @@ struct View {
     bool rf_ok = false;
     bool bound = false;
     uint32_t now_ms = 0;
+    uint32_t packets_sent = 0;
+    SessionStats stats{};
 };
 
 using labels::model_name;
@@ -448,7 +475,7 @@ constexpr void draw_model_page(Framebuffer& fb, const View& v) {
     widgets::draw_footer_split(fb, "P4/5", "MODEL DASHBOARD");
 }
 
-// AFHDS 2A sensor page. CRSF telemetry is not ported, so CRSF models show a placeholder.
+// AFHDS 2A sensor page, same layout as Rust `telemetry.rs` (AFHDS branch). CRSF is not ported yet.
 constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
     if (v.crsf) {
         fb.draw_str_6x10(22, 26, "NOT PORTED YET", false);
@@ -457,7 +484,6 @@ constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
     }
 
     fb.draw_vline(64, 12, 42, true);
-    fb.draw_hline(2, 31, 124, true);
 
     const bool rssi_ok = sensor_fresh(v, v.telem.last_rx_voltage_ms);
     fb.draw_str_6x10(2, 14, "RSSI:", false);
@@ -476,13 +502,42 @@ constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
 
     fb.draw_str_6x10(2, 24, v.telem.connected ? "LINK: OK" : "LINK: DISC", false);
 
-    fb.draw_str_6x10(66, 14, "RX:", false);
+    format::Text<5> tx_count;
+    format::detail::push_uint(tx_count, v.packets_sent);
+    fb.draw_str_6x10(2, 34, "TX:", false);
+    fb.draw_str_6x10(24, 34, tx_count.view(), false);
+
+    format::Text<5> rx_count;
+    format::detail::push_uint(rx_count, v.telem.packets_received);
+    fb.draw_str_6x10(2, 44, "RX:", false);
+    fb.draw_str_6x10(24, 44, rx_count.view(), false);
+
     const bool rx_fresh = sensor_fresh(v, v.telem.last_rx_voltage_ms) && v.telem.rx_voltage_mv > 0;
     const auto rx_text = format::format_vbat(v.telem.rx_voltage_mv);
+    fb.draw_str_6x10(66, 14, "RX:", false);
     fb.draw_str_6x10(88, 14, rx_fresh ? rx_text.view() : std::string_view("----"), false);
 
+    const auto tx_text = format::format_vbat(v.in.battery_mv);
     fb.draw_str_6x10(66, 24, "TX:", false);
-    fb.draw_str_6x10(88, 24, format::format_vbat(v.in.battery_mv).view(), false);
+    fb.draw_str_6x10(88, 24, tx_text.view(), false);
+
+    fb.draw_str_6x10(66, 34, "mRSS:", false);
+    if (v.stats.seen) {
+        const auto digits = format::format_dec2(std::min<unsigned>(v.stats.min_rssi, 100u));
+        format::Text<4> t;
+        for (const char c : digits.view()) {
+            t.push(c);
+        }
+        t.push('%');
+        fb.draw_str_6x10(98, 34, t.view(), false);
+    } else {
+        fb.draw_str_6x10(98, 34, " --%", false);
+    }
+
+    fb.draw_str_6x10(66, 44, "mRX:", false);
+    const bool min_rx_ok = v.stats.seen && v.stats.min_rx_v_mv != 0xFFFF && v.stats.min_rx_v_mv > 0;
+    const auto min_rx_text = format::format_vbat(v.stats.min_rx_v_mv);
+    fb.draw_str_6x10(92, 44, min_rx_ok ? min_rx_text.view() : std::string_view("----"), false);
 
     if (v.binding) {
         widgets::draw_footer(fb, "[ESC] Finish Bind");
