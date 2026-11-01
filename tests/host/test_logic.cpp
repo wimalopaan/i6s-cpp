@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <span>
 
+#include "ferrox/logic/afhds2a.hpp"
 #include "ferrox/logic/brr.hpp"
 #include "ferrox/logic/calib.hpp"
 #include "ferrox/logic/crsf.hpp"
@@ -1600,6 +1601,153 @@ void radio_setup_test() {
     check(back.action == Action::None && ms.screen == Screen::Main, "radio: cancel must return to the main menu");
 }
 
+void afhds2a_test() {
+    namespace af = logic::afhds2a;
+
+    std::array<uint16_t, af::kNumChannels> ch{1500, 988, 2012, 1123, 1456, 1789, 1357, 1642, 1890,
+                                              1050, 1555, 1999, 1001, 1620, 1234, 1987, 1432, 1876};
+    const af::Packet sticks = af::build_sticks(0x12345678, 0x9ABCDEF0, ch);
+    check(sticks[0] == af::kPacketSticks, "afhds2a: sticks command byte");
+    check(sticks[37] == 0x00, "afhds2a: sticks trailer byte");
+
+    // Decode as iBUS does (Betaflight rx/ibus.c): 12-bit slots plus extended nibbles.
+    std::array<uint16_t, af::kNumChannels> dec{};
+    for (std::size_t i = 0; i < 14; ++i) {
+        dec[i] = static_cast<uint16_t>(sticks[9 + i * 2] | ((sticks[10 + i * 2] & 0x0F) << 8));
+    }
+    for (std::size_t ext = 0; ext < 4; ++ext) {
+        const std::size_t off = (ext * 3) * 2 + 1 + 9;
+        dec[14 + ext] = static_cast<uint16_t>(((sticks[off] & 0xF0) >> 4) | (sticks[off + 2] & 0xF0) |
+                                              ((sticks[off + 4] & 0xF0) << 4));
+    }
+    bool sticks_ok = true;
+    for (std::size_t i = 0; i < ch.size(); ++i) {
+        sticks_ok = sticks_ok && dec[i] == ch[i];
+    }
+    check(sticks_ok, "afhds2a: 18-channel sticks round trip");
+
+    // Legacy 14-channel decoder masks the low 12 bits of each slot.
+    std::array<uint16_t, af::kNumChannels> ch14{1500, 1000, 2000, 1200, 1400, 1600, 1800, 1100, 1300, 1500, 1700, 1900, 1050, 1950};
+    const af::Packet legacy = af::build_sticks(0x11223344, 0x55667788, [&] {
+        auto a = ch;
+        for (std::size_t i = 0; i < 14; ++i) a[i] = ch14[i];
+        return a;
+    }());
+    bool legacy_ok = true;
+    for (std::size_t i = 0; i < 14; ++i) {
+        const auto raw16 = static_cast<uint16_t>(legacy[9 + i * 2] | (legacy[10 + i * 2] << 8));
+        legacy_ok = legacy_ok && (raw16 & 0x0FFF) == ch14[i];
+    }
+    check(legacy_ok, "afhds2a: legacy 14-channel decoding");
+
+    const af::Packet fs = af::build_failsafe(0xAABBCCDD, 0);
+    check(fs[0] == af::kPacketFailsafe, "afhds2a: failsafe command byte");
+    check((fs[9 + 2 * 2] | (fs[10 + 2 * 2] << 8)) == af::kFailsafeThrottleUs, "afhds2a: failsafe throttle is 988us");
+    bool hold_ok = true;
+    for (std::size_t c = 0; c < 14; ++c) {
+        if (c != 2) hold_ok = hold_ok && fs[9 + c * 2] == 0xFF && fs[10 + c * 2] == 0xFF;
+    }
+    check(hold_ok, "afhds2a: failsafe holds non-throttle channels");
+
+    af::Link link{0x11223344};
+    link.rx_id = 0x55667788;
+    af::Packet st = af::build_settings(link.tx_id, link.rx_id, link.settings);
+    check(st[0] == af::kPacketSettings && st[9] == 0xFD && st[10] == 0xFF, "afhds2a: settings header");
+    check(st[11] == 0x32 && st[12] == 0x00 && st[13] == 0x00, "afhds2a: default 50 Hz PWM");
+    check(st[18] == 0x05 && st[19] == 0xDC && st[21] == 0xDE, "afhds2a: center 1500us and iBUS default");
+    link.set_rx_settings(400, true, true);
+    st = af::build_settings(link.tx_id, link.rx_id, link.settings);
+    check(st[11] == 0x90 && st[12] == 0x01 && st[13] == 0x01 && st[21] == 0xDD, "afhds2a: 400 Hz PPM SBUS");
+    check(link.next == af::PacketKind::Settings, "afhds2a: settings change queues a settings packet");
+    link.set_rx_settings(30, false, false);
+    check(link.settings.rate_hz == 50, "afhds2a: rate clamped to 50 Hz");
+    link.set_rx_settings(500, false, false);
+    check(link.settings.rate_hz == 400, "afhds2a: rate clamped to 400 Hz");
+
+    link.set_rf_power(4);
+    check(link.rf_power_idx == 0, "afhds2a: out-of-range RF power falls back to index 0");
+    link.set_rf_power(3);
+    check(link.rf_power_idx == 3, "afhds2a: RF power index 3 kept");
+
+    check(af::rssi_from_raw(0) == 100 && af::rssi_from_raw(200) == 0, "afhds2a: RSSI clamping");
+    check(af::rssi_from_raw(100) == 96, "afhds2a: RSSI formula 256 - raw*8/5");
+
+    // Hopping table: all in band and separated by at least 5 channels.
+    const af::HoppingTable hop = af::hopping_table(0x12345678);
+    bool hop_ok = true;
+    for (std::size_t i = 0; i < hop.size(); ++i) {
+        hop_ok = hop_ok && hop[i] >= 1 && hop[i] <= 164;
+        for (std::size_t j = 0; j < i; ++j) {
+            const int d = int(hop[i]) - int(hop[j]);
+            hop_ok = hop_ok && (d < 0 ? -d : d) >= 5;
+        }
+    }
+    check(hop_ok, "afhds2a: hopping table in band with channel separation");
+
+    // Bind confirmation carries the RX ID and the state machine accepts the reply.
+    af::Link bl{0x12345678};
+    bl.binding = true;
+    af::Frame reply{};
+    reply[0] = af::kPacketBind2;
+    reply[5] = 0x78;
+    reply[6] = 0x56;
+    reply[7] = 0x34;
+    reply[8] = 0x12;
+    reply[9] = 0x01;
+    check(bl.on_bind_reply(reply) && bl.rx_id == 0x12345678 && bl.bind_step == af::BindStep::Confirm,
+          "afhds2a: bind reply moves to confirmation with RX ID");
+    const af::Packet confirm = af::build_bind(bl.tx_id, bl.rx_id, af::BindStep::Confirm, hop);
+    check(confirm[0] == af::kPacketBind2 && confirm[9] == 0x02 && confirm[5] == 0x78,
+          "afhds2a: bind confirmation packet");
+
+    // Downlink handling: TX ID filter, sensor decoding, requests.
+    af::Link tl{0x12345678};
+    tl.rx_id = 0x9ABCDEF0;
+    af::Frame rx{};
+    rx[0] = 0xAA;
+    rx[1] = 0x78;
+    rx[2] = 0x56;
+    rx[3] = 0x34;
+    rx[4] = 0x12;
+    rx[5] = 0xF0;
+    rx[6] = 0xDE;
+    rx[7] = 0xBC;
+    rx[8] = 0x9A;
+    rx[10] = 0x09;
+    rx[11] = 0x01;
+    rx[12] = 25;
+    rx[14] = 0x41;
+    rx[15] = 0x02;
+    rx[16] = 185;
+    check(tl.on_downlink(rx, 0, 0) == af::RxEvent::Data && tl.telemetry.connected, "afhds2a: downlink accepted");
+    check(tl.telemetry.vspeed_cms == 250 && tl.telemetry.has_vspeed, "afhds2a: vario 2.5 m/s");
+    check(tl.telemetry.alt_m == 185 && tl.telemetry.alt_dm == 1850, "afhds2a: altitude 185 m");
+
+    rx[1] = 0x00;
+    check(tl.on_downlink(rx, 0, 0) == af::RxEvent::Ignored, "afhds2a: foreign TX ID ignored");
+    rx[1] = 0x78;
+
+    af::Link tt{0x12345678};
+    tt.rx_id = 0x9ABCDEF0;
+    af::Frame rx2 = rx;
+    rx2[10] = 0x01;
+    rx2[11] = 0x01;
+    rx2[12] = 0xEE;
+    rx2[13] = 0x02;
+    rx2[14] = 0x02;
+    rx2[15] = 0x02;
+    rx2[16] = 0x9A;
+    rx2[17] = 0x10;
+    tt.on_downlink(rx2, 0, 7500);
+    check(tt.telemetry.temp_c_x10 == 350 && tt.telemetry.last_temp_ms == 7500, "afhds2a: temperature 35.0 C");
+    check(tt.telemetry.rpm == 4250 && tt.telemetry.last_rpm_ms == 7500, "afhds2a: RPM 4250");
+
+    af::Frame req = rx;
+    req[9] = 0xFD;
+    check(tt.on_downlink(req, 0, 0) == af::RxEvent::RequestFailsafe && tt.next == af::PacketKind::Failsafe,
+          "afhds2a: failsafe request queues failsafe packet");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -1617,6 +1765,7 @@ int main() {
     mixer_menu_test();
     aux_menu_test();
     radio_setup_test();
+    afhds2a_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }
