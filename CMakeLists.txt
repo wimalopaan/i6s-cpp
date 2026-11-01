@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(i6s_cpp LANGUAGES CXX C ASM)
+project(i6s_cpp VERSION 0.27.0 LANGUAGES CXX C ASM)
 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,6 +9,23 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(FERROX_BUILD_TESTS "Build host-side logic tests" ON)
 
 if(CMAKE_CROSSCOMPILING)
+    # Short commit hash for the system info screen, as the Rust build.rs does. The reflog changes on every commit, so
+    # re-configuring picks up the new hash.
+    execute_process(
+        COMMAND git rev-parse --short HEAD
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE FERROX_GIT_HASH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE FERROX_GIT_RESULT
+    )
+    if(NOT FERROX_GIT_RESULT EQUAL 0 OR FERROX_GIT_HASH STREQUAL "")
+        set(FERROX_GIT_HASH "unknown")
+    endif()
+    if(EXISTS ${CMAKE_SOURCE_DIR}/.git/logs/HEAD)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/.git/logs/HEAD)
+    endif()
+
     set(FERROX_SOURCES
         src/main.cpp
         src/isr.cpp
@@ -17,21 +34,26 @@ if(CMAKE_CROSSCOMPILING)
     )
 
     add_executable(i6s_fw ${FERROX_SOURCES})
+    # The assembler gets no optimisation or NDEBUG flags from the MinSizeRel defaults; clang warns that they are unused.
+    set(CMAKE_ASM_FLAGS_MINSIZEREL "")
     target_include_directories(i6s_fw PRIVATE
         src
         third_party/cmsis/Core
         third_party/cmsis/Device
     )
-    target_compile_definitions(i6s_fw PRIVATE STM32F072xB)
+    # C++-only flags: the assembler step would otherwise warn about them as unused.
+    target_compile_definitions(i6s_fw PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:STM32F072xB>
+        "$<$<COMPILE_LANGUAGE:CXX>:FERROX_FW_VERSION=\"${PROJECT_VERSION}\";FERROX_GIT_HASH=\"${FERROX_GIT_HASH}\">")
     target_compile_options(i6s_fw PRIVATE
-        -fno-exceptions
-        -fno-rtti
-        -fno-threadsafe-statics
-        -fno-use-cxa-atexit
-        -ffunction-sections
-        -fdata-sections
-        -Wall
-        -Wextra
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-threadsafe-statics>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-use-cxa-atexit>
+        $<$<COMPILE_LANGUAGE:CXX>:-ffunction-sections>
+        $<$<COMPILE_LANGUAGE:CXX>:-fdata-sections>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
     )
     target_link_options(i6s_fw PRIVATE
         -T${CMAKE_SOURCE_DIR}/linker/stm32f072xb.ld

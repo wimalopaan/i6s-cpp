@@ -16,6 +16,7 @@
 #include "ferrox/logic/power.hpp"
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
+#include "ferrox/logic/sysinfo.hpp"
 #include "ferrox/logic/widgets.hpp"
 
 namespace ferrox::logic::menu {
@@ -111,6 +112,7 @@ struct Live {
     Switches switches{};  // digital switches, SE and SF on page 2
     storage::EepromStatus eeprom{};
     std::string_view mcu_name{};
+    sysinfo::Build build{};
 };
 
 enum class Action : uint8_t {
@@ -1640,12 +1642,17 @@ constexpr void render_diag(Framebuffer& fb, const State& s, const Live& live, co
     widgets::draw_footer(fb, "[UP/DN/OK] Page  [ESC] Back");
 }
 
-constexpr void render_system(Framebuffer& fb, std::string_view mcu_name) {
+constexpr void render_system(Framebuffer& fb, const Live& live) {
     widgets::draw_header(fb, "SYSTEM INFORMATION");
     fb.draw_str_4x6(Point{4, 14}, "MCU:", false);
-    fb.draw_str_4x6(Point{48, 14}, mcu_name, false);
-    fb.draw_str_4x6(Point{4, 22}, "Flash: 128KB | SRAM: 16KB", false);
-    fb.draw_str_4x6(Point{4, 30}, "Profiles: 20 Models (16KB)", false);
+    fb.draw_str_4x6(Point{48, 14}, live.mcu_name, false);
+    fb.draw_str_4x6(Point{4, 22}, "Firmware:", false);
+    const format::Text<sysinfo::kFirmwareLineMax> firmware = sysinfo::firmware_line(live.build);
+    fb.draw_str_4x6(Point{48, 22}, firmware.view(), false);
+    fb.draw_str_4x6(Point{4, 30}, "Flash: 128KB | SRAM: 16KB", false);
+    const format::Text<sysinfo::kStorageLineMax> storage = sysinfo::storage_line(live.eeprom);
+    fb.draw_str_4x6(Point{4, 38}, storage.view(), false);
+    fb.draw_str_4x6(Point{4, 46}, "Profiles: 20 Models (16KB)", false);
     widgets::draw_footer(fb, "[ESC] Back");
 }
 
@@ -1791,7 +1798,7 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;
         case Screen::ChannelMonitor: render_monitor(fb, s, live, st.active_model); break;
         case Screen::DiagAnalog: render_diag(fb, s, live, st.radio); break;
-        case Screen::SystemInfo: render_system(fb, live.mcu_name); break;
+        case Screen::SystemInfo: render_system(fb, live); break;
         case Screen::WingMixer: render_wing_mixer(fb, s, st.active_model); break;
         case Screen::MixerLine: render_mixer_line(fb, s, st.active_model); break;
         case Screen::GlobalVars: render_global_vars(fb, s, st.active_model); break;

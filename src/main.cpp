@@ -26,6 +26,7 @@
 #include "ferrox/logic/power.hpp"
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
+#include "ferrox/logic/sysinfo.hpp"
 #include "ferrox/logic/flight_timer.hpp"
 #include "ferrox/logic/trim.hpp"
 #include "ferrox/time/systick.hpp"
@@ -71,6 +72,9 @@ ferrox::logic::menu::ModelNames g_model_names{};
 
 // EEPROM probe and boot-read result for diagnostics page 4; write_err is refreshed at render time.
 ferrox::logic::storage::EepromStatus g_eeprom{};
+
+// Version and git hash for the system info screen, passed in by CMake.
+constexpr ferrox::logic::sysinfo::Build kBuild{{FERROX_FW_VERSION}, {FERROX_GIT_HASH}};
 
 // Buzzer playback logic and the PWM output that follows it.
 ferrox::logic::buzzer::Player g_buzzer{};
@@ -474,7 +478,7 @@ int main() {
                 eeprom.write_err = hw::I2c2Eeprom::write_failed();
                 logic::menu::render(g_fb, menu_state, g_model_names, g_storage,
                                     logic::menu::Live{channels, input.raw, input.switches, eeprom,
-                                                      chip::kProfile.name});
+                                                      chip::kProfile.name, kBuild});
             }
             hw::lcd::flush(g_fb);
             last_draw_ms = now;

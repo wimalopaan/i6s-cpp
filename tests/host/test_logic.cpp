@@ -335,6 +335,9 @@ static_assert(logic::mixer::apply_dr_expo(1000, 100, 50) == 1000);
 static_assert(logic::mixer::apply_dr_expo(-1000, 100, -50) == -1000);
 static_assert(logic::trim::apply(1500, 10) == 1540);
 static_assert(logic::trim::apply(990, -25) == logic::kChannelMinUs);
+static_assert(logic::sysinfo::firmware_line(logic::sysinfo::Build{{"0.27.0"}, {"unknown"}}).view() ==
+              "v0.27.0 (unknown)");
+static_assert(logic::sysinfo::storage_line(logic::storage::EepromStatus{}).view() == "Storage:  None (No EEPROM)");
 
 void mixer_test() {
     namespace mx = logic::mixer;
@@ -1150,6 +1153,37 @@ void menu_test() {
           "EEPROM read failure status");
     check(mn::eeprom_state_label(logic::storage::EepromStatus{0x50, true, true, true}) == "STATUS: WRITE ERR (FAIL)",
           "EEPROM write error takes precedence");
+
+    // System info Firmware and Storage rows, as in Rust diag.rs update_system_info.
+    const logic::sysinfo::Build build{{"0.27.0"}, {"abc1234"}};
+    check(logic::sysinfo::firmware_line(build).view() == "v0.27.0 (abc1234)", "firmware row");
+    check(logic::sysinfo::storage_line(logic::storage::EepromStatus{0x50, true, true, false}).view() ==
+              "Storage:  I2C2 @ 0x50 (OK)",
+          "storage row when healthy");
+    check(logic::sysinfo::storage_line(logic::storage::EepromStatus{0x5A, true, false, false}).view() ==
+              "Storage:  I2C2 @ 0x5A (ERR)",
+          "storage row after a failed boot read");
+    check(logic::sysinfo::storage_line(logic::storage::EepromStatus{0x50, true, true, true}).view() ==
+              "Storage:  I2C2 @ 0x50 (ERR)",
+          "storage row after a failed write");
+    check(logic::sysinfo::storage_line(logic::storage::EepromStatus{}).view() == "Storage:  None (No EEPROM)",
+          "storage row when no EEPROM answers");
+    check(logic::sysinfo::storage_line(logic::storage::EepromStatus{0x50, true, true, true}).len == 27,
+          "longest storage row fits its buffer");
+    mn::State sysst{};
+    sysst.screen = Screen::SystemInfo;
+    logic::display::Framebuffer sysfb{};
+    mn::Live syslive{};
+    syslive.mcu_name = "STM32F072VB";
+    syslive.build = build;
+    syslive.eeprom = logic::storage::EepromStatus{0x50, true, true, false};
+    mn::render(sysfb, sysst, mn::ModelNames{}, logic::storage::default_storage(), syslive);
+    const int detected_pixels = lit_pixels(sysfb);
+    syslive.eeprom = logic::storage::EepromStatus{};
+    sysfb.clear();
+    mn::render(sysfb, sysst, mn::ModelNames{}, logic::storage::default_storage(), syslive);
+    check(detected_pixels > 0 && lit_pixels(sysfb) > 0 && detected_pixels != lit_pixels(sysfb),
+          "system info must draw the storage row from the EEPROM status");
 
     // Pages 2-4 must render and differ from each other.
     logic::display::Framebuffer ext{};
