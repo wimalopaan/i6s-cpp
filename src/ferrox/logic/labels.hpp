@@ -38,6 +38,11 @@ inline constexpr std::array<std::string_view, 18> kChannelNames{
     "CH13",      "CH14",      "CH15",      "CH16",      "CH17",      "CH18",
 };
 
+// Dual rate switch codes: 0 = always high rate, 1..6 = SA..SF.
+inline constexpr std::array<std::string_view, 7> kDrSwitchNames{"None", "SA", "SB", "SC", "SD", "SE", "SF"};
+
+inline constexpr std::array<std::string_view, 3> kAxisNames{"Roll", "Pitch", "Yaw"};
+
 // Source names indexed by the aux channel source code (0 = None).
 inline constexpr std::array<std::string_view, 46> kSourceNames{
     "None", "Roll", "Pitch", "Thr", "Yaw", "VRA", "VRB", "SA", "SB", "SC", "SD", "MAX", "CH1",

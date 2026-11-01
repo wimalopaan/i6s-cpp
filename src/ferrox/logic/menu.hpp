@@ -51,8 +51,19 @@ inline constexpr uint8_t kArmSwitchCount = 23;
 inline constexpr uint16_t kTimerStepSecs = 30;
 inline constexpr uint16_t kTimerMaxSecs = 3600;
 
-enum class Screen : uint8_t { Closed, Main, ModelSelect, ModelSetup, ChannelReverse, ChannelMonitor, DiagAnalog, SystemInfo };
+enum class Screen : uint8_t {
+    Closed,
+    Main,
+    ModelSelect,
+    ModelSetup,
+    DualRate,
+    ChannelReverse,
+    ChannelMonitor,
+    DiagAnalog,
+    SystemInfo,
+};
 
+inline constexpr std::size_t kItemDualRate = 2;
 inline constexpr std::size_t kItemChannelReverse = 6;
 inline constexpr std::size_t kItemChannelMonitor = 8;
 inline constexpr std::size_t kItemCalibration = 9;
@@ -107,7 +118,9 @@ struct State {
     ListPos main{};
     ListPos models{};
     ListPos setup{};
+    ListPos dual_rate{};
     ListPos reverse{};
+    uint8_t axis{0};  // dual rate axis: 0 Roll, 1 Pitch, 2 Yaw
     uint8_t page{0};  // page of the channel monitor or analog diagnostics
     bool editing{false};
     uint8_t name_cursor{0};
@@ -221,6 +234,12 @@ constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
             s.setup = ListPos{};
             s.editing = false;
             s.name_cursor = 0;
+        }
+        if (s.main.selected == kItemDualRate) {
+            s.screen = Screen::DualRate;
+            s.dual_rate = ListPos{};
+            s.axis = 0;
+            s.editing = false;
         }
         if (s.main.selected == kItemChannelReverse) {
             s.screen = Screen::ChannelReverse;
@@ -344,6 +363,95 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m) {
 }
 
 // Advances the menu state for one tick. `st` is edited in place; the caller persists it when told to.
+inline constexpr std::size_t kDrFields = 6;
+inline constexpr std::array<std::string_view, kDrFields> kDrLabels{
+    "Switch:", "Channel:", "Hi Rate:", "Lo Rate:", "Hi Expo:", "Lo Expo:",
+};
+
+// Mirrors the firmware rules: SA..SD need a 2/3-position or instant-trim input, SE/SF need the external switch board.
+constexpr bool is_dr_switch_available(uint8_t sw, const storage::RadioConfig& r) {
+    if (sw == 0) {
+        return true;
+    }
+    if (sw <= 4) {
+        const input::AdcMode mode = input::resolve_mode(sw - 1u, r.adc_modes[sw - 1u]);
+        return mode == input::AdcMode::TwoPos || mode == input::AdcMode::ThreePos ||
+               mode == input::AdcMode::InstantTrim;
+    }
+    if (sw <= 6) {
+        return r.ext_switches != 0;
+    }
+    return false;
+}
+
+// Next (down = false) or previous (down = true) available switch code, wrapping over 0..6.
+constexpr uint8_t step_dr_switch(const storage::RadioConfig& r, uint8_t cur, bool down) {
+    constexpr uint8_t kCount = 7;
+    for (uint8_t i = 1; i < kCount; ++i) {
+        const auto cand = static_cast<uint8_t>(down ? (cur + kCount - i) % kCount : (cur + i) % kCount);
+        if (is_dr_switch_available(cand, r)) {
+            return cand;
+        }
+    }
+    return cur;
+}
+
+// One repeat step up or down that stays inside [min, max]. Values off the step grid are not snapped.
+template <typename T>
+constexpr void step_clamped(T& v, int min, int max, int step, bool up, bool down) {
+    const int cur = v;
+    if (up && cur + step <= max) {
+        v = static_cast<T>(cur + step);
+    } else if (down && cur - step >= min) {
+        v = static_cast<T>(cur - step);
+    }
+}
+
+constexpr Event update_dual_rate(State& s, const Nav& n, storage::ModelConfig& m, const storage::RadioConfig& r) {
+    if (n.cancel) {
+        if (s.editing) {
+            s.editing = false;
+            return {};
+        }
+        s.screen = Screen::Main;
+        return {Action::SaveActiveModel, 0};
+    }
+    if (!s.editing) {
+        if (n.up != n.down) {
+            step_list(s.dual_rate, kDrFields, kListVisible, n.down);
+        }
+        if (n.ok) {
+            s.editing = true;
+        }
+        return {};
+    }
+
+    const std::size_t axis = s.axis;
+    switch (s.dual_rate.selected) {
+        case 0:
+            if (n.up) {
+                m.dr_switch = step_dr_switch(r, m.dr_switch, false);
+            } else if (n.down) {
+                m.dr_switch = step_dr_switch(r, m.dr_switch, true);
+            }
+            break;
+        case 1:
+            if (n.up || n.down) {
+                s.axis = static_cast<uint8_t>((s.axis + 1) % 3);
+            }
+            break;
+        case 2: step_clamped(m.dr_high[axis], 50, 100, 5, n.up, n.down); break;
+        case 3: step_clamped(m.dr_low[axis], 30, 100, 5, n.up, n.down); break;
+        case 4: step_clamped(m.expo_high[axis], -100, 100, 5, n.up, n.down); break;
+        case 5: step_clamped(m.expo_low[axis], -100, 100, 5, n.up, n.down); break;
+        default: break;
+    }
+    if (n.ok) {
+        s.editing = false;
+    }
+    return {};
+}
+
 constexpr Event update_channel_reverse(State& s, const Nav& n, storage::ModelConfig& m) {
     if (n.up != n.down) {
         step_list(s.reverse, kNumChannels, kListVisible, n.down);
@@ -418,6 +526,7 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
         case Screen::Main: return update_main(s, n, st.radio.active_model);
         case Screen::ModelSelect: return update_models(s, n);
         case Screen::ModelSetup: return update_setup(s, n, st.active_model);
+        case Screen::DualRate: return update_dual_rate(s, n, st.active_model, st.radio);
         case Screen::ChannelReverse: return update_channel_reverse(s, n, st.active_model);
         case Screen::ChannelMonitor: return update_monitor(s, n);
         case Screen::DiagAnalog: return update_diag(s, n);
@@ -583,6 +692,40 @@ constexpr std::array<std::array<std::string_view, 6>, kDiagPages> kDiagNames{{
 }};
 constexpr std::array<std::size_t, kDiagPages> kDiagRows{6, 5};
 
+// Copies a short label or number into a fixed buffer so the caller can hold the value for one row.
+constexpr format::Text<6> to_text(std::string_view sv) {
+    format::Text<6> t;
+    for (const char c : sv) {
+        t.push(c);
+    }
+    return t;
+}
+
+constexpr format::Text<6> dr_value(const storage::ModelConfig& m, std::size_t axis, std::size_t idx) {
+    switch (idx) {
+        case 0: return to_text(labels::kDrSwitchNames[std::min<std::size_t>(m.dr_switch, 6)]);
+        case 1: return to_text(labels::kAxisNames[axis]);
+        case 2: return to_text(format::format_int(m.dr_high[axis]).view());
+        case 3: return to_text(format::format_int(m.dr_low[axis]).view());
+        case 4: return to_text(format::format_int(m.expo_high[axis]).view());
+        default: return to_text(format::format_int(m.expo_low[axis]).view());
+    }
+}
+
+constexpr void render_dual_rate(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
+    widgets::draw_header(fb, "DUAL RATE / EXPO");
+    for (std::size_t slot = 0; slot < kListVisible; ++slot) {
+        const std::size_t idx = s.dual_rate.scroll + slot;
+        if (idx >= kDrFields) {
+            break;
+        }
+        const format::Text<6> value = dr_value(m, s.axis, idx);
+        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.dual_rate.selected, kDrLabels[idx], value.view(),
+                               60);
+    }
+    widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Value" : "[OK] Edit   [ESC] Exit");
+}
+
 constexpr void render_channel_reverse(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
     widgets::draw_header(fb, "CHANNEL REVERSE");
     for (std::size_t slot = 0; slot < kListVisible; ++slot) {
@@ -639,6 +782,7 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::Main: render_main(fb, s); break;
         case Screen::ModelSelect: render_models(fb, s, names, st); break;
         case Screen::ModelSetup: render_setup(fb, s, st.active_model); break;
+        case Screen::DualRate: render_dual_rate(fb, s, st.active_model); break;
         case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;
         case Screen::ChannelMonitor: render_monitor(fb, s, live, st.active_model); break;
         case Screen::DiagAnalog: render_diag(fb, s, live); break;

@@ -1178,6 +1178,98 @@ void calib_test() {
           "menu: Calibration closes the menu and requests the wizard");
 }
 
+void dual_rate_test() {
+    namespace mn = logic::menu;
+    using mn::Action;
+    using mn::Event;
+    using mn::Screen;
+
+    logic::storage::RadioStorage st = logic::storage::default_storage();
+    st.radio.ext_switches = 0;
+    st.radio.adc_modes = {3, 3, 3, 3, 0, 0, 0, 0, 0, 0};  // SixPos on SA..SD: not usable for dual rate
+    uint8_t two_pos_code = 0;
+    for (unsigned v = 0; v < 256; ++v) {
+        if (logic::input::resolve_mode(0, static_cast<uint8_t>(v)) == logic::input::AdcMode::TwoPos) {
+            two_pos_code = static_cast<uint8_t>(v);
+            break;
+        }
+    }
+    check(!mn::is_dr_switch_available(1, st.radio), "dr: SA must be unavailable on a default input");
+    check(mn::is_dr_switch_available(0, st.radio), "dr: switch 0 is always available");
+    st.radio.adc_modes[0] = two_pos_code;
+    check(mn::is_dr_switch_available(1, st.radio), "dr: SA must be available as a two-position input");
+    check(!mn::is_dr_switch_available(5, st.radio), "dr: SE needs the external switch board");
+    st.radio.ext_switches = 1;
+    check(mn::is_dr_switch_available(6, st.radio), "dr: SF available with the external board");
+    check(mn::step_dr_switch(st.radio, 0, true) == 6, "dr: previous from 0 wraps to SF");
+    st.radio.ext_switches = 0;
+    check(mn::step_dr_switch(st.radio, 0, false) == 1, "dr: next from 0 skips unavailable SE/SF");
+    check(mn::step_dr_switch(st.radio, 0, true) == 1, "dr: previous from 0 skips unavailable SE/SF");
+
+    mn::State ms{};
+    mn::open(ms);
+    ms.main.selected = mn::kItemDualRate;
+    mn::update(ms, mn::Input{0, 0, 0}, st);
+    auto tap = [&](uint16_t key, uint32_t now) {
+        const Event e = mn::update(ms, mn::Input{key, key, now}, st);
+        mn::update(ms, mn::Input{0, 0, now + 1}, st);
+        return e;
+    };
+
+    tap(mn::kKeyOk, 10);
+    check(ms.screen == Screen::DualRate, "dr: Dual Rate main item must open the screen");
+    tap(mn::kKeyOk, 20);
+    check(ms.editing, "dr: OK must start editing");
+    tap(mn::kKeyOk, 30);
+    check(!ms.editing, "dr: OK must leave edit mode");
+    tap(mn::kKeyDown, 40);
+    tap(mn::kKeyDown, 50);
+    tap(mn::kKeyOk, 60);
+    tap(mn::kKeyUp, 70);
+    check(st.active_model.dr_high[0] == 100, "dr: Hi Rate must clamp at 100");
+    tap(mn::kKeyDown, 80);
+    check(st.active_model.dr_high[0] == 95, "dr: Down must step Hi Rate by 5");
+    tap(mn::kKeyOk, 90);
+    check(!ms.editing && ms.dual_rate.selected == 2, "dr: Hi Rate row stays selected after editing");
+
+    tap(mn::kKeyUp, 100);
+    tap(mn::kKeyOk, 110);
+    tap(mn::kKeyDown, 120);
+    check(ms.axis == 1, "dr: axis row must toggle to Pitch");
+    tap(mn::kKeyOk, 130);
+    tap(mn::kKeyDown, 140);
+    tap(mn::kKeyOk, 150);
+    tap(mn::kKeyDown, 160);
+    tap(mn::kKeyDown, 170);
+    check(st.active_model.dr_high[1] == 90 && st.active_model.dr_high[0] == 95,
+          "dr: edits must apply to the selected axis only");
+    tap(mn::kKeyOk, 180);
+    tap(mn::kKeyDown, 190);
+    tap(mn::kKeyDown, 200);
+    check(ms.dual_rate.selected == 4, "dr: navigation must reach Hi Expo");
+
+    tap(mn::kKeyOk, 210);
+    for (uint32_t t = 220; t < 500; t += 10) {
+        tap(mn::kKeyDown, t);
+    }
+    check(st.active_model.expo_high[1] == -100, "dr: Hi Expo must clamp at -100");
+
+    const Event cancel_edit = tap(mn::kKeyCancel, 510);
+    check(cancel_edit.action == Action::None && !ms.editing && ms.screen == Screen::DualRate,
+          "dr: cancel while editing must only leave edit mode");
+    const Event saved = tap(mn::kKeyCancel, 520);
+    check(saved.action == Action::SaveActiveModel && ms.screen == Screen::Main, "dr: cancel must save and return");
+
+    logic::display::Framebuffer fb{};
+    fb.clear();
+    mn::ModelNames names{};
+    mn::State view{};
+    mn::open(view);
+    view.screen = Screen::DualRate;
+    mn::render(fb, view, names, st, mn::Live{});
+    check(lit_pixels(fb) > 0, "dr: dual rate screen must draw");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -1190,6 +1282,7 @@ int main() {
     dashboard_test();
     menu_test();
     calib_test();
+    dual_rate_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

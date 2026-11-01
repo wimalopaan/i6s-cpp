@@ -51,6 +51,16 @@ constexpr char hex_digit(unsigned v) { return "0123456789ABCDEF"[v & 0x0Fu]; }
 
 }  // namespace detail
 
+/// Signed integer without padding, e.g. "-100", "35", "0".
+constexpr Text<4> format_int(int val) {
+    Text<4> t;
+    if (val < 0) {
+        t.push('-');
+    }
+    detail::push_uint(t, static_cast<unsigned>(std::abs(val)));
+    return t;
+}
+
 /// Percent of a stick value (-1000..+1000) as "+100%", "+ 50%", "   0%", "- 10%" (always 5 characters).
 constexpr Text<5> format_percent(int16_t val) {
     const int pct = val / 10;
