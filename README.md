@@ -43,7 +43,9 @@ AFHDS 2A deviations: the Rust triple buffer is replaced by ISR-safe shared state
 
 Wing/mixer deviations: the pot and switch auto-select while moving a control (Rust `pot_change` and `sw_change`) is not ported. Rust returns to the wrong row from a mix line when Diff is shown; the port returns to the mix row it came from.
 
-Not yet ported: diagnostics pages 2–4 and system info firmware/storage lines, model setup rows copy, vario, telemetry, protocol and reset, bind, buzzer (including calibration chimes), USB, trainer, trim key state machine and trim footers, flight timer state machine and arm chimes, custom telemetry slots, CRSF telemetry on P5.
+Vario (pure logic, host-tested in `vario_test()`): `logic/vario.hpp` ports Rust `vario.rs`. It covers the vertical speed filter from native telemetry (3:1 EMA) or from altitude changes (dt ≥ 80 ms, decay after 500 ms), the disconnect reset, the activation switch and motor lockout above 1100 µs, the climb and sink deadbands, the climb pitch and cadence, and the sink modes (Mute, Pulse, Continuous). Not wired yet: the buzzer output and the VarioSetup menu are not ported. Not tested on hardware.
+
+Not yet ported: diagnostics pages 2–4 and system info firmware/storage lines, model setup rows copy, telemetry, protocol and reset, bind, buzzer (including calibration chimes), USB, trainer, trim key state machine and trim footers, flight timer state machine and arm chimes, custom telemetry slots, CRSF telemetry on P5.
 
 
 ## Build

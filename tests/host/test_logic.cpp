@@ -24,6 +24,7 @@
 #include "ferrox/logic/storage.hpp"
 #include "ferrox/logic/switches.hpp"
 #include "ferrox/logic/trim.hpp"
+#include "ferrox/logic/vario.hpp"
 #include "ferrox/logic/widgets.hpp"
 #include "ferrox/util/ring.hpp"
 
@@ -1789,6 +1790,239 @@ void afhds2a_test() {
           "afhds2a: failsafe request queues failsafe packet");
 }
 
+void vario_test() {
+    namespace vr = logic::vario;
+
+    const vr::Config climb_cfg{.switch_index = 1,
+                               .climb_deadband = {2},
+                               .sink_deadband = {5},
+                               .sink_mode = vr::SinkMode::Pulse,
+                               .motor_mute = true};
+
+    // Weak lift +50 cm/s: 1000..1300 Hz, pulse >= 200 ms.
+    vr::State v{};
+    vr::Tone tone_weak = v.update({.now = {1000},
+                                   .alt_m = {100},
+                                   .alt_dm = {1000},
+                                   .vspeed = {50},
+                                   .has_native_vspeed = true,
+                                   .telem_connected = true,
+                                   .switch_active = true,
+                                   .throttle = {1000}},
+                                  climb_cfg);
+    check(!tone_weak.is_silent(), "vario: weak lift audible");
+    check(tone_weak.freq_hz >= 1000 && tone_weak.freq_hz <= 1300, "vario: weak lift pitch 1000..1300 Hz");
+    check(tone_weak.pulse_ms >= 200, "vario: weak lift pulse >= 200 ms");
+
+    // Strong lift converges to +500 cm/s: higher pitch, shorter pulses.
+    vr::Tone tone_strong = tone_weak;
+    for (uint32_t i = 1; i <= 16; ++i) {
+        tone_strong = v.update({.now = {1000 + i * 50},
+                                .alt_m = {static_cast<int16_t>(100 + i)},
+                                .alt_dm = {static_cast<int16_t>(1000 + i * 10)},
+                                .vspeed = {500},
+                                .has_native_vspeed = true,
+                                .telem_connected = true,
+                                .switch_active = true,
+                                .throttle = {1000}},
+                               climb_cfg);
+    }
+    check(!tone_strong.is_silent(), "vario: strong lift audible");
+    check(tone_strong.freq_hz >= 2500, "vario: strong lift pitch >= 2500 Hz");
+    check(tone_strong.pulse_ms <= 80, "vario: strong lift pulse <= 80 ms");
+    check(tone_strong.freq_hz > tone_weak.freq_hz && tone_strong.pulse_ms < tone_weak.pulse_ms,
+          "vario: strong lift higher and faster than weak");
+
+    // Deadband: +10 cm/s (climb threshold 20) and -30 cm/s (sink threshold 50) are silent.
+    vr::State db{};
+    check(db.update({.now = {1000},
+                     .alt_m = {100},
+                     .alt_dm = {1000},
+                     .vspeed = {10},
+                     .has_native_vspeed = true,
+                     .telem_connected = true,
+                     .switch_active = true,
+                     .throttle = {1000}},
+                    climb_cfg)
+                  .is_silent(),
+          "vario: level flight inside climb deadband is silent");
+    check(db.update({.now = {1100},
+                     .alt_m = {100},
+                     .alt_dm = {1000},
+                     .vspeed = {-30},
+                     .has_native_vspeed = true,
+                     .telem_connected = true,
+                     .switch_active = true,
+                     .throttle = {1000}},
+                    climb_cfg)
+                  .is_silent(),
+          "vario: mild sink inside sink deadband is silent");
+
+    // Heavy sink: Mute is silent, Pulse and Continuous are audible with their cadence.
+    vr::Config sink_cfg = climb_cfg;
+    sink_cfg.sink_mode = vr::SinkMode::Mute;
+    vr::State sv{};
+    check(sv.update({.now = {1000},
+                     .alt_m = {100},
+                     .alt_dm = {1000},
+                     .vspeed = {-150},
+                     .has_native_vspeed = true,
+                     .telem_connected = true,
+                     .switch_active = true,
+                     .throttle = {1000}},
+                    sink_cfg)
+                  .is_silent(),
+          "vario: heavy sink in Mute mode is silent");
+
+    sink_cfg.sink_mode = vr::SinkMode::Pulse;
+    const vr::Tone tone_pulse = sv.update({.now = {1100},
+                                           .alt_m = {95},
+                                           .alt_dm = {950},
+                                           .vspeed = {-150},
+                                           .has_native_vspeed = true,
+                                           .telem_connected = true,
+                                           .switch_active = true,
+                                           .throttle = {1000}},
+                                          sink_cfg);
+    check(!tone_pulse.is_silent(), "vario: heavy sink in Pulse mode audible");
+    check(tone_pulse.pulse_ms == 160 && tone_pulse.pause_ms == 360, "vario: sink pulse cadence 160/360 ms");
+    check(tone_pulse.freq_hz <= 450, "vario: sink pitch at or below 450 Hz");
+
+    sink_cfg.sink_mode = vr::SinkMode::Continuous;
+    const vr::Tone tone_cont = sv.update({.now = {1200},
+                                          .alt_m = {90},
+                                          .alt_dm = {900},
+                                          .vspeed = {-150},
+                                          .has_native_vspeed = true,
+                                          .telem_connected = true,
+                                          .switch_active = true,
+                                          .throttle = {1000}},
+                                         sink_cfg);
+    check(!tone_cont.is_silent() && tone_cont.pause_ms == 0, "vario: continuous sink has no pause");
+    check(tone_cont.pulse_ms == 1000, "vario: continuous sink pulse 1000 ms");
+
+    // Motor lockout above 1100 us; gliding (1000 us) stays audible.
+    vr::State th{};
+    check(th.update({.now = {1000},
+                     .alt_m = {100},
+                     .alt_dm = {1000},
+                     .vspeed = {300},
+                     .has_native_vspeed = true,
+                     .telem_connected = true,
+                     .switch_active = true,
+                     .throttle = {1500}},
+                    climb_cfg)
+                  .is_silent(),
+          "vario: motor climb muted");
+    check(!th.update({.now = {1100},
+                      .alt_m = {105},
+                      .alt_dm = {1050},
+                      .vspeed = {300},
+                      .has_native_vspeed = true,
+                      .telem_connected = true,
+                      .switch_active = true,
+                      .throttle = {1000}},
+                     climb_cfg)
+                   .is_silent(),
+          "vario: gliding climb audible");
+
+    // Derived vspeed from altitude: +20 dm in 1000 ms gives more than 40 cm/s after filtering.
+    vr::Config motor_cfg = climb_cfg;
+    motor_cfg.motor_mute = false;
+    vr::State dv{};
+    dv.update({.now = {0},
+               .alt_m = {100},
+               .alt_dm = {1000},
+               .vspeed = {0},
+               .has_native_vspeed = false,
+               .telem_connected = true,
+               .switch_active = true,
+               .throttle = {1000}},
+              motor_cfg);
+    const vr::Tone tone_derived = dv.update({.now = {1000},
+                                             .alt_m = {102},
+                                             .alt_dm = {1020},
+                                             .vspeed = {0},
+                                             .has_native_vspeed = false,
+                                             .telem_connected = true,
+                                             .switch_active = true,
+                                             .throttle = {1000}},
+                                            motor_cfg);
+    check(!tone_derived.is_silent(), "vario: derived climb audible");
+    check(dv.vspeed.value > 40, "vario: derived vspeed above 40 cm/s");
+
+    // Native vspeed 200 cm/s decays toward 0 when the sensor reports level flight.
+    vr::State nv{};
+    nv.update({.now = {0},
+               .alt_m = {100},
+               .alt_dm = {1000},
+               .vspeed = {200},
+               .has_native_vspeed = true,
+               .telem_connected = true,
+               .switch_active = true,
+               .throttle = {1000}},
+              motor_cfg);
+    check(nv.vspeed.value == 200, "vario: native init takes first reading");
+    for (uint32_t i = 1; i <= 10; ++i) {
+        nv.update({.now = {i * 100},
+                   .alt_m = {100},
+                   .alt_dm = {1000},
+                   .vspeed = {0},
+                   .has_native_vspeed = true,
+                   .telem_connected = true,
+                   .switch_active = true,
+                   .throttle = {1000}},
+                  motor_cfg);
+    }
+    check(nv.vspeed.value < 15, "vario: native vspeed decays to near zero");
+    check(nv.update({.now = {1100},
+                     .alt_m = {100},
+                     .alt_dm = {1000},
+                     .vspeed = {0},
+                     .has_native_vspeed = true,
+                     .telem_connected = true,
+                     .switch_active = true,
+                     .throttle = {1000}},
+                    motor_cfg)
+                  .is_silent(),
+          "vario: decayed vspeed is silent");
+
+    // Disconnect resets state and is silent.
+    check(nv.update({.now = {1200},
+                     .alt_m = {100},
+                     .alt_dm = {1000},
+                     .vspeed = {300},
+                     .has_native_vspeed = true,
+                     .telem_connected = false,
+                     .switch_active = true,
+                     .throttle = {1000}},
+                    motor_cfg)
+                  .is_silent() &&
+              nv.vspeed.value == 0 && !nv.initialized,
+          "vario: disconnect resets state");
+
+    // Switch off is silent but still filters vspeed.
+    vr::State sw{};
+    check(sw.update({.now = {0},
+                     .alt_m = {100},
+                     .alt_dm = {1000},
+                     .vspeed = {300},
+                     .has_native_vspeed = true,
+                     .telem_connected = true,
+                     .switch_active = false,
+                     .throttle = {1000}},
+                    climb_cfg)
+                  .is_silent() &&
+              sw.vspeed.value == 300,
+          "vario: inactive switch is silent");
+
+    check(vr::sink_mode_from_u8(0) == vr::SinkMode::Mute && vr::sink_mode_from_u8(1) == vr::SinkMode::Pulse &&
+              vr::sink_mode_from_u8(2) == vr::SinkMode::Continuous && vr::sink_mode_from_u8(9) == vr::SinkMode::Mute,
+          "vario: sink mode from u8");
+    check(vr::kSilent.is_silent() && vr::Tone{1000, 100, 100} == vr::Tone{1000, 100, 100},
+          "vario: silent tone and tone equality");
+}
+
 static_assert(logic::a7105::crc_ok(0x00));
 static_assert(!logic::a7105::crc_ok(0x20));
 static_assert(logic::a7105::power_from_index(0) == 0x1F);
@@ -1926,6 +2160,7 @@ int main() {
     radio_setup_test();
     afhds2a_test();
     a7105_radio_test();
+    vario_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }
