@@ -63,10 +63,14 @@ enum class Screen : uint8_t {
     ChannelMonitor,
     DiagAnalog,
     SystemInfo,
+    WingMixer,
+    MixerLine,
+    GlobalVars,
 };
 
 inline constexpr std::size_t kItemDualRate = 2;
 inline constexpr std::size_t kItemThrottleCurve = 3;
+inline constexpr std::size_t kItemWingMixer = 4;
 inline constexpr std::size_t kItemChannelReverse = 6;
 inline constexpr std::size_t kItemChannelMonitor = 8;
 inline constexpr std::size_t kItemCalibration = 9;
@@ -123,6 +127,10 @@ struct State {
     ListPos setup{};
     ListPos dual_rate{};
     ListPos throttle_curve{};  // 0 Pts, 1 Smooth, 2.. curve points
+    ListPos wing{};
+    ListPos mix_line{};
+    ListPos gvars{};
+    uint8_t mix_idx{0};  // mix line shown by the line editor, 0..kNumMixLines-1
     ListPos reverse{};
     uint8_t axis{0};  // dual rate axis: 0 Roll, 1 Pitch, 2 Yaw
     uint8_t page{0};  // page of the channel monitor or analog diagnostics
@@ -248,6 +256,11 @@ constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
         if (s.main.selected == kItemThrottleCurve) {
             s.screen = Screen::ThrottleCurve;
             s.throttle_curve = ListPos{};
+            s.editing = false;
+        }
+        if (s.main.selected == kItemWingMixer) {
+            s.screen = Screen::WingMixer;
+            s.wing = ListPos{};
             s.editing = false;
         }
         if (s.main.selected == kItemChannelReverse) {
@@ -504,6 +517,303 @@ constexpr Event update_throttle_curve(State& s, const Nav& n, storage::ModelConf
     return {};
 }
 
+inline constexpr std::size_t kMixFields = 7;
+inline constexpr std::array<std::string_view, kMixFields> kMixLabels{
+    "Target:", "Source:", "Wt Src:", "Weight:", "Offset:", "Switch:", "Mode:",
+};
+inline constexpr std::array<std::string_view, 5> kGvarLabels{"GV1:", "GV2:", "GV3:", "GV4:", "GV5:"};
+
+constexpr input::AdcMode adc_mode_at(const storage::RadioConfig& r, std::size_t idx) {
+    return input::resolve_mode(idx, r.adc_modes[idx]);
+}
+
+constexpr bool is_two_or_three_pos(input::AdcMode mode) {
+    return mode == input::AdcMode::TwoPos || mode == input::AdcMode::ThreePos;
+}
+
+constexpr bool is_switch_input(input::AdcMode mode) {
+    return is_two_or_three_pos(mode) || mode == input::AdcMode::InstantTrim;
+}
+
+constexpr bool is_pot_input(input::AdcMode mode) {
+    return mode == input::AdcMode::Pot || mode == input::AdcMode::PotDetent;
+}
+
+// Channels 1..18 that drive an output: primary controls, flaperon CH6, assigned aux channels or mix targets.
+constexpr bool is_channel_configured(uint8_t ch, const storage::ModelConfig& m) {
+    if (ch == 0 || ch > 18) {
+        return false;
+    }
+    if (ch <= 4) {
+        return true;
+    }
+    if (m.wing_tail_mix == 3 && ch == 6) {
+        return true;
+    }
+    if (m.aux_channels[ch - 5u] != 0) {
+        return true;
+    }
+    for (const storage::MixLine& line : m.mixes) {
+        if (line.target_ch == ch) {
+            return true;
+        }
+    }
+    return false;
+}
+
+constexpr bool is_source_available(uint8_t src, const storage::RadioConfig& r, const storage::ModelConfig& m) {
+    const bool ext_adc = r.ext_adc != 0;
+    if (src <= 4) {
+        return true;  // None, Roll, Pitch, Thr, Yaw
+    }
+    if (src == 5) {
+        return is_pot_input(adc_mode_at(r, 4));  // VRA
+    }
+    if (src == 6) {
+        return is_pot_input(adc_mode_at(r, 5));  // VRB
+    }
+    if (src <= 10) {
+        return is_switch_input(adc_mode_at(r, src - 7u));  // SA..SD
+    }
+    if (src <= 15) {
+        return true;  // MAX, CH1..CH4
+    }
+    if (src <= 29) {
+        return is_channel_configured(static_cast<uint8_t>(src - 11), m);  // CH5..CH18
+    }
+    if (src == 30) {
+        return true;  // Thr+
+    }
+    if (src <= 32) {
+        return r.ext_switches != 0;  // SE, SF
+    }
+    if (src <= 34) {
+        return r.j4_sg_sh_en != 0;  // SG, SH
+    }
+    if (src == 35) {
+        return ext_adc && is_two_or_three_pos(adc_mode_at(r, 6));  // SWI
+    }
+    if (src == 36) {
+        return ext_adc && is_two_or_three_pos(adc_mode_at(r, 7));  // SWJ
+    }
+    if (src <= 40) {
+        return ext_adc && is_pot_input(adc_mode_at(r, src - 31u));  // VRC..VRF
+    }
+    return src <= 45;  // GV1..GV5
+}
+
+constexpr bool is_weight_src_available(uint8_t ws, const storage::ModelConfig& m) {
+    if (ws == 0) {
+        return true;  // Fixed
+    }
+    if (ws <= 18) {
+        return is_channel_configured(ws, m);
+    }
+    if (ws <= 36) {
+        return is_channel_configured(static_cast<uint8_t>(ws - 18), m);
+    }
+    return ws <= 41;  // GV1..GV5
+}
+
+constexpr bool is_switch_cond_available(uint8_t cond, const storage::RadioConfig& r) {
+    switch (cond) {
+        case 0: return true;
+        case 1:
+        case 2: return is_switch_input(adc_mode_at(r, 0));
+        case 3:
+        case 5: return is_switch_input(adc_mode_at(r, 1));
+        case 4: return adc_mode_at(r, 1) == input::AdcMode::ThreePos;
+        case 6:
+        case 8: return is_switch_input(adc_mode_at(r, 2));
+        case 7: return adc_mode_at(r, 2) == input::AdcMode::ThreePos;
+        case 9:
+        case 10: return is_switch_input(adc_mode_at(r, 3));
+        case 11:
+        case 12:
+        case 13:
+        case 14: return r.ext_switches != 0;
+        case 15:
+        case 16:
+        case 17:
+        case 18: return r.j4_sg_sh_en != 0;
+        case 19:
+        case 20: return r.ext_adc != 0 && is_two_or_three_pos(adc_mode_at(r, 6));
+        case 21:
+        case 22: return r.ext_adc != 0 && is_two_or_three_pos(adc_mode_at(r, 7));
+        default: return false;
+    }
+}
+
+// Next (down = false) or previous (down = true) code that passes `ok`, wrapping over 0..count-1. Returns cur if none does.
+template <typename Ok>
+constexpr uint8_t step_available(uint8_t cur, std::size_t count, bool down, Ok ok) {
+    for (std::size_t i = 1; i < count; ++i) {
+        const auto cand = static_cast<uint8_t>(down ? (cur + count - i) % count : (cur + i) % count);
+        if (ok(cand)) {
+            return cand;
+        }
+    }
+    return cur;
+}
+
+constexpr bool wing_has_diff(const storage::ModelConfig& m) {
+    return m.wing_tail_mix == 1 || m.wing_tail_mix == 3;
+}
+
+// Row of the "GVars" entry. The 32 mix lines follow it.
+constexpr std::size_t wing_gvars_row(const storage::ModelConfig& m) {
+    return wing_has_diff(m) ? 2 : 1;
+}
+
+constexpr std::size_t wing_row_count(const storage::ModelConfig& m) {
+    return wing_gvars_row(m) + 1 + storage::kNumMixLines;
+}
+
+constexpr Event update_wing_mixer(State& s, const Nav& n, storage::ModelConfig& m) {
+    const Event save{Action::SaveActiveModel, 0};
+    if (s.editing) {
+        if (n.cancel) {
+            s.editing = false;
+            return save;
+        }
+        step_clamped(m.template_diff, -100, 100, 5, n.up, n.down);
+        if (n.ok) {
+            s.editing = false;
+            return save;
+        }
+        return {};
+    }
+
+    if (n.cancel) {
+        s.screen = Screen::Main;
+        return save;
+    }
+    if (n.up != n.down) {
+        step_list(s.wing, wing_row_count(m), kListVisible, n.down);
+    }
+    if (!n.ok) {
+        return {};
+    }
+
+    const std::size_t sel = s.wing.selected;
+    const std::size_t gvars_row = wing_gvars_row(m);
+    if (sel == 0) {
+        m.wing_tail_mix = static_cast<uint8_t>((m.wing_tail_mix + 1) % 4);
+        return save;
+    }
+    if (wing_has_diff(m) && sel == 1) {
+        s.editing = true;
+    } else if (sel == gvars_row) {
+        s.screen = Screen::GlobalVars;
+        s.gvars = ListPos{};
+        s.editing = false;
+    } else {
+        s.mix_idx = static_cast<uint8_t>(sel - (gvars_row + 1));
+        s.mix_line = ListPos{};
+        s.editing = false;
+        s.screen = Screen::MixerLine;
+    }
+    return {};
+}
+
+constexpr Event update_mixer_line(State& s, const Nav& n, storage::ModelConfig& m, const storage::RadioConfig& r) {
+    storage::MixLine& mix = m.mixes[s.mix_idx];
+    if (!s.editing) {
+        if (n.cancel) {
+            // Return to the mix row this line came from. The line editor does not save; the Wing screen does.
+            const std::size_t row = wing_gvars_row(m) + 1u + s.mix_idx;
+            s.screen = Screen::WingMixer;
+            s.wing.selected = static_cast<uint8_t>(row);
+            s.wing.scroll = window_scroll(row, kListVisible);
+            return {};
+        }
+        if (n.up != n.down) {
+            step_list(s.mix_line, kMixFields, kListVisible, n.down);
+        }
+        if (n.ok) {
+            s.editing = true;
+        }
+        return {};
+    }
+
+    if (n.cancel) {
+        s.editing = false;
+        return {};
+    }
+    const bool up = n.up && !n.down;
+    const bool down = n.down && !n.up;
+    switch (s.mix_line.selected) {
+        case 0:
+            if (up) {
+                mix.target_ch = static_cast<uint8_t>((mix.target_ch + 1) % 19);
+            } else if (down) {
+                mix.target_ch = static_cast<uint8_t>(mix.target_ch == 0 ? 18 : mix.target_ch - 1);
+            }
+            break;
+        case 1:
+            if (up || down) {
+                mix.source = step_available(mix.source, labels::kSourceNames.size(), down,
+                                            [&](uint8_t c) { return is_source_available(c, r, m); });
+            }
+            break;
+        case 2:
+            if (up || down) {
+                mix.weight_src = step_available(mix.weight_src, labels::kWeightSrcNames.size(), down,
+                                                [&](uint8_t c) { return is_weight_src_available(c, m); });
+            }
+            break;
+        case 3: step_clamped(mix.weight, -100, 100, 5, n.up, n.down); break;
+        case 4: step_clamped(mix.offset, -100, 100, 5, n.up, n.down); break;
+        case 5:
+            if (up || down) {
+                mix.switch_sel = step_available(mix.switch_sel, labels::kSwitchCondNames.size(), down,
+                                                [&](uint8_t c) { return is_switch_cond_available(c, r); });
+            }
+            break;
+        case 6:
+            if (up) {
+                mix.mode = static_cast<uint8_t>((mix.mode + 1) % labels::kMixModeNames.size());
+            } else if (down) {
+                mix.mode = static_cast<uint8_t>(mix.mode == 0 ? labels::kMixModeNames.size() - 1 : mix.mode - 1);
+            }
+            break;
+        default: break;
+    }
+    if (n.ok) {
+        s.editing = false;
+        return {Action::SaveActiveModel, 0};
+    }
+    return {};
+}
+
+constexpr Event update_global_vars(State& s, const Nav& n, storage::ModelConfig& m) {
+    const Event save{Action::SaveActiveModel, 0};
+    if (s.editing) {
+        if (n.cancel) {
+            s.editing = false;
+            return save;
+        }
+        step_clamped(m.gvars[s.gvars.selected], -1000, 1000, 50, n.up, n.down);
+        if (n.ok) {
+            s.editing = false;
+            return save;
+        }
+        return {};
+    }
+
+    if (n.cancel) {
+        s.screen = Screen::Main;
+        return save;
+    }
+    if (n.up != n.down) {
+        step_list(s.gvars, m.gvars.size(), kListVisible, n.down);
+    }
+    if (n.ok) {
+        s.editing = true;
+    }
+    return {};
+}
+
 constexpr Event update_channel_reverse(State& s, const Nav& n, storage::ModelConfig& m) {
     if (n.up != n.down) {
         step_list(s.reverse, kNumChannels, kListVisible, n.down);
@@ -584,6 +894,9 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
         case Screen::ChannelMonitor: return update_monitor(s, n);
         case Screen::DiagAnalog: return update_diag(s, n);
         case Screen::SystemInfo: return update_system(s, n);
+        case Screen::WingMixer: return update_wing_mixer(s, n, st.active_model);
+        case Screen::MixerLine: return update_mixer_line(s, n, st.active_model, st.radio);
+        case Screen::GlobalVars: return update_global_vars(s, n, st.active_model);
         case Screen::Closed: break;
     }
     return {};
@@ -904,6 +1217,133 @@ constexpr void render_system(Framebuffer& fb, std::string_view mcu_name) {
     widgets::draw_footer(fb, "[ESC] Back");
 }
 
+// "+50%" with a forced sign, as the device shows Diff, Weight and Offset.
+constexpr format::Text<6> signed_percent(int v) {
+    format::Text<6> t;
+    t.push(v < 0 ? '-' : '+');
+    for (const char c : format::format_int(v < 0 ? -v : v).view()) {
+        t.push(c);
+    }
+    t.push('%');
+    return t;
+}
+
+template <std::size_t N>
+constexpr std::string_view name_at(const std::array<std::string_view, N>& names, std::size_t idx) {
+    return names[std::min(idx, N - 1)];
+}
+
+template <std::size_t N>
+constexpr format::Text<N> text_of(std::string_view sv) {
+    format::Text<N> t;
+    for (const char c : sv) {
+        t.push(c);
+    }
+    return t;
+}
+
+// "M01:" for mix line 0..31.
+constexpr format::Text<4> mix_label(std::size_t idx) {
+    const std::size_t num = idx + 1;
+    format::Text<4> t;
+    t.push('M');
+    t.push(static_cast<char>('0' + num / 10));
+    t.push(static_cast<char>('0' + num % 10));
+    t.push(':');
+    return t;
+}
+
+// "CH12" for a non-zero target channel.
+constexpr format::Text<4> target_text(uint8_t ch) {
+    format::Text<4> t;
+    t.push('C');
+    t.push('H');
+    format::detail::push_uint(t, static_cast<unsigned>(ch));
+    return t;
+}
+
+constexpr format::Text<11> mix_value(const storage::MixLine& mix, std::size_t idx) {
+    switch (idx) {
+        case 0:
+            return mix.target_ch == 0 ? text_of<11>("Disabled") : text_of<11>(target_text(mix.target_ch).view());
+        case 1: return text_of<11>(name_at(labels::kSourceNames, mix.source));
+        case 2: return text_of<11>(name_at(labels::kWeightSrcNames, mix.weight_src));
+        case 3: return text_of<11>(signed_percent(mix.weight).view());
+        case 4: return text_of<11>(signed_percent(mix.offset).view());
+        case 5: return text_of<11>(name_at(labels::kSwitchCondNames, mix.switch_sel));
+        default: return text_of<11>(name_at(labels::kMixModeNames, mix.mode));
+    }
+}
+
+constexpr void render_wing_mixer(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
+    widgets::draw_header(fb, "WING & MIXER");
+    const std::size_t gvars_row = wing_gvars_row(m);
+    const std::size_t rows = wing_row_count(m);
+    for (std::size_t slot = 0; slot < kListVisible; ++slot) {
+        const std::size_t idx = s.wing.scroll + slot;
+        if (idx >= rows) {
+            break;
+        }
+        const bool sel = idx == s.wing.selected;
+        const int row = static_cast<int>(slot);
+        const int y = 14 + row * 9;
+        if (idx == 0) {
+            widgets::draw_list_row(fb, row, sel, "Wing:", labels::kTemplateNames[std::min<std::size_t>(m.wing_tail_mix, 3)], 36);
+        } else if (wing_has_diff(m) && idx == 1) {
+            const format::Text<6> diff = signed_percent(m.template_diff);
+            widgets::draw_list_row(fb, row, sel, "Diff:", diff.view(), 36);
+        } else if (idx == gvars_row) {
+            widgets::draw_list_row(fb, row, sel, "GVars: [Edit GV1..5]", {}, 0);
+        } else {
+            const std::size_t mi = idx - (gvars_row + 1);
+            const storage::MixLine& mix = m.mixes[mi];
+            widgets::draw_list_row(fb, row, sel, mix_label(mi).view(), {}, 0);
+            if (mix.target_ch == 0) {
+                fb.draw_str_6x10(32, y, "[DISABLED]", sel);
+            } else {
+                fb.draw_str_6x10(30, y, target_text(mix.target_ch).view(), sel);
+                fb.draw_str_6x10(58, y, "<-", sel);
+                fb.draw_str_6x10(74, y, name_at(labels::kSourceNames, mix.source), sel);
+            }
+        }
+    }
+    widgets::draw_scrollbar(fb, static_cast<int>(s.wing.selected), static_cast<int>(rows), 14, 36);
+    widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Diff" : "[OK] Select   [ESC] Back");
+}
+
+constexpr void render_mixer_line(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
+    const storage::MixLine& mix = m.mixes[s.mix_idx];
+    const std::size_t num = static_cast<std::size_t>(s.mix_idx) + 1;
+    format::Text<11> title = text_of<11>("EDIT MIX ");
+    title.push(static_cast<char>('0' + num / 10));
+    title.push(static_cast<char>('0' + num % 10));
+    widgets::draw_header(fb, title.view());
+    for (std::size_t slot = 0; slot < kListVisible; ++slot) {
+        const std::size_t idx = s.mix_line.scroll + slot;
+        if (idx >= kMixFields) {
+            break;
+        }
+        const format::Text<11> value = mix_value(mix, idx);
+        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.mix_line.selected, kMixLabels[idx], value.view(), 56);
+    }
+    widgets::draw_scrollbar(fb, static_cast<int>(s.mix_line.selected), static_cast<int>(kMixFields), 14, 36);
+    widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Value" : "[OK] Edit   [ESC] Back");
+}
+
+constexpr void render_global_vars(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
+    widgets::draw_header(fb, "GLOBAL VARIABLES");
+    for (std::size_t slot = 0; slot < kListVisible; ++slot) {
+        const std::size_t idx = s.gvars.scroll + slot;
+        if (idx >= m.gvars.size()) {
+            break;
+        }
+        const format::Text<5> value = format::format_percent(m.gvars[idx]);
+        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.gvars.selected, kGvarLabels[idx], value.view(), 56);
+    }
+    widgets::draw_scrollbar(fb, static_cast<int>(s.gvars.selected), static_cast<int>(m.gvars.size()), 14, 36);
+    widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Value" : "[OK] Edit   [ESC] Back");
+}
+
 // Draws the menu screen that is open. Call only while `s.screen != Screen::Closed`.
 constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, const storage::RadioStorage& st,
                       const Live& live) {
@@ -917,6 +1357,9 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::ChannelMonitor: render_monitor(fb, s, live, st.active_model); break;
         case Screen::DiagAnalog: render_diag(fb, s, live); break;
         case Screen::SystemInfo: render_system(fb, live.mcu_name); break;
+        case Screen::WingMixer: render_wing_mixer(fb, s, st.active_model); break;
+        case Screen::MixerLine: render_mixer_line(fb, s, st.active_model); break;
+        case Screen::GlobalVars: render_global_vars(fb, s, st.active_model); break;
         case Screen::Closed: break;
     }
 }

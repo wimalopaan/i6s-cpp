@@ -43,6 +43,18 @@ inline constexpr std::array<std::string_view, 7> kDrSwitchNames{"None", "SA", "S
 
 inline constexpr std::array<std::string_view, 3> kAxisNames{"Roll", "Pitch", "Yaw"};
 
+inline constexpr std::array<std::string_view, 4> kTemplateNames{"NORMAL", "ELEVON/DELTA", "V-TAIL", "FLAPERON"};
+
+inline constexpr std::array<std::string_view, 3> kMixModeNames{"ADD (+)", "MULT (*)", "REPL (:=)"};
+
+// Index matches the weight source codes used by storage::MixLine::weight_src.
+inline constexpr std::array<std::string_view, 42> kWeightSrcNames{
+    "Fixed", "CH1",  "CH2",  "CH3",  "CH4",  "CH5",   "CH6",   "CH7",   "CH8",   "CH9",   "CH10",  "CH11",
+    "CH12",  "CH13", "CH14", "CH15", "CH16", "CH17",  "CH18",  "CH1+",  "CH2+",  "CH3+",  "CH4+",  "CH5+",
+    "CH6+",  "CH7+", "CH8+", "CH9+", "CH10+", "CH11+", "CH12+", "CH13+", "CH14+", "CH15+", "CH16+", "CH17+",
+    "CH18+", "GV1",  "GV2",  "GV3",  "GV4",  "GV5",
+};
+
 // Source names indexed by the aux channel source code (0 = None).
 inline constexpr std::array<std::string_view, 46> kSourceNames{
     "None", "Roll", "Pitch", "Thr", "Yaw", "VRA", "VRB", "SA", "SB", "SC", "SD", "MAX", "CH1",

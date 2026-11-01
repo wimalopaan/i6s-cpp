@@ -1362,6 +1362,117 @@ void throttle_curve_test() {
     check(lit_pixels(fb) > 0, "curve: throttle curve screen must draw");
 }
 
+void mixer_menu_test() {
+    namespace mn = logic::menu;
+    using mn::Action;
+    using mn::Event;
+    using mn::Screen;
+
+    logic::storage::RadioStorage st = logic::storage::default_storage();
+    st.active_model.mixes[0].source = 4;  // Thr: the first mix line starts on a usable source
+    st.radio.adc_modes = {3, 0, 0, 0, 3, 3, 0, 0, 0, 0};  // SA and VRA/VRB unusable: stepping must skip them
+    mn::State ms{};
+    mn::open(ms);
+    uint32_t now = 0;
+    auto tap = [&](uint16_t key) {
+        now += 10;
+        const Event e = mn::update(ms, mn::Input{key, key, now}, st);
+        mn::update(ms, mn::Input{0, 0, now + 1}, st);
+        now += 1;
+        return e;
+    };
+
+    ms.main.selected = mn::kItemWingMixer;
+    mn::update(ms, mn::Input{0, 0, 0}, st);
+    tap(mn::kKeyOk);
+    check(ms.screen == Screen::WingMixer, "mix: Wing & Mixer main item must open the screen");
+
+    const Event tmpl = tap(mn::kKeyOk);
+    check(tmpl.action == Action::SaveActiveModel && st.active_model.wing_tail_mix == 1,
+          "mix: OK on the template row must cycle the template and save");
+    check(mn::wing_gvars_row(st.active_model) == 2 && mn::wing_row_count(st.active_model) == 35,
+          "mix: Diff template must add a row before GVars");
+    tap(mn::kKeyDown);
+    tap(mn::kKeyOk);
+    check(ms.editing, "mix: Diff row must start editing");
+    for (int i = 0; i < 25; ++i) {
+        tap(mn::kKeyDown);
+    }
+    check(st.active_model.template_diff == -100, "mix: Diff must clamp at -100");
+    tap(mn::kKeyOk);
+    check(!ms.editing, "mix: OK must leave Diff edit mode");
+
+    tap(mn::kKeyDown);
+    check(ms.wing.selected == 2, "mix: GVars row must follow the Diff row");
+    tap(mn::kKeyOk);
+    check(ms.screen == Screen::GlobalVars, "mix: GVars row must open the screen");
+    tap(mn::kKeyOk);
+    for (int i = 0; i < 25; ++i) {
+        tap(mn::kKeyUp);
+    }
+    check(st.active_model.gvars[0] == 1000, "mix: GV1 must clamp at 1000");
+    const Event gv_done = tap(mn::kKeyCancel);
+    check(gv_done.action == Action::SaveActiveModel && !ms.editing && ms.screen == Screen::GlobalVars,
+          "mix: cancel while editing a GV must save and only leave edit mode");
+    const Event gv_back = tap(mn::kKeyCancel);
+    check(gv_back.action == Action::SaveActiveModel && ms.screen == Screen::Main,
+          "mix: GVars cancel must save and return to Main");
+
+    ms.main.selected = mn::kItemWingMixer;
+    tap(mn::kKeyOk);
+    check(ms.screen == Screen::WingMixer, "mix: Wing must reopen from Main");
+    for (int i = 0; i < 3; ++i) {
+        tap(mn::kKeyDown);
+    }
+    check(ms.wing.selected == 3, "mix: row 3 must be the first mix line");
+    tap(mn::kKeyOk);
+    check(ms.screen == Screen::MixerLine && ms.mix_idx == 0, "mix: OK on a mix row must open the line editor");
+
+    tap(mn::kKeyDown);  // Source
+    tap(mn::kKeyOk);
+    tap(mn::kKeyUp);
+    check(st.active_model.mixes[0].source == 8, "mix: source step must skip unusable pots and switches");
+    tap(mn::kKeyOk);
+
+    const Event back = tap(mn::kKeyCancel);
+    check(back.action == Action::None && ms.screen == Screen::WingMixer && ms.wing.selected == 3,
+          "mix: cancel must return to the mix row it came from without saving");
+
+    tap(mn::kKeyOk);
+    tap(mn::kKeyOk);
+    tap(mn::kKeyDown);
+    check(st.active_model.mixes[0].target_ch == 18, "mix: target must wrap from 0 to 18");
+    tap(mn::kKeyOk);
+    for (int i = 0; i < 5; ++i) {
+        tap(mn::kKeyDown);
+    }
+    st.radio.adc_modes.fill(3);  // no switch input usable: the switch condition must stay
+    tap(mn::kKeyOk);
+    tap(mn::kKeyUp);
+    check(st.active_model.mixes[0].switch_sel == 0, "mix: no switch condition is available, so the value stays");
+    tap(mn::kKeyOk);
+    tap(mn::kKeyDown);
+    tap(mn::kKeyOk);
+    tap(mn::kKeyDown);
+    check(st.active_model.mixes[0].mode == 2, "mix: mode must wrap from 0 to 2");
+    tap(mn::kKeyOk);
+
+    tap(mn::kKeyCancel);
+    tap(mn::kKeyCancel);
+    check(ms.screen == Screen::Main, "mix: Wing cancel must return to Main");
+
+    logic::display::Framebuffer fb{};
+    mn::ModelNames names{};
+    for (const Screen sc : {Screen::WingMixer, Screen::MixerLine, Screen::GlobalVars}) {
+        fb.clear();
+        mn::State view{};
+        mn::open(view);
+        view.screen = sc;
+        mn::render(fb, view, names, st, mn::Live{});
+        check(lit_pixels(fb) > 0, "mix: mixer screens must draw");
+    }
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -1376,6 +1487,7 @@ int main() {
     calib_test();
     dual_rate_test();
     throttle_curve_test();
+    mixer_menu_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }
