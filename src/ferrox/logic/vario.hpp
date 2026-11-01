@@ -56,7 +56,7 @@ constexpr SinkMode sink_mode_from_u8(uint8_t val) {
 }
 
 struct Config {
-    // 0: Off, 1..=14: SA^..SFv (activation switch). Matched by the caller.
+    // 0: Off, 1: On (always active), 2..=23: switch conditions (Rust: 2..=23 map to switch_cond 1..=22). Matched by the caller.
     uint8_t switch_index = 0;
     DeadbandDmS climb_deadband{2};  // +0.2 m/s
     DeadbandDmS sink_deadband{5};   // -0.5 m/s
