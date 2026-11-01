@@ -3269,10 +3269,11 @@ void model_copy_test() {
         return e;
     };
     press(mn::kKeyUp, 10);
-    check(s.setup.selected == 7 && s.setup.scroll == 4, "up from Name must wrap to the Reset row and scroll");
+    check(s.setup.selected == 8 && s.setup.scroll == 5, "up from Name must wrap to the Reset row and scroll");
     press(mn::kKeyUp, 15);
     press(mn::kKeyUp, 16);
     press(mn::kKeyUp, 17);
+    press(mn::kKeyUp, 18);
     check(s.setup.selected == 4, "up from Reset must reach the Copy row");
     const mn::Event open_ev = press(mn::kKeyOk, 20);
     check(open_ev.action == Action::None && s.editing && s.copy.dst == mc::DstSlot{3},
@@ -3319,8 +3320,8 @@ void protocol_reset_test() {
     rs.active_model.rf_protocol = 0;
     mn::State s{};
     s.screen = mn::Screen::ModelSetup;
-    s.setup.selected = 6;
-    s.setup.scroll = 3;
+    s.setup.selected = 7;
+    s.setup.scroll = 4;
     auto press = [&](uint16_t key, uint32_t now) {
         const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
         mn::update(s, mn::Input{0, 0, now + 1}, rs);
@@ -3340,11 +3341,11 @@ void protocol_reset_test() {
     check(save_ev.action == Action::SaveActiveModel && !s.editing && rs.active_model.rf_protocol == 1,
           "second OK must save the CRSF selection and stop editing");
     press(mn::kKeyCancel, 70);
-    check(s.screen == mn::Screen::ModelSetup && s.setup.selected == 6 && s.setup.scroll == 3,
+    check(s.screen == mn::Screen::ModelSetup && s.setup.selected == 7 && s.setup.scroll == 4,
           "ESC must return to Model Setup on the Protocol row");
 
     // Cancel while editing keeps the toggled value in RAM without saving, then cancel leaves the sub-screen.
-    s.setup.selected = 6;
+    s.setup.selected = 7;
     press(mn::kKeyOk, 80);
     press(mn::kKeyOk, 90);
     press(mn::kKeyUp, 100);
@@ -3361,15 +3362,15 @@ void protocol_reset_test() {
     rs.active_model.rf_protocol = 1;
     rs.active_model.rx_id = 0x1234;
     rs.active_model.name = {'X', 'X', 'X', 0, 0, 0, 0, 0, 0, 0};
-    s.setup.selected = 7;
+    s.setup.selected = 8;
     const mn::Event reset_ev = press(mn::kKeyOk, 130);
     check(reset_ev.action == Action::ResetActiveModel && rs.active_model.rf_protocol == 0 &&
               rs.active_model.rx_id == 0 && rs.active_model.name == st::default_model_config(2).name,
           "OK on Reset must restore the active model defaults and request a reset");
 
-    s.setup.selected = 7;
+    s.setup.selected = 8;
     press(mn::kKeyUp, 140);
-    check(s.setup.selected == 6, "UP from Reset must reach the Protocol row");
+    check(s.setup.selected == 7, "UP from Reset must reach the Protocol row");
 }
 
 void vario_setup_test() {
@@ -3680,6 +3681,83 @@ void auto_select_test() {
           "auto: mixer source takes VRB only when it is usable");
 }
 
+void telem_slots_test() {
+    namespace mn = logic::menu;
+    namespace st = logic::storage;
+    namespace tm = logic::telemetry;
+    using mn::Action;
+
+    {
+        logic::input::InputState in{};
+        logic::storage::RadioStorage rs{};
+        logic::trim::Controller trims{};
+        std::array<uint16_t, logic::kNumChannels> chs{};
+        rs.active_model.telem_slots = {0, 1, 2, 5};
+        logic::dashboard::View v{in, rs, trims, chs, false, {}, false, false, false, 0};
+        logic::dashboard::PageState ps{};
+        ps.page = 4;
+        logic::display::Framebuffer fb{};
+        logic::dashboard::render(fb, ps, v);
+        auto lit = [&](int x, int y) {
+            return (fb.data()[static_cast<std::size_t>((y / 8) * 128 + x)] >> (y % 8)) & 1u;
+        };
+        check(lit(64, 20) == 1 && lit(64, 45) == 1, "custom telem page: vertical divider drawn");
+        check(lit(30, 31) == 1 && lit(100, 31) == 1, "custom telem page: horizontal divider drawn");
+    }
+
+    check(tm::telem_sensor_name(0) == "RX BAT" && tm::telem_sensor_name(1) == "LQ/RSSI" &&
+              tm::telem_sensor_name(22) == "OFF" && tm::telem_sensor_name(99) == "OFF",
+          "telemetry slot names must match the Rust sensor list");
+    check(tm::next_telem_sensor(21) == 22 && tm::next_telem_sensor(22) == 0,
+          "telemetry slot OK must step through all sensors and wrap after OFF");
+    check(!tm::is_custom_telem_layout({0, 1, 2, 3}) && tm::is_custom_telem_layout({0, 1, 2, 4}) &&
+              tm::is_custom_telem_layout({22, 1, 2, 3}),
+          "only non-default slots must select the custom telemetry page");
+    check(tm::tile_origin(0).x == 4 && tm::tile_origin(0).y == 14 && tm::tile_origin(1).x == 68 &&
+              tm::tile_origin(2).y == 33 && tm::tile_origin(3).x == 68 && tm::tile_origin(3).y == 33,
+          "custom telemetry tiles must sit on the 2x2 grid of Rust");
+
+    st::RadioStorage rs = st::default_storage();
+    rs.radio.active_model = 1;
+    mn::State s{};
+    s.screen = mn::Screen::ModelSetup;
+    s.setup.selected = mn::kItemTelemRow;
+    s.setup.scroll = 3;
+    auto press = [&](uint16_t key, uint32_t now) {
+        const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
+        mn::update(s, mn::Input{0, 0, now + 1}, rs);
+        return e;
+    };
+
+    check(static_cast<std::size_t>(mn::SetupRow::Telemetry) == mn::kItemTelemRow &&
+              mn::kSetupRows == 9 && static_cast<std::size_t>(mn::SetupRow::Protocol) == 7,
+          "Telemetry must be the row before Protocol on the model setup screen");
+
+    press(mn::kKeyOk, 10);
+    check(s.screen == mn::Screen::TelemSetup && s.telem.selected == 0 && s.telem.scroll == 0,
+          "OK on Telemetry must open the slot editor at the top");
+    check(rs.active_model.telem_slots == std::array<uint8_t, 4>{0, 1, 2, 3}, "default slots must be unchanged on open");
+
+    const mn::Event e = press(mn::kKeyOk, 20);
+    check(e.action == Action::SaveActiveModel && rs.active_model.telem_slots[0] == 1,
+          "OK on a slot must cycle its sensor and save the model");
+
+    press(mn::kKeyDown, 30);
+    check(s.telem.selected == 1, "down must move to the next slot");
+    press(mn::kKeyOk, 40);
+    check(rs.active_model.telem_slots[1] == 2 && rs.active_model.telem_slots[0] == 1,
+          "only the selected slot must change");
+
+    rs.active_model.telem_slots[2] = 22;
+    press(mn::kKeyDown, 50);
+    press(mn::kKeyOk, 60);
+    check(s.telem.selected == 2 && rs.active_model.telem_slots[2] == 0, "OK must wrap from OFF to the first sensor");
+
+    press(mn::kKeyCancel, 70);
+    check(s.screen == mn::Screen::ModelSetup && s.setup.selected == mn::kItemTelemRow,
+          "ESC must return to the Telemetry row of model setup");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -3713,6 +3791,7 @@ int main() {
     protocol_reset_test();
     vario_setup_test();
     trainer_test();
+    telem_slots_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

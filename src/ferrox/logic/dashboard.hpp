@@ -564,7 +564,49 @@ constexpr void draw_crsf_telemetry_page(Framebuffer& fb, const View& v) {
     widgets::draw_footer_split(fb, "P5/5", "CRSF LINK DIAG");
 }
 
+// Sensor tile of the custom page, same layout as Rust `render_tile`: label, '*' when stale, value below.
+constexpr void draw_sensor_tile(Framebuffer& fb, telemetry::TileOrigin o, const telemetry::Tile& t) {
+    if (t.slot_off) {
+        fb.draw_str_4x6({o.x, o.y}, "SLOT OFF", false);
+        return;
+    }
+    fb.draw_str_4x6({o.x, o.y}, t.label, false);
+    if (t.stale) {
+        fb.draw_str_4x6({o.x + 50, o.y}, "*", false);
+    }
+    fb.draw_str_6x10({o.x, o.y + 7}, t.value.view(), false);
+}
+
+constexpr telemetry::Sources telem_sources(const View& v, std::string_view timer) {
+    return {.source = v.crsf ? telemetry::Source::Crsf : telemetry::Source::Afhds2a,
+            .crsf = v.crsf_link,
+            .afhds = v.telem,
+            .tx_battery = {.value = v.in.battery_mv},
+            .packets_sent = {.value = v.packets_sent},
+            .timer = timer};
+}
+
+// Custom 2x2 sensor page, drawn when the model's slots are not the default ones.
+constexpr void draw_custom_telemetry_page(Framebuffer& fb, const View& v) {
+    const auto timer_text =
+        v.timer ? format::format_timer(v.timer->value.value, v.timer->expired) : format::Text<6>{};
+    const auto sources = telem_sources(v, timer_text.view());
+    const telemetry::NowMs now{v.now_ms};
+    const auto& slots = v.storage.active_model.telem_slots;
+    for (std::size_t i = 0; i < slots.size(); ++i) {
+        draw_sensor_tile(fb, telemetry::tile_origin(i), telemetry::sensor_tile({slots[i]}, now, sources));
+    }
+
+    fb.draw_vline({64, 12}, 42, true);
+    fb.draw_hline({2, 31}, 124, true);
+    draw_page_footer(fb, v, "P5/5", "CUSTOM TELEM");
+}
+
 constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
+    if (telemetry::is_custom_telem_layout(v.storage.active_model.telem_slots)) {
+        draw_custom_telemetry_page(fb, v);
+        return;
+    }
     if (v.crsf) {
         draw_crsf_telemetry_page(fb, v);
         return;

@@ -21,6 +21,7 @@
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
 #include "ferrox/logic/sysinfo.hpp"
+#include "ferrox/logic/telemetry.hpp"
 #include "ferrox/logic/widgets.hpp"
 
 namespace ferrox::logic::menu {
@@ -50,9 +51,10 @@ inline constexpr std::size_t kItemModelSelect = 0;
 inline constexpr std::size_t kItemModelSetup = 1;
 
 // Rows of the model setup screen. Each row maps to one slot of the 4-row view.
-enum class SetupRow : uint8_t { Name = 0, Type, ArmSwitch, Timer, Copy, Vario, Protocol, Reset };
-inline constexpr std::size_t kSetupRows = 8;
+enum class SetupRow : uint8_t { Name = 0, Type, ArmSwitch, Timer, Copy, Vario, Telemetry, Protocol, Reset };
+inline constexpr std::size_t kSetupRows = 9;
 inline constexpr std::size_t kItemVarioRow = 5;
+inline constexpr std::size_t kItemTelemRow = 6;
 inline constexpr uint8_t kNameLen = 10;
 inline constexpr uint8_t kModelTypeCount = 5;
 inline constexpr uint8_t kArmSwitchCount = 23;
@@ -84,6 +86,7 @@ enum class Screen : uint8_t {
     InputSetup,
     ProtocolSetup,
     VarioSetup,
+    TelemSetup,
 };
 
 inline constexpr std::size_t kItemDualRate = 2;
@@ -180,6 +183,7 @@ struct State {
     ListPos radio{};
     ListPos input_setup{};
     ListPos vario{};
+    ListPos telem{};
     uint8_t axis{0};  // dual rate axis: 0 Roll, 1 Pitch, 2 Yaw
     uint8_t page{0};  // page of the channel monitor or analog diagnostics
     bool editing{false};
@@ -445,6 +449,11 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
                     s.vario = ListPos{};
                     s.editing = false;
                     break;
+                case SetupRow::Telemetry:
+                    s.screen = Screen::TelemSetup;
+                    s.telem = ListPos{};
+                    s.editing = false;
+                    break;
                 case SetupRow::Protocol:
                     s.screen = Screen::ProtocolSetup;
                     s.editing = false;
@@ -459,6 +468,7 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
 
     switch (row) {
         case SetupRow::Vario:
+        case SetupRow::Telemetry:
         case SetupRow::Protocol:
         case SetupRow::Reset:
             break;
@@ -844,6 +854,25 @@ constexpr uint8_t next_climb_deadband(uint8_t tenths) {
 
 constexpr uint8_t next_sink_deadband(uint8_t tenths) {
     return tenths >= kVarioSinkMaxTenths ? 2 : static_cast<uint8_t>(tenths + 2);
+}
+
+// Telemetry Setup sub-screen (Rust `TelemSetup`). Each OK cycles one slot's sensor and saves at once.
+constexpr Event update_telem(State& s, const Nav& n, storage::ModelConfig& m) {
+    if (n.cancel) {
+        s.screen = Screen::ModelSetup;
+        s.setup.selected = kItemTelemRow;
+        s.setup.scroll = window_scroll(ItemIndex{kItemTelemRow}, Rows{kListVisible});
+        return {};
+    }
+    if (n.up != n.down) {
+        step_list(s.telem, telemetry::kTelemSlotCount, Rows{kListVisible}, nav_dir(n));
+    }
+    if (n.ok) {
+        auto& sensor = m.telem_slots[s.telem.selected];
+        sensor = telemetry::next_telem_sensor(sensor);
+        return {Action::SaveActiveModel, 0};
+    }
+    return {};
 }
 
 // Vario Setup sub-screen. Each change is saved at once, as Rust does. The switch row edits like the arm switch.
@@ -1267,6 +1296,7 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
         case Screen::InputSetup: return update_input_setup(s, n, st.radio);
         case Screen::ProtocolSetup: return update_protocol(s, n, st.active_model);
         case Screen::VarioSetup: return update_vario(s, n, st.active_model, st.radio);
+        case Screen::TelemSetup: return update_telem(s, n, st.active_model);
         case Screen::ChannelReverse: return update_channel_reverse(s, n, st.active_model);
         case Screen::ChannelMonitor: return update_monitor(s, n);
         case Screen::DiagAnalog: return update_diag(s, n);
@@ -1441,6 +1471,9 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
             case SetupRow::Vario:
                 widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Vario:", "[SETUP]", {kValueX});
                 break;
+            case SetupRow::Telemetry:
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Telemetry:", "[SETUP]", {68});
+                break;
             case SetupRow::Protocol:
                 widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Protocol:",
                                        protocol::label(protocol::from_raw(m.rf_protocol)), {64});
@@ -1461,6 +1494,20 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
     } else {
         widgets::draw_footer(fb, "[OK] Done   [UP/DN] Value");
     }
+}
+
+constexpr void render_telem(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
+    widgets::draw_header(fb, "TELEM DASH SETUP");
+    for (std::size_t slot = 0; slot < kListVisible; ++slot) {
+        const std::size_t idx = s.telem.scroll + slot;
+        if (idx >= telemetry::kTelemSlotCount) {
+            break;
+        }
+        widgets::draw_list_row(fb, {static_cast<int>(slot)}, idx == s.telem.selected,
+                               telemetry::kTelemSlotNames[idx], telemetry::telem_sensor_name(m.telem_slots[idx]),
+                               {0});
+    }
+    widgets::draw_footer(fb, "[OK] Cycle Sensor  [ESC] Back");
 }
 
 constexpr void render_vario(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
@@ -2067,6 +2114,7 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::InputSetup: render_input_setup(fb, s, st.radio); break;
         case Screen::ProtocolSetup: render_protocol(fb, s, st.active_model); break;
         case Screen::VarioSetup: render_vario(fb, s, st.active_model); break;
+        case Screen::TelemSetup: render_telem(fb, s, st.active_model); break;
         case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;
         case Screen::ChannelMonitor: render_monitor(fb, s, live, st.active_model); break;
         case Screen::DiagAnalog: render_diag(fb, s, live, st.radio); break;

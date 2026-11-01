@@ -5,6 +5,7 @@
 // AFHDS2A and CRSF sources. Drawing and slot storage are in the hardware layer.
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -314,6 +315,44 @@ struct CrsfDiag {
     format::Text<12> bat{};
     format::Text<12> cap{};
 };
+
+// Custom dashboard slots: four sensor ids (0..22, 22 = OFF) per model, drawn as a 2x2 grid.
+inline constexpr std::size_t kTelemSlotCount = 4;
+inline constexpr uint8_t kTelemSensorOff = 22;
+inline constexpr std::array<uint8_t, kTelemSlotCount> kDefaultTelemSlots{0, 1, 2, 3};
+
+// Same names as Rust `TELEM_SENSOR_NAMES`, used by the slot editor.
+inline constexpr std::array<std::string_view, kTelemSensorOff + 1> kTelemSensorNames{
+    "RX BAT", "LQ/RSSI", "TX BAT", "CURRENT", "CAP mAh", "TX PWR", "SNR",    "PKT RATE",
+    "ANTENNA", "PKTS TX", "PKTS RX", "TIMER", "VSPD",    "ALT",    "CELLS",  "RPM",
+    "TEMP",   "GSPD",   "SATS",    "HDG",     "PITCH",   "ROLL",   "OFF",
+};
+inline constexpr std::array<std::string_view, kTelemSlotCount> kTelemSlotNames{"Top-L:", "Top-R:", "Btm-L:",
+                                                                               "Btm-R:"};
+
+struct TileOrigin {
+    int x;
+    int y;
+};
+
+// Default slots keep the AFHDS 2A or CRSF page. Any other mapping draws the custom 2x2 page, as Rust does.
+constexpr bool is_custom_telem_layout(const std::array<uint8_t, kTelemSlotCount>& slots) {
+    return slots != kDefaultTelemSlots;
+}
+
+constexpr TileOrigin tile_origin(std::size_t slot) {
+    constexpr std::array<TileOrigin, kTelemSlotCount> origins{{{4, 14}, {68, 14}, {4, 33}, {68, 33}}};
+    return origins[slot];
+}
+
+constexpr std::string_view telem_sensor_name(uint8_t sensor) {
+    return sensor < kTelemSensorNames.size() ? kTelemSensorNames[sensor] : kTelemSensorNames[kTelemSensorOff];
+}
+
+// Cycles to the next sensor, wrapping after OFF, as Rust `TelemSetup` OK does.
+constexpr uint8_t next_telem_sensor(uint8_t sensor) {
+    return static_cast<uint8_t>((sensor + 1) % kTelemSensorNames.size());
+}
 
 namespace detail {
 
