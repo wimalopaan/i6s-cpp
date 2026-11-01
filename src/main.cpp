@@ -6,6 +6,7 @@
 #include "ferrox/chip/mcu.hpp"
 #include "ferrox/chip/watchdog.hpp"
 #include "ferrox/hw/adc.hpp"
+#include "ferrox/hw/buzzer.hpp"
 #include "ferrox/hw/crsf.hpp"
 #include "ferrox/hw/eeprom.hpp"
 #include "ferrox/hw/gpio.hpp"
@@ -14,6 +15,7 @@
 #include "ferrox/hw/st7567.hpp"
 #include "ferrox/logic/dashboard.hpp"
 #include "ferrox/logic/brr.hpp"
+#include "ferrox/logic/buzzer.hpp"
 #include "ferrox/logic/calib.hpp"
 #include "ferrox/logic/flight.hpp"
 #include "ferrox/logic/framebuffer.hpp"
@@ -67,6 +69,19 @@ constexpr uint32_t kBindHoldMs = 1000;
 
 // Model names shown in the model list, filled from EEPROM when the list is opened.
 ferrox::logic::menu::ModelNames g_model_names{};
+
+// Buzzer playback logic and the PWM output that follows it.
+ferrox::logic::buzzer::Player g_buzzer{};
+ferrox::hw::buzzer::Output g_buzzer_out{};
+
+// Battery and RSSI alarm cadences. Only stepped while the dashboard is shown, as in Rust.
+ferrox::logic::buzzer::BatteryWarnTimer g_battery_warn{};
+ferrox::logic::buzzer::RssiWarnTimer g_rssi_warn{};
+
+// Plays a cue in the stored tone style. Cue::None is a no-op.
+void play_buzzer_cue(ferrox::logic::buzzer::Cue cue) {
+    g_buzzer.play_cue(cue, ferrox::logic::buzzer::tone_style_from_u8(g_storage.radio.tone_style));
+}
 
 void apply_crsf_config() {
     using namespace ferrox;
@@ -202,6 +217,8 @@ int main() {
         g_storage = logic::storage::default_storage();
     }
 
+    hw::buzzer::init();
+
     hw::adc::init(g_storage.radio.ext_adc != 0);
     chip::watchdog::feed();
 
@@ -252,6 +269,7 @@ int main() {
     uint32_t bind_hold_ms = 0;
     bool bind_was_held = false;
     bool rx_id_dirty = false;
+    bool prev_armed = logic::flight::is_armed(model.arm_switch, sample_inputs().switches);
 
     for (;;) {
         chip::watchdog::feed();
@@ -266,6 +284,9 @@ int main() {
         const auto dt_ms = static_cast<uint16_t>(std::min<uint32_t>(now - last_loop_ms, 20));
         last_loop_ms = now;
 
+        g_buzzer.set_enabled(g_storage.radio.audio_enabled != 0);
+        g_buzzer.tick(logic::buzzer::Millis{dt_ms});
+
         const bool afhds = g_rf_ok && g_storage.active_model.rf_protocol == 0;
         if (afhds && hw::rf::is_binding() && (pressed & (logic::kKeyBind | logic::calib::kKeyCancel)) != 0) {
             hw::rf::set_bind_mode(false);
@@ -277,6 +298,7 @@ int main() {
                 logic::input::apply_calibration(g_storage.radio, g_calib);
                 logic::storage::save_radio_config<hw::I2c2Eeprom>(g_storage);
             }
+            play_buzzer_cue(g_calib_wizard.cue);
         } else if (menu_state.screen == logic::menu::Screen::Closed) {
             handle_keys(page_state, pressed);
             if ((g_keys & logic::kKeyOk) == 0) {
@@ -308,6 +330,7 @@ int main() {
                     switch_model(ev.index);
                     apply_crsf_config();
                     apply_rf_model();
+                    prev_armed = logic::flight::is_armed(g_storage.active_model.arm_switch, input.switches);
                     break;
                 case logic::menu::Action::SaveActiveModel:
                     logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage);
@@ -317,7 +340,10 @@ int main() {
                     logic::storage::save_radio_config<hw::I2c2Eeprom>(g_storage);
                     apply_lcd_settings(g_storage.radio);
                     break;
-                case logic::menu::Action::StartCalibration: logic::calib::start(g_calib_wizard); break;
+                case logic::menu::Action::StartCalibration:
+                    logic::calib::start(g_calib_wizard);
+                    play_buzzer_cue(g_calib_wizard.cue);
+                    break;
                 case logic::menu::Action::CloseMenu:
                 case logic::menu::Action::None: break;
             }
@@ -370,6 +396,31 @@ int main() {
             hw::lcd::flush(g_fb);
             last_draw_ms = now;
         }
+
+        const bool menu_open = menu_state.screen != logic::menu::Screen::Closed || logic::calib::active(g_calib_wizard);
+        play_buzzer_cue(logic::buzzer::arm_cue(logic::buzzer::ArmEdge{
+            .arm_switch = logic::buzzer::SwitchIndex{model.arm_switch},
+            .is_armed = armed,
+            .was_armed = prev_armed,
+            .menu_active = menu_open,
+        }));
+        prev_armed = armed;
+
+        if (!menu_open) {
+            const bool battery_low = logic::buzzer::battery_low(logic::buzzer::BatteryMv{input.battery_mv},
+                                                                logic::buzzer::WarnDeci{g_storage.radio.vbat_warn_deci});
+            if (g_battery_warn.step(battery_low, logic::buzzer::Millis{dt_ms})) {
+                play_buzzer_cue(logic::buzzer::Cue::WarnBattery);
+            }
+            const auto link = afhds ? hw::rf::get_telemetry() : logic::afhds2a::Telemetry{};
+            const auto rssi_level = logic::buzzer::rssi_alarm(logic::buzzer::Rssi{link.rssi}, link.connected);
+            if (g_rssi_warn.step(rssi_level, logic::buzzer::Millis{dt_ms})) {
+                play_buzzer_cue(rssi_level == logic::buzzer::RssiAlarm::Critical ? logic::buzzer::Cue::WarnRssiCritical
+                                                                                  : logic::buzzer::Cue::WarnRssiLow);
+            }
+        }
+
+        g_buzzer_out.sync(g_buzzer.output());
 
         __WFI();
     }
