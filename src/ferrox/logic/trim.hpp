@@ -22,6 +22,7 @@ struct TrimValues {
     int8_t pitch{0};     // CH2 (ELE)
     int8_t throttle{0};  // CH3 (THR)
     int8_t yaw{0};       // CH4 (RUD)
+    constexpr bool operator==(const TrimValues&) const = default;
 };
 
 /// Adds the linear trim offset to a pulse width and clamps it to the channel range.
@@ -187,6 +188,44 @@ private:
         prev_keys = 0;
         hold_ms = 0;
         repeat_ms = 0;
+    }
+};
+
+/// Trim auto-save trigger (Rust `main.rs` section 8). Any trim change restarts a 2000 ms cooldown.
+/// The model is written once the cooldown has run out, the radio is disarmed and the trims are dirty.
+/// A failed write keeps them dirty, so the next tick retries, as in Rust.
+struct AutoSave {
+    // Rust: trim_save_cooldown_ms = 2000 on every change.
+    static constexpr uint32_t kDelayMs = 2000;
+
+    TrimValues last{};
+    bool dirty = false;
+    uint32_t cooldown_ms = 0;
+
+    /// Marks `values` as already stored (boot and model switch), so loading does not count as a change.
+    constexpr void reset(const TrimValues& values) {
+        last = values;
+        dirty = false;
+        cooldown_ms = 0;
+    }
+
+    /// Runs one tick. Returns true when the caller should write the model now.
+    /// `armed` is the arm state of the previous tick (Rust `pipeline.prev_armed`).
+    constexpr bool tick(const TrimValues& values, bool armed, vario::Millis dt) {
+        cooldown_ms -= std::min(cooldown_ms, static_cast<uint32_t>(dt.value));
+        if (values != last) {
+            last = values;
+            dirty = true;
+            cooldown_ms = kDelayMs;
+        }
+        return dirty && cooldown_ms == 0 && !armed;
+    }
+
+    /// Records the result of a write started because `tick` returned true.
+    constexpr void saved(bool ok) {
+        if (ok) {
+            dirty = false;
+        }
     }
 };
 

@@ -80,10 +80,18 @@ ferrox::logic::buzzer::RssiWarnTimer g_rssi_warn{};
 
 // Trim key state machine. Values come from the active model; throttle_enabled from the radio setup.
 ferrox::logic::trim::Controller g_trims{};
+// Trim auto-save trigger; decides when g_trims is written to the active model's EEPROM slot.
+ferrox::logic::trim::AutoSave g_trim_save{};
 
 void load_trims_from_model() {
     const auto& t = g_storage.active_model.trims;
     g_trims.values = {t[0], t[1], t[2], t[3]};
+    g_trim_save.reset(g_trims.values);
+}
+
+void store_trims_in_model() {
+    g_storage.active_model.trims = {g_trims.values.roll, g_trims.values.pitch, g_trims.values.throttle,
+                                    g_trims.values.yaw};
 }
 
 // Plays a cue in the stored tone style. Cue::None is a no-op.
@@ -162,8 +170,7 @@ void apply_lcd_settings(const ferrox::logic::storage::RadioConfig& r) {
 void switch_model(uint8_t index) {
     using namespace ferrox::logic::storage;
     using Dev = ferrox::hw::I2c2Eeprom;
-    g_storage.active_model.trims = {g_trims.values.roll, g_trims.values.pitch, g_trims.values.throttle,
-                                    g_trims.values.yaw};
+    store_trims_in_model();
     save_active_model<Dev>(g_storage);
     g_storage.radio.active_model = index;
     save_radio_config<Dev>(g_storage);
@@ -387,6 +394,11 @@ int main() {
                 case logic::trim::Event::Kind::Limit: play_buzzer_cue(logic::buzzer::Cue::TrimLimit); break;
                 case logic::trim::Event::Kind::None: break;
             }
+        }
+
+        if (g_trim_save.tick(g_trims.values, prev_armed, logic::vario::Millis{dt_ms})) {
+            store_trims_in_model();
+            g_trim_save.saved(logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage));
         }
 
         const auto channels =

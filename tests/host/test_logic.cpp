@@ -2593,6 +2593,83 @@ void trim_controller_test() {
           "trim: active axis clears when the timer runs out");
 }
 
+void trim_autosave_test() {
+    using logic::trim::AutoSave;
+    using logic::trim::TrimValues;
+    using logic::vario::Millis;
+
+    const Millis tick_ms{20};
+    // Ticks until the trigger fires, counting the firing tick. Returns 0 if it does not fire within 1000 ticks.
+    const auto ticks_until_save = [&](AutoSave& s, const TrimValues& v, bool armed) {
+        for (int i = 1; i <= 1000; ++i) {
+            if (s.tick(v, armed, tick_ms)) {
+                return i;
+            }
+        }
+        return 0;
+    };
+
+    AutoSave s{};
+    TrimValues v{};
+    s.reset(v);
+    check(!s.tick(v, false, tick_ms) && !s.dirty && s.cooldown_ms == 0, "trim save: no change, no save");
+
+    v.roll = 1;
+    check(!s.tick(v, false, tick_ms) && s.dirty && s.cooldown_ms == AutoSave::kDelayMs,
+          "trim save: a change marks the trims dirty and starts the 2000 ms cooldown");
+    check(ticks_until_save(s, v, false) == 100, "trim save: saves 2000 ms after the change, not earlier");
+    s.saved(true);
+    check(!s.dirty, "trim save: a successful write clears dirty");
+
+    v.pitch = -3;
+    s.tick(v, false, tick_ms);
+    for (int i = 0; i < 50; ++i) {
+        s.tick(v, false, tick_ms);
+    }
+    v.pitch = -4;
+    s.tick(v, false, tick_ms);
+    check(ticks_until_save(s, v, false) == 100, "trim save: a second change restarts the cooldown");
+    s.saved(true);
+
+    v.yaw = 5;
+    s.tick(v, false, tick_ms);
+    check(ticks_until_save(s, v, true) == 0 && s.dirty, "trim save: no save while armed");
+    check(ticks_until_save(s, v, true) == 0 && s.dirty, "trim save: still no save while armed");
+    check(s.tick(v, false, tick_ms) && s.dirty, "trim save: disarming saves the pending trims at once");
+    s.saved(false);
+    check(s.dirty, "trim save: a failed write keeps the trims dirty");
+    check(s.tick(v, false, tick_ms), "trim save: a failed write is retried on the next tick");
+    s.saved(true);
+
+    int writes = 0;
+    for (int i = 0; i < 5000; ++i) {
+        if (s.tick(v, false, tick_ms)) {
+            ++writes;
+            s.saved(true);
+        }
+    }
+    check(writes == 0, "trim save: idle loop never writes again");
+
+    int burst_writes = 0;
+    for (int i = 0; i < 1000; ++i) {
+        v.roll = static_cast<int8_t>(i % 2 == 0 ? 2 : 3);
+        if (s.tick(v, false, tick_ms)) {
+            ++burst_writes;
+            s.saved(true);
+        }
+    }
+    check(burst_writes == 0, "trim save: continuous changes never write while the trims keep moving");
+    check(ticks_until_save(s, v, false) == 100, "trim save: one write after a burst ends");
+    s.saved(true);
+
+    v.roll = 9;
+    s.reset(v);
+    check(!s.tick(v, false, tick_ms) && !s.dirty, "trim save: reset to loaded trims is not a change");
+    s.reset(TrimValues{});
+    check(!s.tick(v, false, tick_ms) && s.dirty, "trim save: a change after reset starts the cooldown");
+    check(ticks_until_save(s, v, false) == 100, "trim save: a change after reset is saved after 2000 ms");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -2616,6 +2693,7 @@ int main() {
     telemetry_test();
     buzzer_test();
     trim_controller_test();
+    trim_autosave_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }
