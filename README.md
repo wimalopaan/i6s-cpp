@@ -63,14 +63,14 @@ Not yet ported: USB, trainer, arm chimes, custom telemetry slots, CRSF telemetry
 
 ## Build
 
-Firmware (clang-20 + arm-none-eabi-gcc 13 newlib for Cortex-M0):
+Firmware (clang + arm-none-eabi-gcc 13 newlib for Cortex-M0):
 
     cmake -S . -B build-fw -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi-clang.cmake -DCMAKE_BUILD_TYPE=MinSizeRel
     cmake --build build-fw
 
-Host tests (clang-20 required for C++26):
+Host tests (clang with C++26 support, e.g. LLVM 20 or newer):
 
-    cmake -S . -B build-host -DCMAKE_CXX_COMPILER=clang++-20
+    cmake -S . -B build-host -DCMAKE_CXX_COMPILER=clang++
     cmake --build build-host
     ./build-host/host_logic_tests
 

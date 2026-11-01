@@ -4,18 +4,14 @@
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 
-if(NOT DEFINED FERROX_CLANG_VERSION)
-  set(FERROX_CLANG_VERSION 20)
-endif()
-
-set(CMAKE_C_COMPILER clang-${FERROX_CLANG_VERSION})
-set(CMAKE_CXX_COMPILER clang++-${FERROX_CLANG_VERSION})
-set(CMAKE_ASM_COMPILER clang-${FERROX_CLANG_VERSION})
+set(CMAKE_C_COMPILER clang)
+set(CMAKE_CXX_COMPILER clang++)
+set(CMAKE_ASM_COMPILER clang)
 set(CMAKE_C_COMPILER_TARGET arm-none-eabi)
 set(CMAKE_CXX_COMPILER_TARGET arm-none-eabi)
 set(CMAKE_ASM_COMPILER_TARGET arm-none-eabi)
-set(CMAKE_AR llvm-ar-${FERROX_CLANG_VERSION})
-set(CMAKE_RANLIB llvm-ranlib-${FERROX_CLANG_VERSION})
+set(CMAKE_AR llvm-ar)
+set(CMAKE_RANLIB llvm-ranlib)
 set(CMAKE_OBJCOPY arm-none-eabi-objcopy)
 set(CMAKE_SIZE arm-none-eabi-size)
 
