@@ -28,6 +28,7 @@
 #include "ferrox/logic/switches.hpp"
 #include "ferrox/logic/telemetry.hpp"
 #include "ferrox/logic/trim.hpp"
+#include "ferrox/logic/trainer.hpp"
 #include "ferrox/logic/vario.hpp"
 #include "ferrox/logic/widgets.hpp"
 #include "ferrox/util/ring.hpp"
@@ -3253,6 +3254,126 @@ void protocol_reset_test() {
     check(s.setup.selected == 5, "UP from Reset must reach the Protocol row");
 }
 
+void trainer_test() {
+    namespace tr = ferrox::logic::trainer;
+    using tr::PulseUs;
+
+    constexpr uint32_t kTotal = [] {
+        tr::PpmGenerator g;
+        g.update_channels(std::array<uint16_t, 8>{1000, 1500, 2000, 1500, 1200, 1800, 1000, 2000});
+        uint32_t total = 0;
+        for (int i = 0; i < 18; ++i) {
+            total += g.next_interval().duration.value;
+        }
+        return total;
+    }();
+    static_assert(kTotal == tr::kFrameTotalUs, "18 generator intervals must sum to 22.5 ms");
+
+    {
+        tr::PpmDecoder d;
+        check(!d.is_signal_valid(), "decoder starts without a valid signal");
+        d.process_pulse(PulseUs{10000});
+        check(!d.is_signal_valid(), "sync alone does not validate a frame");
+        const std::array<uint16_t, 8> want{1000, 1200, 1500, 1800, 2000, 1100, 1600, 1900};
+        for (uint16_t ch : want) {
+            d.process_pulse(PulseUs{ch});
+        }
+        d.process_pulse(PulseUs{10000});
+        check(d.is_signal_valid(), "clean 8-channel frame validates the signal");
+        check(d.frame_count() == 1, "one frame counted");
+        check(d.channels() && *d.channels() == want, "decoded channels match the frame");
+    }
+    {
+        tr::PpmDecoder d;
+        d.process_pulse(PulseUs{10000});
+        for (uint16_t ch : {1500, 1500, 400, 1500, 1500}) {
+            d.process_pulse(PulseUs{ch});
+        }
+        d.process_pulse(PulseUs{10000});
+        check(!d.is_signal_valid(), "out-of-range glitch aborts the frame");
+        check(d.frame_count() == 0, "aborted frame is not counted");
+    }
+    {
+        tr::PpmDecoder d;
+        d.process_pulse(PulseUs{10000});
+        for (int i = 0; i < 4; ++i) {
+            d.process_pulse(PulseUs{1500});
+        }
+        d.process_pulse(PulseUs{10000});
+        d.tick(tr::DeltaMs{50});
+        check(d.is_signal_valid(), "signal still valid 50 ms after the frame");
+        d.tick(tr::DeltaMs{60});
+        check(!d.is_signal_valid(), "signal lost after the 100 ms timeout");
+        check(!d.channels().has_value(), "no channels once the signal is lost");
+    }
+    {
+        tr::PpmDecoder d;
+        d.process_pulse(PulseUs{10000});
+        for (uint16_t ch : {2140, 900, 1500, 1500}) {
+            d.process_pulse(PulseUs{ch});
+        }
+        d.process_pulse(PulseUs{10000});
+        check(d.channels() && (*d.channels())[0] == 2012, "pulse above 2012 us clamps to 2012");
+        check(d.channels() && (*d.channels())[1] == 988, "pulse of 900 us clamps up to the 988 us decode floor");
+    }
+    {
+        tr::PpmGenerator g;
+        g.update_channels(std::array<uint16_t, 8>{1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500});
+        const auto first = g.next_interval();
+        check(first.duration.value == 400 && !first.high, "frame starts with a 400 us low sync");
+        const auto second = g.next_interval();
+        check(second.duration.value == 1100 && second.high, "1500 us channel is a 1100 us high after sync");
+    }
+    {
+        tr::PpmGenerator g;
+        g.update_channels(std::array<uint16_t, 8>{2500, 500, 1500, 1500, 1500, 1500, 1500, 1500});
+        g.next_interval();
+        const auto high = g.next_interval();
+        check(high.duration.value == 1700, "channel above 2100 us clamps to 2100 us");
+        g.next_interval();
+        check(g.next_interval().duration.value == 500, "channel below 900 us clamps to 900 us high minimum");
+    }
+    {
+        tr::Handover h;
+        const std::array<uint16_t, 18> instr{1500, 1500, 1000, 1500, 1111, 1222, 1333, 1444};
+        const tr::InChannels student{1100, 1200, 1300, 1400, 1, 1, 1, 1};
+
+        auto out = h.process(false, student, instr);
+        check(h.state() == tr::State::Disabled && out == instr, "switch off passes the instructor frame through");
+
+        out = h.process(true, std::nullopt, instr);
+        check(h.state() == tr::State::SignalLost && out == instr, "student signal lost keeps the instructor frame");
+
+        auto deflected = instr;
+        deflected[0] = 1600;
+        out = h.process(true, student, deflected);
+        check(h.state() == tr::State::InstructorOverride && out == deflected,
+              "instructor roll deflection overrides the student");
+
+        out = h.process(true, student, instr);
+        check(h.state() == tr::State::StudentActive, "centred instructor lets the student fly");
+        check(out[0] == 1100 && out[1] == 1200 && out[2] == 1300 && out[3] == 1400,
+              "first 4 channels come from the student");
+        check(out[4] == 1111 && out[7] == 1444, "channels above 4 stay with the instructor");
+    }
+    {
+        const std::array<uint16_t, 4> centred{1500, 1500, 1000, 1500};
+        const std::array<uint16_t, 4> minor_drift{1530, 1480, 1030, 1520};
+        const std::array<uint16_t, 4> roll_takeover{1560, 1500, 1000, 1500};
+        const std::array<uint16_t, 4> pitch_takeover{1500, 1440, 1000, 1500};
+        const std::array<uint16_t, 4> yaw_takeover{1500, 1500, 1000, 1445};
+        const std::array<uint16_t, 4> throttle_edge{1500, 1500, 1050, 1500};
+        const std::array<uint16_t, 4> throttle_up{1500, 1500, 1051, 1500};
+        check(!tr::is_instructor_deflected(centred), "centred sticks are not deflected");
+        check(!tr::is_instructor_deflected(minor_drift), "drift within 50 us is not deflection");
+        check(tr::is_instructor_deflected(roll_takeover), "roll beyond 50 us is deflection");
+        check(tr::is_instructor_deflected(pitch_takeover), "pitch beyond 50 us is deflection");
+        check(tr::is_instructor_deflected(yaw_takeover), "yaw beyond 50 us is deflection");
+        check(!tr::is_instructor_deflected(throttle_edge), "throttle at 1050 us is not deflection");
+        check(tr::is_instructor_deflected(throttle_up), "throttle above 1050 us is deflection");
+    }
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -3282,6 +3403,7 @@ int main() {
     bind_test();
     model_copy_test();
     protocol_reset_test();
+    trainer_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

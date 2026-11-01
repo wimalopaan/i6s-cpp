@@ -13,6 +13,7 @@
 #include "ferrox/hw/keys.hpp"
 #include "ferrox/hw/rf.hpp"
 #include "ferrox/hw/st7567.hpp"
+#include "ferrox/hw/trainer.hpp"
 #include "ferrox/logic/dashboard.hpp"
 #include "ferrox/logic/bind.hpp"
 #include "ferrox/logic/brr.hpp"
@@ -30,6 +31,7 @@
 #include "ferrox/logic/storage.hpp"
 #include "ferrox/logic/sysinfo.hpp"
 #include "ferrox/logic/flight_timer.hpp"
+#include "ferrox/logic/trainer.hpp"
 #include "ferrox/logic/trim.hpp"
 #include "ferrox/time/systick.hpp"
 
@@ -57,6 +59,8 @@ ferrox::logic::dashboard::SessionStats g_rf_stats{};
 bool g_rf_silenced = true;
 // Protocol the CRSF UART and A7105 mute were last applied for. Lets the loop follow edits to the active model.
 ferrox::logic::protocol::Protocol g_link_protocol{};
+// Trainer safety handover between the instructor sticks and the student frame.
+ferrox::logic::trainer::Handover g_handover{};
 
 ferrox::logic::input::BoardSwitches read_board_switches() {
     using ferrox::hw::Pin;
@@ -197,6 +201,13 @@ void apply_lcd_settings(const ferrox::logic::storage::RadioConfig& r) {
     ferrox::hw::lcd::set_contrast(r.lcd_contrast);
 }
 
+// Starts or stops the trainer PPM in and out from the stored radio config.
+void apply_trainer_config(const ferrox::logic::storage::RadioConfig& r) {
+    using namespace ferrox::logic::menu;
+    ferrox::hw::trainer::set_enabled((r.trainer_config & kTrainerPpmIn) != 0,
+                                     (r.trainer_config & kTrainerPpmOut) != 0);
+}
+
 // Stores the current model, then loads the model at `index` as the active one.
 void switch_model(uint8_t index) {
     using namespace ferrox::logic::storage;
@@ -296,6 +307,9 @@ int main() {
     hw::lcd::init();
     apply_lcd_settings(g_storage.radio);
 
+    hw::trainer::init();
+    apply_trainer_config(g_storage.radio);
+
     using namespace logic::dashboard;
     PageState page_state{};
     g_fb.clear();
@@ -386,6 +400,7 @@ int main() {
                 case logic::menu::Action::SaveRadioConfig:
                     logic::storage::save_radio_config<hw::I2c2Eeprom>(g_storage);
                     apply_lcd_settings(g_storage.radio);
+                    apply_trainer_config(g_storage.radio);
                     g_trims.throttle_enabled = g_storage.radio.throttle_trim != 0;
                     break;
                 case logic::menu::Action::CopyActiveModel:
@@ -472,8 +487,18 @@ int main() {
             });
         play_buzzer_cue(timer_cue);
 
-        const auto channels =
+        auto channels =
             logic::flight::rf_channels(input, stick_mode, model, g_trims.values, g_storage.radio.throttle_trim);
+        const bool trainer_in = (g_storage.radio.trainer_config & logic::menu::kTrainerPpmIn) != 0;
+        const bool trainer_out = (g_storage.radio.trainer_config & logic::menu::kTrainerPpmOut) != 0;
+        hw::trainer::tick(logic::trainer::DeltaMs{dt_ms});
+        if (trainer_in) {
+            channels = g_handover.process(input.switches.sd == logic::SwitchPos::Down,
+                                          hw::trainer::student_channels(), channels);
+        }
+        if (trainer_out) {
+            hw::trainer::publish_out(channels);
+        }
         const bool crsf = model.rf_protocol == 1;
         if (crsf) {
             hw::crsf::update_channels(now, channels, ferrox::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},

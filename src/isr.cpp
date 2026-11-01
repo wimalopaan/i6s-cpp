@@ -1,5 +1,6 @@
 #include "ferrox/arch/regs.hpp"
 #include "ferrox/hw/rf.hpp"
+#include "ferrox/hw/trainer.hpp"
 #include "ferrox/hw/uart.hpp"
 #include "ferrox/time/systick.hpp"
 
@@ -19,6 +20,10 @@ void EXTI2_3_IRQHandler() {
 
 void TIM16_IRQHandler() {
     ferrox::hw::rf::on_tim16();
+}
+
+void TIM15_IRQHandler() {
+    ferrox::hw::trainer::on_tim15();
 }
 
 }  // extern "C"
