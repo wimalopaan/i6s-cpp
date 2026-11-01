@@ -346,10 +346,13 @@ int main() {
 
         if (now - last_draw_ms >= 100) {
             g_fb.clear();
+            const auto rf_telem = g_rf_ok ? hw::rf::get_telemetry() : logic::afhds2a::Telemetry{};
+            const bool rf_binding = g_rf_ok && hw::rf::is_binding();
             if (logic::calib::active(g_calib_wizard)) {
                 logic::calib::render(g_fb, g_calib_wizard, input.raw, g_storage.radio, model.model_type);
             } else if (menu_state.screen == logic::menu::Screen::Closed) {
-                render(g_fb, page_state, View{input, g_storage, no_trim, channels, crsf});
+                render(g_fb, page_state,
+                       View{input, g_storage, no_trim, channels, crsf, rf_telem, rf_binding, g_rf_ok});
             } else {
                 logic::menu::render(g_fb, menu_state, g_model_names, g_storage,
                                     logic::menu::Live{channels, input.raw, chip::kProfile.name});

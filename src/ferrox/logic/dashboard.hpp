@@ -7,6 +7,7 @@
 #include <span>
 #include <string_view>
 
+#include "ferrox/logic/afhds2a.hpp"
 #include "ferrox/logic/channels.hpp"
 #include "ferrox/logic/flight.hpp"
 #include "ferrox/logic/format.hpp"
@@ -56,12 +57,36 @@ struct View {
     const trim::TrimValues& trims;
     const std::array<uint16_t, kNumChannels>& rf_chs;
     bool crsf;
+    // AFHDS 2A link state, only meaningful when !crsf.
+    afhds2a::Telemetry telem{};
+    bool binding = false;
+    bool rf_ok = false;
 };
 
 using labels::model_name;
 using labels::model_type_label;
 
-constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st, uint16_t battery_mv, bool crsf,
+constexpr std::string_view rf_status_label(const View& v) {
+    if (v.crsf) {
+        return "CRSF";
+    }
+    if (!v.rf_ok) {
+        return "NO RF";
+    }
+    if (v.binding) {
+        return "BIND";
+    }
+    return v.telem.connected ? "LINK" : "NO LINK";
+}
+
+constexpr std::string_view afhds_link_line(const View& v) {
+    if (v.binding) {
+        return "AFHDS2A: BINDING";
+    }
+    return v.telem.connected ? "AFHDS2A: CONNECTED" : "AFHDS2A: NO LINK";
+}
+
+constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st, uint16_t battery_mv, const View& v,
                                uint8_t blink_phase) {
     const auto name = model_name(st.active_model);
     const auto trimmed = format::trim_spaces(name.view());
@@ -77,7 +102,7 @@ constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st,
         fb.draw_str_6x10(2, 2, trimmed, false);
     }
 
-    fb.draw_str_4x6(64, 3, crsf ? std::string_view("CRSF") : std::string_view("NO RF"), false);
+    fb.draw_str_4x6(64, 3, rf_status_label(v), false);
 
     const auto vbat = format::format_vbat(battery_mv);
     const auto warn_mv = static_cast<uint16_t>(st.radio.vbat_warn_deci * 100u);
@@ -368,7 +393,8 @@ constexpr void draw_channel_page(Framebuffer& fb, const std::array<uint16_t, kNu
     }
 }
 
-constexpr void draw_model_page(Framebuffer& fb, const storage::RadioStorage& st, bool crsf) {
+constexpr void draw_model_page(Framebuffer& fb, const View& v) {
+    const auto& st = v.storage;
     const auto& m = st.active_model;
     const auto name = model_name(m);
     fb.draw_str_6x10(2, 14, format::trim_spaces(name.view()), false);
@@ -383,9 +409,8 @@ constexpr void draw_model_page(Framebuffer& fb, const storage::RadioStorage& st,
     fb.draw_str_6x10(74, 34, m.thr_curve_smooth != 0 ? std::string_view("SMOOTH") : std::string_view("LINEAR"),
                      false);
 
-    // Telemetry is not ported yet, so the receiver line always shows DISCONNECTED.
-    fb.draw_str_6x10(2, 44, crsf ? std::string_view("CRSF: DISCONNECTED") : std::string_view("AFHDS2A: DISCONNECTED"),
-                     false);
+    // CRSF telemetry is not ported yet, so its line always shows DISCONNECTED.
+    fb.draw_str_6x10(2, 44, v.crsf ? std::string_view("CRSF: DISCONNECTED") : afhds_link_line(v), false);
 
     widgets::draw_footer_split(fb, "P4/5", "MODEL DASHBOARD");
 }
@@ -397,13 +422,13 @@ constexpr void draw_telemetry_placeholder(Framebuffer& fb) {
 
 // Renders the status bar and the current page, then advances the blink phase.
 constexpr void render(Framebuffer& fb, PageState& s, const View& v) {
-    draw_status_bar(fb, v.storage, v.in.battery_mv, v.crsf, s.blink_phase);
+    draw_status_bar(fb, v.storage, v.in.battery_mv, v, s.blink_phase);
 
     switch (s.page) {
         case 0: draw_gimbal_page(fb, v); break;
         case 1: draw_channel_page(fb, v.rf_chs, false); break;
         case 2: draw_channel_page(fb, v.rf_chs, true); break;
-        case 3: draw_model_page(fb, v.storage, v.crsf); break;
+        case 3: draw_model_page(fb, v); break;
         default: draw_telemetry_placeholder(fb); break;
     }
 

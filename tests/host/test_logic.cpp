@@ -821,6 +821,18 @@ void dashboard_test() {
     chs.fill(1500);
     logic::dashboard::View view{in, st, trims, chs, true};
 
+    {
+        logic::afhds2a::Telemetry linked{};
+        linked.connected = true;
+        const logic::dashboard::View bind_view{in, st, trims, chs, false, {}, true, true};
+        const logic::dashboard::View link_view{in, st, trims, chs, false, linked, false, true};
+        const logic::dashboard::View down_view{in, st, trims, chs, false, {}, false, false};
+        check(logic::dashboard::rf_status_label(bind_view) == "BIND", "dashboard shows BIND while binding");
+        check(logic::dashboard::rf_status_label(link_view) == "LINK", "dashboard shows LINK when connected");
+        check(logic::dashboard::rf_status_label(down_view) == "NO RF", "dashboard shows NO RF without radio");
+        check(logic::dashboard::afhds_link_line(link_view) == "AFHDS2A: CONNECTED", "model page shows link state");
+    }
+
     logic::display::Framebuffer fb{};
     PageState render_state{};
     for (uint8_t p = 0; p < logic::dashboard::kPageCount; ++p) {
