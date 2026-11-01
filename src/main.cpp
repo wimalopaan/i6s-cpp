@@ -25,6 +25,7 @@
 #include "ferrox/logic/mixer.hpp"
 #include "ferrox/logic/model_copy.hpp"
 #include "ferrox/logic/power.hpp"
+#include "ferrox/logic/protocol.hpp"
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
 #include "ferrox/logic/sysinfo.hpp"
@@ -54,6 +55,8 @@ ferrox::logic::display::Framebuffer g_fb{};
 bool g_rf_ok = false;
 ferrox::logic::dashboard::SessionStats g_rf_stats{};
 bool g_rf_silenced = true;
+// Protocol the CRSF UART and A7105 mute were last applied for. Lets the loop follow edits to the active model.
+ferrox::logic::protocol::Protocol g_link_protocol{};
 
 ferrox::logic::input::BoardSwitches read_board_switches() {
     using ferrox::hw::Pin;
@@ -117,13 +120,6 @@ void play_buzzer_cue(ferrox::logic::buzzer::Cue cue) {
     g_buzzer.play_cue(cue, ferrox::logic::buzzer::tone_style_from_u8(g_storage.radio.tone_style));
 }
 
-void apply_crsf_config() {
-    using namespace ferrox;
-    const auto& model = g_storage.active_model;
-    const uint8_t baud_idx = model.crsf_baud < logic::kBaudRates.size() ? model.crsf_baud : logic::kDefaultBaudIndex;
-    hw::crsf::set_enabled(true, baud_idx, model.crsf_half_duplex != 0 ? hw::uart::Duplex::Half : hw::uart::Duplex::Full);
-}
-
 // TX ID is the XOR of the three 32-bit words of the MCU UID, as in the Rust firmware.
 ferrox::logic::afhds2a::TxId tx_id_from_uid() {
     using namespace ferrox;
@@ -153,7 +149,7 @@ void apply_rf_link() {
     const auto& model = g_storage.active_model;
     hw::rf::set_rf_power(model.rf_power);
     hw::rf::set_rx_settings(model.servo_rate_hz, {model.rx_out_mode == 1}, {model.rx_serial_proto == 1});
-    set_rf_silenced(model.rf_protocol == 1);
+    set_rf_silenced(logic::protocol::link_for(logic::protocol::from_raw(model.rf_protocol)).rf_silenced);
 }
 
 // Full RF setup for the active model, used at boot and on model switch.
@@ -162,6 +158,23 @@ void apply_rf_model() {
         return;
     }
     ferrox::hw::rf::set_rx_id(ferrox::logic::afhds2a::RxId{g_storage.active_model.rx_id});
+    apply_rf_link();
+}
+
+// Applies the RF protocol of the active model: CRSF UART on or off, and the A7105 mute. Idempotent.
+void apply_protocol_link() {
+    using namespace ferrox;
+    const auto& model = g_storage.active_model;
+    const auto protocol = logic::protocol::from_raw(model.rf_protocol);
+    g_link_protocol = protocol;
+    if (logic::protocol::link_for(protocol).crsf_uart) {
+        const uint8_t baud_idx =
+            model.crsf_baud < logic::kBaudRates.size() ? model.crsf_baud : logic::kDefaultBaudIndex;
+        hw::crsf::set_enabled(true, baud_idx,
+                              model.crsf_half_duplex != 0 ? hw::uart::Duplex::Half : hw::uart::Duplex::Full);
+    } else {
+        hw::crsf::set_enabled(false, 0, hw::uart::Duplex::Full);
+    }
     apply_rf_link();
 }
 
@@ -271,7 +284,7 @@ int main() {
     const auto& model = g_storage.active_model;
     load_trims_from_model();
     g_trims.throttle_enabled = g_storage.radio.throttle_trim != 0;
-    apply_crsf_config();
+    apply_protocol_link();
 
     const bool bind_on_boot = !was_watchdog_reset && (hw::keys::scan_keys() & logic::kKeyBind) != 0;
     g_rf_ok = hw::rf::init(tx_id_from_uid());
@@ -327,6 +340,9 @@ int main() {
         const bool instant_rising =
             g_instant_edge.update(logic::trim::instant_switch_down(g_storage.radio, input.raw));
 
+        if (logic::protocol::from_raw(g_storage.active_model.rf_protocol) != g_link_protocol) {
+            apply_protocol_link();
+        }
         const bool afhds = g_rf_ok && g_storage.active_model.rf_protocol == 0;
 
         if (logic::calib::active(g_calib_wizard)) {
@@ -353,13 +369,19 @@ int main() {
                 case logic::menu::Action::EnterModelSelect: refresh_model_names(); break;
                 case logic::menu::Action::SwitchModel:
                     switch_model(ev.index);
-                    apply_crsf_config();
+                    apply_protocol_link();
                     apply_rf_model();
                     prev_armed = logic::flight::is_armed(g_storage.active_model.arm_switch, input.switches);
                     break;
                 case logic::menu::Action::SaveActiveModel:
                     logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage);
                     apply_rf_link();
+                    break;
+                case logic::menu::Action::ResetActiveModel:
+                    load_trims_from_model();
+                    logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage);
+                    apply_protocol_link();
+                    apply_rf_model();
                     break;
                 case logic::menu::Action::SaveRadioConfig:
                     logic::storage::save_radio_config<hw::I2c2Eeprom>(g_storage);

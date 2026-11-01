@@ -21,6 +21,7 @@
 #include "ferrox/logic/menu.hpp"
 #include "ferrox/logic/mixer.hpp"
 #include "ferrox/logic/model_copy.hpp"
+#include "ferrox/logic/protocol.hpp"
 #include "ferrox/logic/power.hpp"
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
@@ -3150,7 +3151,10 @@ void model_copy_test() {
         return e;
     };
     press(mn::kKeyUp, 10);
-    check(s.setup.selected == 4 && s.setup.scroll == 1, "up from Name must wrap to the Copy row and scroll");
+    check(s.setup.selected == 6 && s.setup.scroll == 3, "up from Name must wrap to the Reset row and scroll");
+    press(mn::kKeyUp, 15);
+    press(mn::kKeyUp, 16);
+    check(s.setup.selected == 4, "up from Reset must reach the Copy row");
     const mn::Event open_ev = press(mn::kKeyOk, 20);
     check(open_ev.action == Action::None && s.editing && s.copy.dst == mc::DstSlot{3},
           "OK on Copy must open the picker at source + 1");
@@ -3163,6 +3167,90 @@ void model_copy_test() {
     const mn::Event copy_ev = press(mn::kKeyOk, 70);
     check(copy_ev.action == Action::CopyActiveModel && copy_ev.index == 4 && !s.editing,
           "OK on the picker must request a copy to the chosen slot");
+}
+
+void protocol_reset_test() {
+    namespace pr = logic::protocol;
+    namespace mn = logic::menu;
+    namespace st = logic::storage;
+    using mn::Action;
+
+    check(pr::from_raw(0) == pr::Protocol::Afhds2a && pr::from_raw(1) == pr::Protocol::Crsf,
+          "stored 0 and 1 must map to AFHDS2A and CRSF");
+    check(pr::from_raw(7) == pr::Protocol::Afhds2a, "out-of-range stored protocol must fall back to AFHDS2A");
+    check(pr::to_raw(pr::Protocol::Crsf) == 1 && pr::toggle(pr::toggle(pr::Protocol::Crsf)) == pr::Protocol::Crsf,
+          "toggle must alternate and round-trip");
+    check(std::string_view{pr::label(pr::Protocol::Afhds2a)} == "AFHDS2A" &&
+              std::string_view{pr::label(pr::Protocol::Crsf)} == "CRSF",
+          "labels must match the Rust menu text");
+    check(pr::link_for(pr::Protocol::Crsf) == pr::Link{true, true},
+          "CRSF must enable the UART and mute the A7105");
+    check(pr::link_for(pr::Protocol::Afhds2a) == pr::Link{false, false},
+          "AFHDS2A must disable the UART and leave the A7105 active");
+
+    const st::ModelConfig def = st::default_model_config(3);
+    st::ModelConfig reset = pr::reset_model(pr::ModelSlot{3});
+    check(reset.rf_protocol == 0 && reset.rx_id == 0 && reset.timer_secs == def.timer_secs &&
+              reset.name == def.name,
+          "reset must restore the factory model for the slot");
+
+    // Menu flow: Protocol row opens the sub-screen, OK edits, UP/DOWN toggle, OK saves.
+    st::RadioStorage rs = st::default_storage();
+    rs.radio.active_model = 2;
+    rs.active_model.rf_protocol = 0;
+    mn::State s{};
+    s.screen = mn::Screen::ModelSetup;
+    s.setup.selected = 5;
+    s.setup.scroll = 2;
+    auto press = [&](uint16_t key, uint32_t now) {
+        const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
+        mn::update(s, mn::Input{0, 0, now + 1}, rs);
+        return e;
+    };
+
+    press(mn::kKeyOk, 10);
+    check(s.screen == mn::Screen::ProtocolSetup && !s.editing, "OK on Protocol must open the sub-screen");
+    press(mn::kKeyOk, 20);
+    check(s.editing && rs.active_model.rf_protocol == 0, "OK on the sub-screen must start editing");
+    press(mn::kKeyUp, 30);
+    check(rs.active_model.rf_protocol == 1, "UP while editing must switch to CRSF");
+    press(mn::kKeyDown, 40);
+    check(rs.active_model.rf_protocol == 0, "DOWN while editing must switch back to AFHDS2A");
+    press(mn::kKeyUp, 50);
+    const mn::Event save_ev = press(mn::kKeyOk, 60);
+    check(save_ev.action == Action::SaveActiveModel && !s.editing && rs.active_model.rf_protocol == 1,
+          "second OK must save the CRSF selection and stop editing");
+    press(mn::kKeyCancel, 70);
+    check(s.screen == mn::Screen::ModelSetup && s.setup.selected == 5 && s.setup.scroll == 2,
+          "ESC must return to Model Setup on the Protocol row");
+
+    // Cancel while editing keeps the toggled value in RAM without saving, then cancel leaves the sub-screen.
+    s.setup.selected = 5;
+    press(mn::kKeyOk, 80);
+    press(mn::kKeyOk, 90);
+    press(mn::kKeyUp, 100);
+    const mn::Event cancel_edit = press(mn::kKeyCancel, 110);
+    check(cancel_edit.action == Action::None && !s.editing && rs.active_model.rf_protocol == 0,
+          "ESC while editing must stop editing without saving");
+    check(s.screen == mn::Screen::ProtocolSetup, "ESC while editing must stay on the sub-screen");
+    press(mn::kKeyUp, 115);
+    check(rs.active_model.rf_protocol == 0, "UP after leaving edit must not change the protocol");
+    press(mn::kKeyCancel, 120);
+    check(s.screen == mn::Screen::ModelSetup, "ESC on the sub-screen must return to Model Setup");
+
+    // Reset row restores the slot defaults in place and asks the caller to apply them.
+    rs.active_model.rf_protocol = 1;
+    rs.active_model.rx_id = 0x1234;
+    rs.active_model.name = {'X', 'X', 'X', 0, 0, 0, 0, 0, 0, 0};
+    s.setup.selected = 6;
+    const mn::Event reset_ev = press(mn::kKeyOk, 130);
+    check(reset_ev.action == Action::ResetActiveModel && rs.active_model.rf_protocol == 0 &&
+              rs.active_model.rx_id == 0 && rs.active_model.name == st::default_model_config(2).name,
+          "OK on Reset must restore the active model defaults and request a reset");
+
+    s.setup.selected = 6;
+    press(mn::kKeyUp, 140);
+    check(s.setup.selected == 5, "UP from Reset must reach the Protocol row");
 }
 
 int main() {
@@ -3193,6 +3281,7 @@ int main() {
     flight_timer_test();
     bind_test();
     model_copy_test();
+    protocol_reset_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

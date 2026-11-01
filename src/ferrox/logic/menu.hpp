@@ -15,6 +15,7 @@
 #include "ferrox/logic/labels.hpp"
 #include "ferrox/logic/model_copy.hpp"
 #include "ferrox/logic/power.hpp"
+#include "ferrox/logic/protocol.hpp"
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
 #include "ferrox/logic/sysinfo.hpp"
@@ -47,8 +48,8 @@ inline constexpr std::size_t kItemModelSelect = 0;
 inline constexpr std::size_t kItemModelSetup = 1;
 
 // Rows of the model setup screen. Each row maps to one slot of the 4-row view.
-enum class SetupRow : uint8_t { Name = 0, Type, ArmSwitch, Timer, Copy };
-inline constexpr std::size_t kSetupRows = 5;
+enum class SetupRow : uint8_t { Name = 0, Type, ArmSwitch, Timer, Copy, Protocol, Reset };
+inline constexpr std::size_t kSetupRows = 7;
 inline constexpr uint8_t kNameLen = 10;
 inline constexpr uint8_t kModelTypeCount = 5;
 inline constexpr uint8_t kArmSwitchCount = 23;
@@ -72,6 +73,7 @@ enum class Screen : uint8_t {
     AuxChannels,
     RadioSetup,
     InputSetup,
+    ProtocolSetup,
 };
 
 inline constexpr std::size_t kItemDualRate = 2;
@@ -125,6 +127,7 @@ enum class Action : uint8_t {
     SaveRadioConfig,   // caller persists the radio config and applies LCD backlight and contrast
     StartCalibration,  // menu closes; caller starts the calibration wizard
     CopyActiveModel,   // index = destination slot; caller copies the active model there
+    ResetActiveModel,  // active model already reset to defaults; caller reloads trims and applies the RF link
 };
 
 struct Event {
@@ -401,12 +404,22 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, mo
                     s.editing = true;
                     s.copy = model_copy::open(active);
                     break;
+                case SetupRow::Protocol:
+                    s.screen = Screen::ProtocolSetup;
+                    s.editing = false;
+                    break;
+                case SetupRow::Reset:
+                    m = protocol::reset_model(protocol::ModelSlot{active.value});
+                    return {Action::ResetActiveModel, 0};
             }
         }
         return {};
     }
 
     switch (row) {
+        case SetupRow::Protocol:
+        case SetupRow::Reset:
+            break;
         case SetupRow::Name:
             if (n.up) {
                 auto& c = m.name[s.name_cursor];
@@ -466,6 +479,31 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, mo
                     return {Action::CopyActiveModel, static_cast<uint8_t>(s.copy.dst.value)};
             }
             break;
+    }
+    return {};
+}
+
+// Protocol sub-screen. OK toggles the protocol while editing and saves on the second OK, as Rust does.
+// Cancel while editing leaves the toggled value in RAM (not saved), then cancel returns to Model Setup.
+constexpr Event update_protocol(State& s, const Nav& n, storage::ModelConfig& m) {
+    if (!s.editing) {
+        if (n.ok) {
+            s.editing = true;
+        }
+        if (n.cancel) {
+            s.screen = Screen::ModelSetup;
+        }
+        return {};
+    }
+    if (n.up != n.down) {
+        m.rf_protocol = protocol::to_raw(protocol::toggle(protocol::from_raw(m.rf_protocol)));
+    }
+    if (n.ok) {
+        s.editing = false;
+        return {Action::SaveActiveModel, 0};
+    }
+    if (n.cancel) {
+        s.editing = false;
     }
     return {};
 }
@@ -1097,6 +1135,7 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
         case Screen::AuxChannels: return update_aux(s, n, st.active_model, st.radio);
         case Screen::RadioSetup: return update_radio_setup(s, n, st.radio);
         case Screen::InputSetup: return update_input_setup(s, n, st.radio);
+        case Screen::ProtocolSetup: return update_protocol(s, n, st.active_model);
         case Screen::ChannelReverse: return update_channel_reverse(s, n, st.active_model);
         case Screen::ChannelMonitor: return update_monitor(s, n);
         case Screen::DiagAnalog: return update_diag(s, n);
@@ -1268,6 +1307,13 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
                 }
                 break;
             }
+            case SetupRow::Protocol:
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Protocol:",
+                                       protocol::label(protocol::from_raw(m.rf_protocol)), {64});
+                break;
+            case SetupRow::Reset:
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Reset:", "[OK Defaults]", {kValueX});
+                break;
         }
     }
     widgets::draw_scrollbar(fb, {s.setup.selected}, {static_cast<int>(kSetupRows)}, {14, 36});
@@ -1278,6 +1324,16 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
         widgets::draw_footer(fb, "[OK] Next Char [ESC] Done");
     } else if (static_cast<SetupRow>(s.setup.selected) == SetupRow::Copy) {
         widgets::draw_footer(fb, "[OK] Duplicate [ESC] Cancel");
+    } else {
+        widgets::draw_footer(fb, "[OK] Done   [UP/DN] Value");
+    }
+}
+
+constexpr void render_protocol(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
+    widgets::draw_header(fb, "PROTOCOL SETUP");
+    widgets::draw_list_row(fb, {0}, !s.editing, "Proto:", protocol::label(protocol::from_raw(m.rf_protocol)), {64});
+    if (!s.editing) {
+        widgets::draw_footer(fb, "[OK] Select    [ESC] Back");
     } else {
         widgets::draw_footer(fb, "[OK] Done   [UP/DN] Value");
     }
@@ -1831,6 +1887,7 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::AuxChannels: render_aux(fb, s, st.active_model); break;
         case Screen::RadioSetup: render_radio_setup(fb, s, st.radio); break;
         case Screen::InputSetup: render_input_setup(fb, s, st.radio); break;
+        case Screen::ProtocolSetup: render_protocol(fb, s, st.active_model); break;
         case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;
         case Screen::ChannelMonitor: render_monitor(fb, s, live, st.active_model); break;
         case Screen::DiagAnalog: render_diag(fb, s, live, st.radio); break;
