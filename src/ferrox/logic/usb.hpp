@@ -499,10 +499,8 @@ struct LineEditor {
 
     constexpr std::string_view line() const { return {buf.data(), len}; }
 
-    constexpr void clear() {
-        len = 0;
-        last_cr = false;
-    }
+    // Keeps the CR/LF pairing state so the LF of a CRLF sent after a line is still collapsed.
+    constexpr void clear() { len = 0; }
 };
 
 }  // namespace ferrox::logic::usb
