@@ -1696,6 +1696,55 @@ void value_cues_test() {
     check(!ms.nav_tick && ms.cue == Cue::None, "value cues: tones clear on the next tick");
 }
 
+void cancel_click_test() {
+    namespace mn = logic::menu;
+    using logic::buzzer::Cue;
+    using mn::Screen;
+
+    logic::storage::RadioStorage st = logic::storage::default_storage();
+    uint32_t now = 0;
+    // Cancel from a fresh menu state on `from`: returns the screen and cue of the cancel tick.
+    auto cancel = [&](Screen from, bool editing, Cue& cue) {
+        mn::State ms{};
+        ms.screen = from;
+        ms.editing = editing;
+        now += 10;
+        mn::update(ms, mn::Input{mn::kKeyCancel, mn::kKeyCancel, now}, st);
+        cue = ms.cue;
+        mn::update(ms, mn::Input{0, 0, now + 1}, st);
+        check(ms.cue == Cue::None, "cancel click: tone clears on the next tick");
+        return ms.screen;
+    };
+    auto leaves_with_click = [&](Screen from, Screen to, const char* what) {
+        Cue cue{Cue::None};
+        check(cancel(from, false, cue) == to && cue == Cue::Click, what);
+    };
+
+    leaves_with_click(Screen::ModelSelect, Screen::Main, "cancel click: model select returns to main");
+    leaves_with_click(Screen::ModelSetup, Screen::Main, "cancel click: model setup returns to main");
+    leaves_with_click(Screen::ProtocolSetup, Screen::ModelSetup, "cancel click: protocol setup returns to model setup");
+    leaves_with_click(Screen::VarioSetup, Screen::ModelSetup, "cancel click: vario setup returns to model setup");
+    leaves_with_click(Screen::TelemSetup, Screen::ModelSetup, "cancel click: telemetry setup returns to model setup");
+    leaves_with_click(Screen::DualRate, Screen::Main, "cancel click: dual rate returns to main");
+    leaves_with_click(Screen::ThrottleCurve, Screen::Main, "cancel click: throttle curve returns to main");
+    leaves_with_click(Screen::WingMixer, Screen::Main, "cancel click: wing mixer returns to main");
+    leaves_with_click(Screen::MixerLine, Screen::WingMixer, "cancel click: mixer line returns to wing mixer");
+    leaves_with_click(Screen::GlobalVars, Screen::Main, "cancel click: global variables return to main");
+    leaves_with_click(Screen::AuxChannels, Screen::Main, "cancel click: aux channels return to main");
+    leaves_with_click(Screen::RadioSetup, Screen::Main, "cancel click: radio setup returns to main");
+    leaves_with_click(Screen::InputSetup, Screen::RadioSetup, "cancel click: input setup returns to radio setup");
+    leaves_with_click(Screen::ChannelReverse, Screen::Main, "cancel click: channel reverse returns to main");
+    leaves_with_click(Screen::ChannelMonitor, Screen::Main, "cancel click: channel monitor returns to main");
+    leaves_with_click(Screen::DiagAnalog, Screen::Main, "cancel click: analog diagnostics return to main");
+    leaves_with_click(Screen::SystemInfo, Screen::Main, "cancel click: system info returns to main");
+
+    Cue edit_cue{Cue::None};
+    check(cancel(Screen::DualRate, true, edit_cue) == Screen::DualRate && edit_cue == Cue::None,
+          "cancel click: leaving edit mode stays silent, as in Rust");
+    check(cancel(Screen::MixerLine, true, edit_cue) == Screen::MixerLine && edit_cue == Cue::None,
+          "cancel click: mixer line edit cancel stays silent");
+}
+
 void aux_menu_test() {
     namespace mn = logic::menu;
     using mn::Action;
@@ -4122,6 +4171,7 @@ int main() {
     throttle_curve_test();
     mixer_menu_test();
     value_cues_test();
+    cancel_click_test();
     aux_menu_test();
     radio_setup_test();
     afhds2a_test();

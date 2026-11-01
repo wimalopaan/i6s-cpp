@@ -387,6 +387,7 @@ constexpr Event update_models(State& s, const Nav& n) {
     }
     if (n.cancel) {
         s.screen = Screen::Main;
+        s.cue = buzzer::Cue::Click;
         return {};
     }
     if (n.ok) {
@@ -429,6 +430,7 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
         }
         if (n.cancel) {
             s.screen = Screen::Main;
+            s.cue = buzzer::Cue::Click;
             return save;
         }
         if (n.ok) {
@@ -551,6 +553,7 @@ constexpr Event update_protocol(State& s, const Nav& n, storage::ModelConfig& m)
         }
         if (n.cancel) {
             s.screen = Screen::ModelSetup;
+            s.cue = buzzer::Cue::Click;
         }
         return {};
     }
@@ -632,6 +635,7 @@ constexpr Event update_dual_rate(State& s, const Nav& n, storage::ModelConfig& m
             return {};
         }
         s.screen = Screen::Main;
+        s.cue = buzzer::Cue::Click;
         return {Action::SaveActiveModel, 0};
     }
     if (!s.editing) {
@@ -704,6 +708,7 @@ constexpr Event update_throttle_curve(State& s, const Nav& n, storage::ModelConf
 
     if (n.cancel) {
         s.screen = Screen::Main;
+        s.cue = buzzer::Cue::Click;
         return {Action::SaveActiveModel, 0};
     }
     if (n.up != n.down) {
@@ -885,6 +890,7 @@ constexpr uint8_t next_sink_deadband(uint8_t tenths) {
 constexpr Event update_telem(State& s, const Nav& n, storage::ModelConfig& m) {
     if (n.cancel) {
         s.screen = Screen::ModelSetup;
+        s.cue = buzzer::Cue::Click;
         s.setup.selected = kItemTelemRow;
         s.setup.scroll = window_scroll(ItemIndex{kItemTelemRow}, Rows{kListVisible});
         return {};
@@ -907,6 +913,7 @@ constexpr Event update_vario(State& s, const Nav& n, storage::ModelConfig& m, co
     if (!s.editing) {
         if (n.cancel) {
             s.screen = Screen::ModelSetup;
+            s.cue = buzzer::Cue::Click;
             s.setup.selected = kItemVarioRow;
             s.setup.scroll = window_scroll(ItemIndex{kItemVarioRow}, Rows{kListVisible});
             return {};
@@ -983,6 +990,7 @@ constexpr Event update_wing_mixer(State& s, const Nav& n, storage::ModelConfig& 
 
     if (n.cancel) {
         s.screen = Screen::Main;
+        s.cue = buzzer::Cue::Click;
         return save;
     }
     if (n.up != n.down) {
@@ -1022,6 +1030,7 @@ constexpr Event update_mixer_line(State& s, const Nav& n, storage::ModelConfig& 
             s.screen = Screen::WingMixer;
             s.wing.selected = static_cast<uint8_t>(row);
             s.wing.scroll = window_scroll({row}, {kListVisible});
+            s.cue = buzzer::Cue::Click;
             return {};
         }
         if (n.up != n.down) {
@@ -1117,6 +1126,7 @@ constexpr Event update_global_vars(State& s, const Nav& n, storage::ModelConfig&
 
     if (n.cancel) {
         s.screen = Screen::Main;
+        s.cue = buzzer::Cue::Click;
         return save;
     }
     if (n.up != n.down) {
@@ -1156,6 +1166,7 @@ constexpr Event update_aux(State& s, const Nav& n, storage::ModelConfig& m, cons
     }
     if (n.cancel) {
         s.screen = Screen::Main;
+        s.cue = buzzer::Cue::Click;
         return {Action::SaveActiveModel, 0};
     }
     if (!s.editing) {
@@ -1212,6 +1223,7 @@ constexpr std::size_t input_rows(const storage::RadioConfig& r) {
 constexpr Event update_radio_setup(State& s, const Nav& n, storage::RadioConfig& r) {
     if (n.cancel) {
         s.screen = Screen::Main;
+        s.cue = buzzer::Cue::Click;
         return {};
     }
     if (n.up != n.down) {
@@ -1232,6 +1244,7 @@ constexpr Event update_radio_setup(State& s, const Nav& n, storage::RadioConfig&
 constexpr Event update_input_setup(State& s, const Nav& n, storage::RadioConfig& r) {
     if (n.cancel) {
         s.screen = Screen::RadioSetup;
+        s.cue = buzzer::Cue::Click;
         s.radio = ListPos{kRadioInputRow, 10};
         return {};
     }
@@ -1257,6 +1270,7 @@ constexpr Event update_channel_reverse(State& s, const Nav& n, storage::ModelCon
     }
     if (n.cancel) {
         s.screen = Screen::Main;
+        s.cue = buzzer::Cue::Click;
         return {Action::SaveActiveModel, 0};
     }
     return {};
@@ -1265,6 +1279,7 @@ constexpr Event update_channel_reverse(State& s, const Nav& n, storage::ModelCon
 constexpr Event update_monitor(State& s, const Nav& n) {
     if (n.cancel) {
         s.screen = Screen::Main;
+        s.cue = buzzer::Cue::Click;
         return {};
     }
     if (n.down) {
@@ -1279,6 +1294,7 @@ constexpr Event update_monitor(State& s, const Nav& n) {
 constexpr Event update_diag(State& s, const Nav& n) {
     if (n.cancel) {
         s.screen = Screen::Main;
+        s.cue = buzzer::Cue::Click;
         return {};
     }
     if (n.up) {
@@ -1294,6 +1310,7 @@ constexpr Event update_diag(State& s, const Nav& n) {
 constexpr Event update_system(State& s, const Nav& n) {
     if (n.cancel) {
         s.screen = Screen::Main;
+        s.cue = buzzer::Cue::Click;
     }
     return {};
 }
