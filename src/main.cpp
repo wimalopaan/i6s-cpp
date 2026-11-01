@@ -555,6 +555,9 @@ int main() {
             hw::trainer::publish_out(channels);
         }
         const bool crsf = model.rf_protocol == 1;
+#if FERROX_USE_USB
+        hw::usb::poll(logic::usb::Millis{now}, channels, input.switches);
+#endif
         if (crsf) {
             hw::crsf::update_channels(now, channels, ferrox::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
                                       ferrox::logic::crsf::ArmedState{armed});

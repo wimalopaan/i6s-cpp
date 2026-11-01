@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -25,6 +26,8 @@ inline constexpr uint16_t kBtableOff = 0;
 inline constexpr uint16_t kEp0TxOff = 32;
 inline constexpr uint16_t kEp0RxOff = 96;
 inline constexpr uint16_t kRxCountControl = 0x8400;  // 64-byte buffer (BLSIZE=1, NUM_BLOCK=1)
+inline constexpr uint8_t kHidEp = 1;
+inline constexpr uint16_t kHidPmaOff = 160;
 
 inline constexpr uint8_t kIrqPriorityRaw = 0x40;
 inline constexpr uint8_t kNoAddress = 0xFF;
@@ -53,6 +56,9 @@ inline constinit Stage g_stage = Stage::Idle;
 inline constinit bool g_zlp = false;
 inline constinit std::span<const uint8_t> g_ctl_data{};
 inline constinit lu::Blob<100> g_ctl_store{};
+inline constinit std::array<uint8_t, lu::kReportSize> g_last_report{};
+inline constinit lu::Millis g_hid_last{};
+inline constinit uint8_t g_hid_idle = 0;
 
 inline volatile uint16_t& ep_reg(uint8_t n) {
     return reinterpret_cast<volatile uint16_t*>(USB)[2u * n];
@@ -163,8 +169,16 @@ inline void ep0_stage_blob(const lu::Blob<N>& blob, uint16_t wanted) {
     ep0_send_data(g_ctl_store.view(), wanted);
 }
 
+inline void open_hid() {
+    ep_reg(kHidEp) = static_cast<uint16_t>(USB_EP_INTERRUPT | kHidEp);
+    set_buffers(kHidEp, kHidPmaOff, 0, 0);
+    ep_set_status(kHidEp, kTxStatMask, USB_EP_TX_NAK);
+}
+
 inline void configure_endpoints() {
-    // Endpoints for the configured class are opened by the class modules.
+    if (g_config != 0 && lu::has_hid(g_mode)) {
+        open_hid();
+    }
 }
 
 inline void handle_get_descriptor(const Setup& s) {
@@ -174,6 +188,13 @@ inline void handle_get_descriptor(const Setup& s) {
         case 1: ep0_stage_blob(lu::device_descriptor(g_mode), s.length); break;
         case 2: ep0_stage_blob(lu::config_descriptor(g_mode), s.length); break;
         case 3: ep0_stage_blob(lu::string_descriptor(g_mode, index), s.length); break;
+        case 0x22:  // HID report descriptor
+            if (lu::has_hid(g_mode)) {
+                ep0_send_data(std::span<const uint8_t>(lu::kGamepadReportDescriptor), s.length);
+            } else {
+                ep0_stall();
+            }
+            break;
         default: ep0_stall(); break;
     }
 }
@@ -216,6 +237,32 @@ inline void handle_standard(const Setup& s) {
     }
 }
 
+// HID class requests (interface recipient). Unknown requests stall.
+inline void handle_class(const Setup& s) {
+    if (!lu::has_hid(g_mode)) {
+        ep0_stall();
+        return;
+    }
+    switch (s.request) {
+        case 0x01:  // GET_REPORT: last gamepad report
+            ep0_send_data(g_last_report, s.length);
+            break;
+        case 0x02:  // GET_IDLE
+            g_ctl_store = {};
+            g_ctl_store.put(g_hid_idle);
+            ep0_send_data(g_ctl_store.view(), s.length);
+            break;
+        case 0x0A:  // SET_IDLE
+            g_hid_idle = static_cast<uint8_t>(s.value >> 8);
+            ep0_status_in();
+            break;
+        case 0x0B:  // SET_PROTOCOL (report protocol only)
+            ep0_status_in();
+            break;
+        default: ep0_stall(); break;
+    }
+}
+
 inline void ep0_setup() {
     ep_set_status(0, kRxStatMask, USB_EP_RX_NAK);
     ep_set_status(0, kTxStatMask, USB_EP_TX_NAK);
@@ -231,6 +278,8 @@ inline void ep0_setup() {
     const uint8_t kind = (s.type >> 5) & 0x3;
     if (kind == 0) {
         handle_standard(s);
+    } else if (kind == 1) {
+        handle_class(s);
     } else {
         ep0_stall();
     }
@@ -299,6 +348,18 @@ inline void on_irq() {
         if ((istr & USB_ISTR_CTR) == 0) {
             break;
         }
+        const auto ep_id = static_cast<uint8_t>(istr & USB_ISTR_EP_ID);
+        if (ep_id != 0) {
+            // Class endpoints: the IN completion sets STAT back to NAK, so poll() can send the next report.
+            const uint16_t reg = ep_reg(ep_id);
+            if ((reg & USB_EP_CTR_TX) != 0) {
+                ep_ack(ep_id, Dir::Tx);
+            }
+            if ((reg & USB_EP_CTR_RX) != 0) {
+                ep_ack(ep_id, Dir::Rx);
+            }
+            continue;
+        }
         const uint16_t ep = ep_reg(0);
         if ((ep & USB_EP_CTR_RX) != 0) {
             ep_ack(0, Dir::Rx);
@@ -313,6 +374,22 @@ inline void on_irq() {
             ep0_tx_done();
         }
     }
+}
+
+/// Sends the gamepad report on the HID IN endpoint every kHidIntervalMs when the previous one has been taken.
+inline void poll(lu::Millis now, std::span<const uint16_t, logic::kNumChannels> chs, const logic::Switches& sw) {
+    if (!lu::has_hid(g_mode) || g_config == 0) {
+        return;
+    }
+    if (!lu::interval_elapsed(now, g_hid_last, lu::Millis{lu::kHidIntervalMs})) {
+        return;
+    }
+    if ((ep_reg(kHidEp) & USB_EP_TX_VALID) != USB_EP_TX_NAK) {
+        return;
+    }
+    g_last_report = lu::build_gamepad_report(chs, sw);
+    g_hid_last = now;
+    ep_send(kHidEp, kHidPmaOff, g_last_report);
 }
 
 /// Starts the device stack in `mode` (pull-up on, interrupts enabled).
