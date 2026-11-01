@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "ferrox/logic/auto_select.hpp"
+#include "ferrox/logic/buzzer.hpp"
 #include "ferrox/logic/channels.hpp"
 #include "ferrox/logic/curve.hpp"
 #include "ferrox/logic/format.hpp"
@@ -170,6 +171,7 @@ struct State {
     Screen screen{Screen::Closed};
     bool waiting_release{false};
     bool nav_tick{false};  // set on each list step this tick, for the navigation click
+    buzzer::Cue cue{buzzer::Cue::None};  // value-edit tone for this tick
     ListPos main{};
     ListPos models{};
     ListPos setup{};
@@ -600,13 +602,26 @@ constexpr uint8_t step_dr_switch(const storage::RadioConfig& r, uint8_t cur, boo
 }
 
 // One repeat step up or down that stays inside [min, max]. Values off the step grid are not snapped.
+// Returns true only when the value changed.
 template <typename T>
-constexpr void step_clamped(T& v, Range range, int step, const Nav& n) {
+constexpr bool step_clamped(T& v, Range range, int step, const Nav& n) {
     const int cur = v;
     if (n.up && cur + step <= range.max) {
         v = static_cast<T>(cur + step);
-    } else if (n.down && cur - step >= range.min) {
+        return true;
+    }
+    if (n.down && cur - step >= range.min) {
         v = static_cast<T>(cur - step);
+        return true;
+    }
+    return false;
+}
+
+// Value-edit tone for a clamped step, played only when the value moved.
+template <typename T>
+constexpr void step_clamped_tone(State& s, T& v, Range range, int step, const Nav& n) {
+    if (step_clamped(v, range, step, n)) {
+        s.cue = buzzer::Cue::ValueStep;
     }
 }
 
@@ -635,22 +650,26 @@ constexpr Event update_dual_rate(State& s, const Nav& n, storage::ModelConfig& m
             if (n.changes.dr_switch) {
                 if (is_dr_switch_available(*n.changes.dr_switch, r)) {
                     m.dr_switch = *n.changes.dr_switch;
+                    s.cue = buzzer::Cue::ValueSelect;
                 }
             } else if (n.up) {
                 m.dr_switch = step_dr_switch(r, m.dr_switch, false);
+                s.cue = buzzer::Cue::ValueStep;
             } else if (n.down) {
                 m.dr_switch = step_dr_switch(r, m.dr_switch, true);
+                s.cue = buzzer::Cue::ValueStep;
             }
             break;
         case 1:
             if (n.up || n.down) {
                 s.axis = static_cast<uint8_t>((s.axis + 1) % 3);
+                s.cue = buzzer::Cue::ValueStep;
             }
             break;
-        case 2: step_clamped(m.dr_high[axis], Range{50, 100}, 5, n); break;
-        case 3: step_clamped(m.dr_low[axis], Range{30, 100}, 5, n); break;
-        case 4: step_clamped(m.expo_high[axis], Range{-100, 100}, 5, n); break;
-        case 5: step_clamped(m.expo_low[axis], Range{-100, 100}, 5, n); break;
+        case 2: step_clamped_tone(s, m.dr_high[axis], Range{50, 100}, 5, n); break;
+        case 3: step_clamped_tone(s, m.dr_low[axis], Range{30, 100}, 5, n); break;
+        case 4: step_clamped_tone(s, m.expo_high[axis], Range{-100, 100}, 5, n); break;
+        case 5: step_clamped_tone(s, m.expo_low[axis], Range{-100, 100}, 5, n); break;
         default: break;
     }
     if (n.ok) {
@@ -669,6 +688,9 @@ constexpr Event update_throttle_curve(State& s, const Nav& n, storage::ModelConf
         }
         const std::size_t pt = sel >= 2 ? sel - 2u : 0u;
         step_clamped(m.thr_curve[pt], Range{0, 100}, 1, n);
+        if (n.up || n.down) {
+            s.cue = buzzer::Cue::ValueStep;
+        }
         if (n.ok) {
             if (sel + 1u < items) {
                 s.throttle_curve.selected = static_cast<uint8_t>(sel + 1);
@@ -687,6 +709,7 @@ constexpr Event update_throttle_curve(State& s, const Nav& n, storage::ModelConf
     if (n.up != n.down) {
         const std::size_t next = n.down ? (sel + 1u) % items : (sel == 0 ? items - 1 : sel - 1u);
         s.throttle_curve.selected = static_cast<uint8_t>(next);
+        s.cue = buzzer::Cue::ValueStep;
     }
     if (n.ok) {
         if (sel == 0) {
@@ -950,7 +973,7 @@ constexpr Event update_wing_mixer(State& s, const Nav& n, storage::ModelConfig& 
             s.editing = false;
             return save;
         }
-        step_clamped(m.template_diff, Range{-100, 100}, 5, n);
+        step_clamped_tone(s, m.template_diff, Range{-100, 100}, 5, n);
         if (n.ok) {
             s.editing = false;
             return save;
@@ -1020,43 +1043,52 @@ constexpr Event update_mixer_line(State& s, const Nav& n, storage::ModelConfig& 
         case 0:
             if (up) {
                 mix.target_ch = static_cast<uint8_t>((mix.target_ch + 1) % 19);
+                s.cue = buzzer::Cue::ValueStep;
             } else if (down) {
                 mix.target_ch = static_cast<uint8_t>(mix.target_ch == 0 ? 18 : mix.target_ch - 1);
+                s.cue = buzzer::Cue::ValueStep;
             }
             break;
         case 1:
             if (const auto pot = pot_change_source(n.changes)) {
                 if (is_source_available(*pot, r, m)) {
                     mix.source = *pot;
+                    s.cue = buzzer::Cue::ValueSelect;
                 }
             } else if (up || down) {
                 mix.source = step_available(mix.source, labels::kSourceNames.size(), down,
                                             [&](uint8_t c) { return is_source_available(c, r, m); });
+                s.cue = buzzer::Cue::ValueStep;
             }
             break;
         case 2:
             if (up || down) {
                 mix.weight_src = step_available(mix.weight_src, labels::kWeightSrcNames.size(), down,
                                                 [&](uint8_t c) { return is_weight_src_available(c, m); });
+                s.cue = buzzer::Cue::ValueStep;
             }
             break;
-        case 3: step_clamped(mix.weight, Range{-100, 100}, 5, n); break;
-        case 4: step_clamped(mix.offset, Range{-100, 100}, 5, n); break;
+        case 3: step_clamped_tone(s, mix.weight, Range{-100, 100}, 5, n); break;
+        case 4: step_clamped_tone(s, mix.offset, Range{-100, 100}, 5, n); break;
         case 5:
             if (n.changes.sw_cond) {
                 if (is_switch_cond_available(*n.changes.sw_cond, r)) {
                     mix.switch_sel = *n.changes.sw_cond;
+                    s.cue = buzzer::Cue::ValueSelect;
                 }
             } else if (up || down) {
                 mix.switch_sel = step_available(mix.switch_sel, labels::kSwitchCondNames.size(), down,
                                                 [&](uint8_t c) { return is_switch_cond_available(c, r); });
+                s.cue = buzzer::Cue::ValueStep;
             }
             break;
         case 6:
             if (up) {
                 mix.mode = static_cast<uint8_t>((mix.mode + 1) % labels::kMixModeNames.size());
+                s.cue = buzzer::Cue::ValueStep;
             } else if (down) {
                 mix.mode = static_cast<uint8_t>(mix.mode == 0 ? labels::kMixModeNames.size() - 1 : mix.mode - 1);
+                s.cue = buzzer::Cue::ValueStep;
             }
             break;
         default: break;
@@ -1075,7 +1107,7 @@ constexpr Event update_global_vars(State& s, const Nav& n, storage::ModelConfig&
             s.editing = false;
             return save;
         }
-        step_clamped(m.gvars[s.gvars.selected], Range{-1000, 1000}, 50, n);
+        step_clamped_tone(s, m.gvars[s.gvars.selected], Range{-1000, 1000}, 50, n);
         if (n.ok) {
             s.editing = false;
             return save;
@@ -1251,8 +1283,10 @@ constexpr Event update_diag(State& s, const Nav& n) {
     }
     if (n.up) {
         s.page = static_cast<uint8_t>((s.page + kDiagPages - 1) % kDiagPages);
+        s.nav_tick = true;
     } else if (n.down || n.ok) {
         s.page = static_cast<uint8_t>((s.page + 1) % kDiagPages);
+        s.nav_tick = true;
     }
     return {};
 }
@@ -1267,6 +1301,7 @@ constexpr Event update_system(State& s, const Nav& n) {
 // Advances the menu state for one tick. `st` is edited in place; the caller persists it when told to.
 constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
     s.nav_tick = false;
+    s.cue = buzzer::Cue::None;
     if (s.screen == Screen::Closed) {
         return {};
     }

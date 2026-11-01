@@ -1607,6 +1607,95 @@ void mixer_menu_test() {
     }
 }
 
+void value_cues_test() {
+    namespace mn = logic::menu;
+    using logic::buzzer::Cue;
+    using mn::Screen;
+
+    logic::storage::RadioStorage st = logic::storage::default_storage();
+    st.radio.ext_switches = 0;
+    st.radio.adc_modes = {3, 3, 3, 3, 0, 0, 0, 0, 0, 0};  // SA..SD unusable as dual-rate switches
+    mn::State ms{};
+    mn::update(ms, mn::Input{0, 0, 0}, st);
+    uint32_t now = 0;
+    // One key press: returns the cue raised on the press tick, then releases the key.
+    auto press = [&](uint16_t key, logic::auto_select::Changes changes = {}) {
+        now += 10;
+        mn::update(ms, mn::Input{key, key, now, changes}, st);
+        const Cue cue = ms.cue;
+        mn::update(ms, mn::Input{0, 0, now + 1}, st);
+        now += 1;
+        return cue;
+    };
+
+    ms.screen = Screen::DualRate;
+    ms.editing = true;
+    ms.dual_rate.selected = 2;
+    st.active_model.dr_high[0] = 80;
+    check(press(mn::kKeyUp) == Cue::ValueStep && st.active_model.dr_high[0] == 85,
+          "value cues: dual-rate high steps up with a tone");
+    check(press(mn::kKeyDown) == Cue::ValueStep && st.active_model.dr_high[0] == 80,
+          "value cues: dual-rate high steps down with a tone");
+    st.active_model.dr_high[0] = 100;
+    check(press(mn::kKeyUp) == Cue::None && st.active_model.dr_high[0] == 100,
+          "value cues: no tone when dual-rate is clamped");
+
+    ms.dual_rate.selected = 0;
+    st.active_model.dr_switch = 0;
+    check(press(0, {std::nullopt, uint8_t{1}}) == Cue::None && st.active_model.dr_switch == 0,
+          "value cues: unavailable dual-rate switch is silent");
+    check(press(0, {std::nullopt, uint8_t{0}}) == Cue::ValueSelect,
+          "value cues: dual-rate switch selection chimes at 2400 Hz");
+    check(press(mn::kKeyDown) == Cue::ValueStep, "value cues: dual-rate switch cycling tones");
+    ms.dual_rate.selected = 1;
+    check(press(mn::kKeyDown) == Cue::ValueStep && ms.axis == 1, "value cues: axis cycling tones");
+
+    ms.screen = Screen::ThrottleCurve;
+    ms.editing = false;
+    ms.throttle_curve.selected = 3;
+    check(press(mn::kKeyDown) == Cue::ValueStep && ms.throttle_curve.selected == 4,
+          "value cues: throttle curve cursor tones");
+    ms.editing = true;
+    st.active_model.thr_curve[1] = 100;
+    check(press(mn::kKeyUp) == Cue::ValueStep, "value cues: throttle point tones on every press");
+
+    ms.screen = Screen::WingMixer;
+    ms.editing = true;
+    st.active_model.wing_tail_mix = 1;
+    st.active_model.template_diff = 100;
+    check(press(mn::kKeyUp) == Cue::None, "value cues: no tone when the template diff is clamped");
+    check(press(mn::kKeyDown) == Cue::ValueStep && st.active_model.template_diff == 95,
+          "value cues: template diff tones when it moves");
+
+    ms.screen = Screen::GlobalVars;
+    ms.editing = true;
+    ms.gvars.selected = 0;
+    st.active_model.gvars[0] = 1000;
+    check(press(mn::kKeyUp) == Cue::None, "value cues: no tone when the global variable is clamped");
+    check(press(mn::kKeyDown) == Cue::ValueStep && st.active_model.gvars[0] == 950,
+          "value cues: global variable tones when it moves");
+
+    ms.screen = Screen::MixerLine;
+    ms.editing = true;
+    ms.mix_idx = 0;
+    ms.mix_line.selected = 0;
+    check(press(mn::kKeyUp) == Cue::ValueStep, "value cues: mixer target channel tones");
+    ms.mix_line.selected = 3;
+    st.active_model.mixes[0].weight = 100;
+    check(press(mn::kKeyUp) == Cue::None && st.active_model.mixes[0].weight == 100,
+          "value cues: no tone when the mixer weight is clamped");
+    check(press(mn::kKeyDown) == Cue::ValueStep && st.active_model.mixes[0].weight == 95,
+          "value cues: mixer weight tones when it moves");
+    ms.screen = Screen::DiagAnalog;
+    ms.editing = false;
+    ms.page = 0;
+    now += 10;
+    mn::update(ms, mn::Input{mn::kKeyDown, mn::kKeyDown, now}, st);
+    check(ms.nav_tick && ms.cue == Cue::None && ms.page == 1, "value cues: diag page change uses the nav tick");
+    mn::update(ms, mn::Input{0, 0, now + 1}, st);
+    check(!ms.nav_tick && ms.cue == Cue::None, "value cues: tones clear on the next tick");
+}
+
 void aux_menu_test() {
     namespace mn = logic::menu;
     using mn::Action;
@@ -2478,7 +2567,7 @@ void buzzer_test() {
 
     for (const ToneStyle style : {ToneStyle::Simple, ToneStyle::Rich}) {
         check(pattern_for(Cue::None, style).notes.empty(), "buzzer: None has no pattern");
-        for (uint8_t c = static_cast<uint8_t>(Cue::Click); c <= static_cast<uint8_t>(Cue::WatchdogRecover); ++c) {
+        for (uint8_t c = static_cast<uint8_t>(Cue::Click); c <= static_cast<uint8_t>(Cue::ValueSelect); ++c) {
             const auto pattern = pattern_for(static_cast<Cue>(c), style);
             check(!pattern.notes.empty(), "buzzer: every cue has a pattern");
             for (const Note& n : pattern.notes) {
@@ -2495,6 +2584,16 @@ void buzzer_test() {
     check(pattern_for(Cue::WarnBattery, ToneStyle::Simple).repeats == Repeats{1}, "buzzer: Simple battery repeats once");
     check(pattern_for(Cue::WarnCritical, ToneStyle::Simple).repeats == Repeats{2}, "buzzer: Simple critical repeats twice");
     check(pattern_for(Cue::WarnBattery, ToneStyle::Rich).repeats == Repeats{0}, "buzzer: Rich battery plays once");
+    check(pattern_for(Cue::ValueStep, ToneStyle::Simple).notes.size() == 1 &&
+              pattern_for(Cue::ValueStep, ToneStyle::Simple).notes[0] == pattern_for(Cue::ValueStep, ToneStyle::Rich).notes[0] &&
+              pattern_for(Cue::ValueStep, ToneStyle::Rich).notes[0].freq.value == 2200 &&
+              pattern_for(Cue::ValueStep, ToneStyle::Rich).notes[0].duration.value == 20,
+          "buzzer: menu value step is a 2200 Hz 20 ms tone in both styles");
+    check(pattern_for(Cue::ValueSelect, ToneStyle::Simple).notes.size() == 1 &&
+              pattern_for(Cue::ValueSelect, ToneStyle::Simple).notes[0] == pattern_for(Cue::ValueSelect, ToneStyle::Rich).notes[0] &&
+              pattern_for(Cue::ValueSelect, ToneStyle::Rich).notes[0].freq.value == 2400 &&
+              pattern_for(Cue::ValueSelect, ToneStyle::Rich).notes[0].duration.value == 40,
+          "buzzer: menu value select is a 2400 Hz 40 ms tone in both styles");
     check(pattern_for(Cue::InstantTrim, ToneStyle::Simple).notes.size() == 1 &&
               pattern_for(Cue::InstantTrim, ToneStyle::Simple).notes[0] == pattern_for(Cue::InstantTrim, ToneStyle::Rich).notes[0] &&
               pattern_for(Cue::InstantTrim, ToneStyle::Simple).notes[0].freq == FreqHz{2400} &&
@@ -4022,6 +4121,7 @@ int main() {
     auto_select_test();
     throttle_curve_test();
     mixer_menu_test();
+    value_cues_test();
     aux_menu_test();
     radio_setup_test();
     afhds2a_test();

@@ -429,6 +429,7 @@ int main() {
             if (menu_state.nav_tick) {
                 play_buzzer_cue(logic::buzzer::Cue::NavStep);
             }
+            play_buzzer_cue(menu_state.cue);
             switch (ev.action) {
                 case logic::menu::Action::EnterModelSelect: refresh_model_names(); break;
                 case logic::menu::Action::SwitchModel:

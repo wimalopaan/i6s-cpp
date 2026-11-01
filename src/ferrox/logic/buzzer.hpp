@@ -119,6 +119,8 @@ enum class Cue : uint8_t {
     RxSave,
     PreflightExit,
     WatchdogRecover,
+    ValueStep,
+    ValueSelect,
 };
 
 namespace tables {
@@ -195,6 +197,8 @@ inline constexpr std::array<Note, 1> kBindHold{{{FreqHz{2400}, DurationMs{150}, 
 inline constexpr std::array<Note, 1> kRxSave{{{FreqHz{2400}, DurationMs{70}, PauseMs{50}}}};
 inline constexpr std::array<Note, 1> kPreflightExit{{{FreqHz{2200}, DurationMs{40}, PauseMs{0}}}};
 inline constexpr std::array<Note, 1> kWatchdogRecover{{{FreqHz{2600}, DurationMs{60}, PauseMs{40}}}};
+inline constexpr std::array<Note, 1> kValueStep{{{FreqHz{2200}, DurationMs{20}, PauseMs{0}}}};
+inline constexpr std::array<Note, 1> kValueSelect{{{FreqHz{2400}, DurationMs{40}, PauseMs{0}}}};
 
 }  // namespace tables
 
@@ -233,6 +237,8 @@ constexpr Pattern pattern_for(Cue cue, ToneStyle style) {
         case Cue::RxSave: return Pattern{tables::kRxSave, Repeats{2}};
         case Cue::PreflightExit: return single(tables::kPreflightExit);
         case Cue::WatchdogRecover: return Pattern{tables::kWatchdogRecover, Repeats{3}};
+        case Cue::ValueStep: return single(tables::kValueStep);
+        case Cue::ValueSelect: return single(tables::kValueSelect);
     }
     return {};
 }
