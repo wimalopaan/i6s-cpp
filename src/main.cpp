@@ -78,6 +78,12 @@ void refresh_model_names() {
     }
 }
 
+// Applies the stored LCD backlight level and contrast.
+void apply_lcd_settings(const ferrox::logic::storage::RadioConfig& r) {
+    ferrox::hw::lcd::set_backlight_level(static_cast<uint8_t>(r.backlight_brightness * 10));
+    ferrox::hw::lcd::set_contrast(r.lcd_contrast);
+}
+
 // Stores the current model, then loads the model at `index` as the active one.
 void switch_model(uint8_t index) {
     using namespace ferrox::logic::storage;
@@ -158,7 +164,7 @@ int main() {
     apply_crsf_config();
 
     hw::lcd::init();
-    hw::lcd::set_backlight_level(100);
+    apply_lcd_settings(g_storage.radio);
 
     using namespace logic::dashboard;
     PageState page_state{};
@@ -224,6 +230,10 @@ int main() {
                     break;
                 case logic::menu::Action::SaveActiveModel:
                     logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage);
+                    break;
+                case logic::menu::Action::SaveRadioConfig:
+                    logic::storage::save_radio_config<hw::I2c2Eeprom>(g_storage);
+                    apply_lcd_settings(g_storage.radio);
                     break;
                 case logic::menu::Action::StartCalibration: logic::calib::start(g_calib_wizard); break;
                 case logic::menu::Action::CloseMenu:

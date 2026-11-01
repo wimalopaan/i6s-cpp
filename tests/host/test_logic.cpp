@@ -1520,6 +1520,86 @@ void aux_menu_test() {
           "aux: cancel from the list must save and return to Main");
 }
 
+void radio_setup_test() {
+    namespace mn = logic::menu;
+    using mn::Action;
+    using mn::Event;
+    using mn::Screen;
+
+    logic::storage::RadioStorage st = logic::storage::default_storage();
+    st.radio.ext_adc = 0;
+    mn::State ms{};
+    mn::open(ms);
+    uint32_t now = 0;
+    auto tap = [&](uint16_t key) {
+        now += 10;
+        const Event e = mn::update(ms, mn::Input{key, key, now}, st);
+        mn::update(ms, mn::Input{0, 0, now + 1}, st);
+        now += 1;
+        return e;
+    };
+
+    ms.main.selected = mn::kItemRadioSetup;
+    mn::update(ms, mn::Input{0, 0, 0}, st);
+    tap(mn::kKeyOk);
+    check(ms.screen == Screen::RadioSetup, "radio: Radio Setup main item must open the screen");
+
+    const Event thr = tap(mn::kKeyOk);
+    check(thr.action == Action::SaveRadioConfig && st.radio.throttle_trim == 1,
+          "radio: throttle trim must cycle and request a save");
+
+    ms.radio.selected = 4;
+    tap(mn::kKeyOk);
+    check(st.radio.backlight_brightness == 1, "radio: brightness must wrap from 10 to 1");
+
+    ms.radio.selected = 5;
+    tap(mn::kKeyOk);
+    check(st.radio.lcd_contrast == 40, "radio: contrast must step by 3");
+    st.radio.lcd_contrast = 50;
+    tap(mn::kKeyOk);
+    check(st.radio.lcd_contrast == 20, "radio: contrast must wrap from 50 to 20");
+
+    ms.radio.selected = 6;
+    tap(mn::kKeyOk);
+    check(st.radio.vbat_warn_deci == 45, "radio: battery warning must step by 0.1 V");
+
+    ms.radio.selected = 3;
+    tap(mn::kKeyOk);
+    check(st.radio.backlight_timeout == 1, "radio: backlight timeout must cycle");
+
+    ms.radio.selected = 8;
+    tap(mn::kKeyOk);
+    check(st.radio.ext_module_pwr == 1, "radio: PC13 power must toggle");
+
+    ms.radio.selected = 14;
+    tap(mn::kKeyOk);
+    check(st.radio.trainer_config == mn::kTrainerPpmOut, "radio: PPM out must set its bit");
+    ms.radio.selected = 15;
+    tap(mn::kKeyOk);
+    check(st.radio.trainer_config == (mn::kTrainerPpmOut | mn::kTrainerPpmIn), "radio: trainer in must set its bit");
+    ms.radio.selected = 14;
+    tap(mn::kKeyOk);
+    check(st.radio.trainer_config == mn::kTrainerPpmIn, "radio: PPM out must clear only its bit");
+
+    ms.radio.selected = mn::kRadioInputRow;
+    tap(mn::kKeyOk);
+    check(ms.screen == Screen::InputSetup && ms.input_setup.selected == 0,
+          "radio: Input Setup row must open the Input Modes screen");
+
+    const Event mode = tap(mn::kKeyOk);
+    check(mode.action == Action::SaveRadioConfig && st.radio.adc_modes[0] == 1,
+          "radio: input mode must cycle and request a save");
+    st.radio.adc_modes[0] = 6;
+    tap(mn::kKeyOk);
+    check(st.radio.adc_modes[0] == 0, "radio: input mode must wrap after INST-TRIM");
+
+    tap(mn::kKeyCancel);
+    check(ms.screen == Screen::RadioSetup && ms.radio.selected == mn::kRadioInputRow && ms.radio.scroll == 10,
+          "radio: cancel in Input Modes must return to row 13");
+    const Event back = tap(mn::kKeyCancel);
+    check(back.action == Action::None && ms.screen == Screen::Main, "radio: cancel must return to the main menu");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -1536,6 +1616,7 @@ int main() {
     throttle_curve_test();
     mixer_menu_test();
     aux_menu_test();
+    radio_setup_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

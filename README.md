@@ -30,11 +30,14 @@ Ported so far:
 
 - Calibration wizard (pure logic and rendering, host-tested): start from the main menu "Calibration" entry, which closes the menu. Steps: centre (OK captures), limits (move all sticks and configured pots, OK saves once every stick has enough travel), complete screen for 1.2 s. Stick endpoints get a 63/64 margin. Pots are saved only with at least 400 counts of travel. Pot centre and limits are kept in separate arrays from the sticks, which fixes a Rust bug where pot channels 0–3 overwrote the stick endpoints. Saved to EEPROM with `save_radio_config`. Logic and draw code in `logic/calib.hpp`, wiring in `main.cpp`. Deviations from Rust: no buzzer chimes yet, and the complete screen says "EEPROM updated OK" instead of "Flash updated OK". Not tested on hardware.
 
-Dual rate deviation: flipping the physical DR switch while the editor is open does not select the switch yet (Rust `dr_change`).
+Radio setup (main menu item 7): 16 rows as in the Rust `setup.rs`. Throttle trim (OFF/IDLE/LINEAR), beeper, tones, backlight timer, backlight level (10%..100%, applied to the LCD at once), contrast (20..50, applied at once), battery warning (4.0..5.0 V), USB mode, PC13 power polarity, external switches, P7 analog, stick mode (MODE 1..4), gimbal type, PPM out and trainer in bits. The Input Setup row opens the Input Modes screen for SA..VRF (6 rows, or 10 with P7 analog) with DEFAULT..INST-TRIM. Each change saves the radio config at once, as in Rust. The menu returns `Action::SaveRadioConfig`, and `main.cpp` saves and applies the LCD settings. The stored LCD values are also applied at boot. Logic in `logic/menu.hpp`, host-tested in `radio_setup_test()`. Not tested on hardware.
+
+Radio setup deviations: the hardware hooks of the Rust `hw/mod.rs` and `buzzer` are not ported. The values are stored, but PPM out and in, PC13 module power, external switches and ADC do not change any pins, the buzzer does not sound, the backlight timeout does not dim the screen, and USB mode does not re-init USB.
+ the physical DR switch while the editor is open does not select the switch yet (Rust `dr_change`).
 
 Wing/mixer deviations: the pot and switch auto-select while moving a control (Rust `pot_change` and `sw_change`) is not ported. Rust returns to the wrong row from a mix line when Diff is shown; the port returns to the mix row it came from.
 
-Not yet ported: main-menu items after "Channel Reverse" (radio setup), diagnostics pages 2–4 and system info firmware/storage lines, model setup rows copy, vario, telemetry, protocol and reset, bind, telemetry page P5 (placeholder only), AFHDS2A RF status and model page line, buzzer (including calibration chimes), USB, trainer, trim key state machine and trim footers, flight timer state machine and arm chimes, bind footer.
+Not yet ported: diagnostics pages 2–4 and system info firmware/storage lines, model setup rows copy, vario, telemetry, protocol and reset, bind, telemetry page P5 (placeholder only), AFHDS2A RF status and model page line, buzzer (including calibration chimes), USB, trainer, trim key state machine and trim footers, flight timer state machine and arm chimes, bind footer.
 
 
 ## Build

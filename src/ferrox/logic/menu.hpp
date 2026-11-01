@@ -67,6 +67,8 @@ enum class Screen : uint8_t {
     MixerLine,
     GlobalVars,
     AuxChannels,
+    RadioSetup,
+    InputSetup,
 };
 
 inline constexpr std::size_t kItemDualRate = 2;
@@ -81,6 +83,21 @@ inline constexpr std::size_t kItemChannelMonitor = 8;
 inline constexpr std::size_t kItemCalibration = 9;
 inline constexpr std::size_t kItemDiagAnalog = 10;
 inline constexpr std::size_t kItemSystemInfo = 11;
+inline constexpr std::size_t kItemRadioSetup = 7;
+inline constexpr std::size_t kRadioRows = 16;
+inline constexpr std::size_t kRadioInputRow = 13;  // opens the Input Modes sub-screen
+inline constexpr std::size_t kRadioInputMaxRows = 10;
+inline constexpr std::size_t kAdcModeCount = 7;
+inline constexpr uint8_t kTrainerPpmOut = 0x01;
+inline constexpr uint8_t kTrainerPpmIn = 0x02;
+inline constexpr std::array<std::string_view, kRadioRows> kRadioLabels{
+    "Thr Trim:", "Beeper:",   "Tones:",     "BL Timer:",  "BL Level:", "Contrast:", "Bat Warn:", "USB Mode:",
+    "PC13 Pwr:", "Ext Sw:",   "P7 Analog:", "Stick Mode:", "Gimbals:",  "Input Setup", "PPM Out:", "Trainer In:"};
+inline constexpr std::array<std::string_view, kRadioInputMaxRows> kAuxInputNames{
+    "SA (PA4):", "SB (PA5):", "SC (PB0):", "SD (PB1):", "VRA (PA6):",
+    "VRB (PA7):", "VRC (PC2):", "VRD (PC3):", "VRE (PC4):", "VRF (PC5):"};
+inline constexpr std::array<std::string_view, kAdcModeCount> kAdcModeNames{
+    "DEFAULT", "2-POS", "3-POS", "6-POS", "POT", "POT-D", "INST-TRIM"};
 inline constexpr std::size_t kMonitorPages = 3;
 inline constexpr std::size_t kMonitorRows = 6;
 inline constexpr std::size_t kDiagPages = 2;
@@ -99,6 +116,7 @@ enum class Action : uint8_t {
     EnterModelSelect,  // caller refreshes ModelNames before the next render
     SwitchModel,       // index = target model slot
     SaveActiveModel,
+    SaveRadioConfig,   // caller persists the radio config and applies LCD backlight and contrast
     StartCalibration,  // menu closes; caller starts the calibration wizard
 };
 
@@ -138,6 +156,8 @@ struct State {
     uint8_t mix_idx{0};  // mix line shown by the line editor, 0..kNumMixLines-1
     ListPos reverse{};
     ListPos aux{};
+    ListPos radio{};
+    ListPos input_setup{};
     uint8_t axis{0};  // dual rate axis: 0 Roll, 1 Pitch, 2 Yaw
     uint8_t page{0};  // page of the channel monitor or analog diagnostics
     bool editing{false};
@@ -292,6 +312,10 @@ constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
         }
         if (s.main.selected == kItemSystemInfo) {
             s.screen = Screen::SystemInfo;
+        }
+        if (s.main.selected == kItemRadioSetup) {
+            s.screen = Screen::RadioSetup;
+            s.radio = ListPos{};
         }
     }
     return {};
@@ -874,6 +898,75 @@ constexpr Event update_aux(State& s, const Nav& n, storage::ModelConfig& m, cons
     return {};
 }
 
+constexpr void toggle_flag(uint8_t& v) {
+    v = v == 0 ? 1 : 0;
+}
+
+// Advances one Radio Setup row with the same cycle rules as the Rust menu.
+constexpr void cycle_radio_row(storage::RadioConfig& r, std::size_t row) {
+    switch (row) {
+        case 0: r.throttle_trim = static_cast<uint8_t>((r.throttle_trim + 1) % 3); break;
+        case 1: toggle_flag(r.audio_enabled); break;
+        case 2: toggle_flag(r.tone_style); break;
+        case 3: r.backlight_timeout = static_cast<uint8_t>((r.backlight_timeout + 1) % 4); break;
+        case 4: r.backlight_brightness = r.backlight_brightness >= 10 ? 1 : static_cast<uint8_t>(r.backlight_brightness + 1); break;
+        case 5: r.lcd_contrast = r.lcd_contrast >= 50 ? 20 : static_cast<uint8_t>(std::min<unsigned>(r.lcd_contrast + 3u, 50u)); break;
+        case 6: r.vbat_warn_deci = r.vbat_warn_deci >= 50 ? 40 : static_cast<uint8_t>(r.vbat_warn_deci + 1); break;
+        case 7: r.usb_mode = static_cast<uint8_t>((r.usb_mode + 1) % 4); break;
+        case 8: toggle_flag(r.ext_module_pwr); break;
+        case 9: toggle_flag(r.ext_switches); break;
+        case 10: toggle_flag(r.ext_adc); break;
+        case 11: r.stick_mode = static_cast<uint8_t>((r.stick_mode + 1) % 4); break;
+        case 12: toggle_flag(r.gimbal_type); break;
+        case 14: r.trainer_config ^= kTrainerPpmOut; break;
+        case 15: r.trainer_config ^= kTrainerPpmIn; break;
+        default: break;
+    }
+}
+
+constexpr std::size_t input_rows(const storage::RadioConfig& r) {
+    return r.ext_adc != 0 ? kRadioInputMaxRows : 6;
+}
+
+constexpr Event update_radio_setup(State& s, const Nav& n, storage::RadioConfig& r) {
+    if (n.cancel) {
+        s.screen = Screen::Main;
+        return {};
+    }
+    if (n.up != n.down) {
+        step_list(s.radio, kRadioRows, kListVisible, n.down);
+    }
+    if (!n.ok) {
+        return {};
+    }
+    if (s.radio.selected == kRadioInputRow) {
+        s.screen = Screen::InputSetup;
+        s.input_setup = ListPos{};
+        return {};
+    }
+    cycle_radio_row(r, s.radio.selected);
+    return {Action::SaveRadioConfig, 0};
+}
+
+constexpr Event update_input_setup(State& s, const Nav& n, storage::RadioConfig& r) {
+    if (n.cancel) {
+        s.screen = Screen::RadioSetup;
+        s.radio = ListPos{kRadioInputRow, 10};
+        return {};
+    }
+    const std::size_t count = input_rows(r);
+    if (n.up != n.down) {
+        step_list(s.input_setup, count, kListVisible, n.down);
+    }
+    if (!n.ok || s.input_setup.selected >= count) {
+        return {};
+    }
+    auto& mode = r.adc_modes[s.input_setup.selected];
+    const uint8_t cur = std::min<uint8_t>(mode, kAdcModeCount - 1);
+    mode = static_cast<uint8_t>((cur + 1) % kAdcModeCount);
+    return {Action::SaveRadioConfig, 0};
+}
+
 constexpr Event update_channel_reverse(State& s, const Nav& n, storage::ModelConfig& m) {
     if (n.up != n.down) {
         step_list(s.reverse, kNumChannels, kListVisible, n.down);
@@ -951,6 +1044,8 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
         case Screen::DualRate: return update_dual_rate(s, n, st.active_model, st.radio);
         case Screen::ThrottleCurve: return update_throttle_curve(s, n, st.active_model);
         case Screen::AuxChannels: return update_aux(s, n, st.active_model, st.radio);
+        case Screen::RadioSetup: return update_radio_setup(s, n, st.radio);
+        case Screen::InputSetup: return update_input_setup(s, n, st.radio);
         case Screen::ChannelReverse: return update_channel_reverse(s, n, st.active_model);
         case Screen::ChannelMonitor: return update_monitor(s, n);
         case Screen::DiagAnalog: return update_diag(s, n);
@@ -1229,6 +1324,91 @@ constexpr void render_throttle_curve(Framebuffer& fb, const State& s, const stor
     }
 }
 
+// Value text of a Radio Setup row, right-aligned by the caller.
+constexpr format::Text<12> radio_value(const storage::RadioConfig& r, std::size_t row) {
+    format::Text<12> t;
+    auto put = [&t](std::string_view sv) {
+        for (const char c : sv) {
+            t.push(c);
+        }
+    };
+    switch (row) {
+        case 0: put(r.throttle_trim == 1 ? "IDLE" : r.throttle_trim == 2 ? "LINEAR" : "OFF (Lock)"); break;
+        case 1: put(r.audio_enabled != 0 ? "ENABLED" : "MUTED"); break;
+        case 2: put(r.tone_style != 0 ? "RICH" : "SIMPLE"); break;
+        case 3:
+            put(r.backlight_timeout == 1   ? "15 SEC"
+                : r.backlight_timeout == 2 ? "30 SEC"
+                : r.backlight_timeout == 3 ? "60 SEC"
+                                           : "ALWAYS ON");
+            break;
+        case 4: {
+            format::detail::push_uint(t, std::min<unsigned>(r.backlight_brightness * 10u, 100u));
+            t.push('%');
+            break;
+        }
+        case 5: {
+            const auto num = format::format_dec2(std::min<unsigned>(r.lcd_contrast, 99u));
+            put(num.view());
+            break;
+        }
+        case 6: {
+            format::detail::push_uint(t, r.vbat_warn_deci / 10u);
+            t.push('.');
+            t.push(static_cast<char>('0' + r.vbat_warn_deci % 10u));
+            t.push('V');
+            break;
+        }
+        case 7:
+            put(r.usb_mode == 1 ? "JOYSTICK" : r.usb_mode == 2 ? "SERIAL" : r.usb_mode == 3 ? "COMPOSITE" : "OFF");
+            break;
+        case 8: put(r.ext_module_pwr == 0 ? "HIGH (N)" : "LOW (P)"); break;
+        case 9: put(r.ext_switches != 0 ? "PC12+PC15" : "OFF"); break;
+        case 10: put(r.ext_adc != 0 ? "AD12-15" : "OFF"); break;
+        case 11: {
+            constexpr std::array<std::string_view, 4> kStickModes{"MODE 1", "MODE 2", "MODE 3", "MODE 4"};
+            put(kStickModes[r.stick_mode % 4]);
+            break;
+        }
+        case 12: put(r.gimbal_type != 0 ? "POT" : "HALL"); break;
+        case 13: put(">"); break;
+        case 14: put((r.trainer_config & kTrainerPpmOut) != 0 ? "ON (PF10)" : "OFF"); break;
+        case 15: put((r.trainer_config & kTrainerPpmIn) != 0 ? "ON (SD DN)" : "OFF"); break;
+        default: break;
+    }
+    return t;
+}
+
+constexpr void render_radio_setup(Framebuffer& fb, const State& s, const storage::RadioConfig& r) {
+    widgets::draw_header(fb, "RADIO SETUP");
+    for (std::size_t slot = 0; slot < kListVisible; ++slot) {
+        const std::size_t idx = s.radio.scroll + slot;
+        if (idx >= kRadioRows) {
+            break;
+        }
+        const auto value = radio_value(r, idx);
+        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.radio.selected, kRadioLabels[idx], value.view(), 0);
+    }
+    widgets::draw_scrollbar(fb, s.radio.selected, static_cast<int>(kRadioRows), 14, 36);
+    widgets::draw_footer(fb, "[OK] Toggle/Cycle   [ESC] Back");
+}
+
+constexpr void render_input_setup(Framebuffer& fb, const State& s, const storage::RadioConfig& r) {
+    widgets::draw_header(fb, "INPUT MODES");
+    const std::size_t count = input_rows(r);
+    for (std::size_t slot = 0; slot < kListVisible; ++slot) {
+        const std::size_t idx = s.input_setup.scroll + slot;
+        if (idx >= count) {
+            break;
+        }
+        const std::size_t mode = std::min<std::size_t>(r.adc_modes[idx], kAdcModeCount - 1);
+        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.input_setup.selected, kAuxInputNames[idx],
+                               kAdcModeNames[mode], 0);
+    }
+    widgets::draw_scrollbar(fb, s.input_setup.selected, static_cast<int>(count), 14, 36);
+    widgets::draw_footer(fb, "[OK] Cycle Mode    [ESC] Back");
+}
+
 constexpr void render_aux(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
     widgets::draw_header(fb, "AUX CHANNELS");
     for (std::size_t slot = 0; slot < kListVisible; ++slot) {
@@ -1444,6 +1624,8 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::DualRate: render_dual_rate(fb, s, st.active_model); break;
         case Screen::ThrottleCurve: render_throttle_curve(fb, s, st.active_model); break;
         case Screen::AuxChannels: render_aux(fb, s, st.active_model); break;
+        case Screen::RadioSetup: render_radio_setup(fb, s, st.radio); break;
+        case Screen::InputSetup: render_input_setup(fb, s, st.radio); break;
         case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;
         case Screen::ChannelMonitor: render_monitor(fb, s, live, st.active_model); break;
         case Screen::DiagAnalog: render_diag(fb, s, live); break;
