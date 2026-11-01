@@ -169,6 +169,7 @@ struct Repeat {
 struct State {
     Screen screen{Screen::Closed};
     bool waiting_release{false};
+    bool nav_tick{false};  // set on each list step this tick, for the navigation click
     ListPos main{};
     ListPos models{};
     ListPos setup{};
@@ -251,10 +252,10 @@ constexpr void open(State& s) {
 }
 
 // Moves the selection one step with wrap-around and keeps it inside the visible window.
-constexpr void step_list(ListPos& p, std::size_t count, Rows rows, Dir dir) {
+constexpr bool step_list(ListPos& p, std::size_t count, Rows rows, Dir dir) {
     const std::size_t visible = rows.value;
     if (count == 0) {
-        return;
+        return false;
     }
     if (dir == Dir::Down) {
         if (p.selected + 1 < count) {
@@ -277,6 +278,7 @@ constexpr void step_list(ListPos& p, std::size_t count, Rows rows, Dir dir) {
             p.scroll = static_cast<uint8_t>(count > visible ? count - visible : 0);
         }
     }
+    return true;
 }
 
 // Reports a step on press, then again after the repeat delay at the repeat interval.
@@ -309,7 +311,7 @@ constexpr uint8_t window_scroll(ItemIndex selected, Rows visible) {
 
 constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
     if (n.up != n.down) {
-        step_list(s.main, kMainItems.size(), Rows{kMainVisible}, nav_dir(n));
+        s.nav_tick = step_list(s.main, kMainItems.size(), Rows{kMainVisible}, nav_dir(n));
     }
     if (n.cancel) {
         s.screen = Screen::Closed;
@@ -379,7 +381,7 @@ constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
 
 constexpr Event update_models(State& s, const Nav& n) {
     if (n.up != n.down) {
-        step_list(s.models, storage::kNumModels, Rows{kListVisible}, nav_dir(n));
+        s.nav_tick = step_list(s.models, storage::kNumModels, Rows{kListVisible}, nav_dir(n));
     }
     if (n.cancel) {
         s.screen = Screen::Main;
@@ -421,7 +423,7 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
 
     if (!s.editing) {
         if (n.up != n.down) {
-            step_list(s.setup, kSetupRows, Rows{kListVisible}, nav_dir(n));
+            s.nav_tick = step_list(s.setup, kSetupRows, Rows{kListVisible}, nav_dir(n));
         }
         if (n.cancel) {
             s.screen = Screen::Main;
@@ -619,7 +621,7 @@ constexpr Event update_dual_rate(State& s, const Nav& n, storage::ModelConfig& m
     }
     if (!s.editing) {
         if (n.up != n.down) {
-            step_list(s.dual_rate, kDrFields, Rows{kListVisible}, nav_dir(n));
+            s.nav_tick = step_list(s.dual_rate, kDrFields, Rows{kListVisible}, nav_dir(n));
         }
         if (n.ok) {
             s.editing = true;
@@ -865,7 +867,7 @@ constexpr Event update_telem(State& s, const Nav& n, storage::ModelConfig& m) {
         return {};
     }
     if (n.up != n.down) {
-        step_list(s.telem, telemetry::kTelemSlotCount, Rows{kListVisible}, nav_dir(n));
+        s.nav_tick = step_list(s.telem, telemetry::kTelemSlotCount, Rows{kListVisible}, nav_dir(n));
     }
     if (n.ok) {
         auto& sensor = m.telem_slots[s.telem.selected];
@@ -887,7 +889,7 @@ constexpr Event update_vario(State& s, const Nav& n, storage::ModelConfig& m, co
             return {};
         }
         if (n.up != n.down) {
-            step_list(s.vario, kVarioRows, Rows{kListVisible}, nav_dir(n));
+            s.nav_tick = step_list(s.vario, kVarioRows, Rows{kListVisible}, nav_dir(n));
         }
         if (n.ok) {
             switch (static_cast<VarioRow>(s.vario.selected)) {
@@ -961,7 +963,7 @@ constexpr Event update_wing_mixer(State& s, const Nav& n, storage::ModelConfig& 
         return save;
     }
     if (n.up != n.down) {
-        step_list(s.wing, wing_row_count(m), Rows{kListVisible}, nav_dir(n));
+        s.nav_tick = step_list(s.wing, wing_row_count(m), Rows{kListVisible}, nav_dir(n));
     }
     if (!n.ok) {
         return {};
@@ -1000,7 +1002,7 @@ constexpr Event update_mixer_line(State& s, const Nav& n, storage::ModelConfig& 
             return {};
         }
         if (n.up != n.down) {
-            step_list(s.mix_line, kMixFields, Rows{kListVisible}, nav_dir(n));
+            s.nav_tick = step_list(s.mix_line, kMixFields, Rows{kListVisible}, nav_dir(n));
         }
         if (n.ok) {
             s.editing = true;
@@ -1086,7 +1088,7 @@ constexpr Event update_global_vars(State& s, const Nav& n, storage::ModelConfig&
         return save;
     }
     if (n.up != n.down) {
-        step_list(s.gvars, m.gvars.size(), Rows{kListVisible}, nav_dir(n));
+        s.nav_tick = step_list(s.gvars, m.gvars.size(), Rows{kListVisible}, nav_dir(n));
     }
     if (n.ok) {
         s.editing = true;
@@ -1126,7 +1128,7 @@ constexpr Event update_aux(State& s, const Nav& n, storage::ModelConfig& m, cons
     }
     if (!s.editing) {
         if (n.up != n.down) {
-            step_list(s.aux, kAuxChannelCount, Rows{kListVisible}, nav_dir(n));
+            s.nav_tick = step_list(s.aux, kAuxChannelCount, Rows{kListVisible}, nav_dir(n));
         }
         if (n.ok) {
             s.editing = true;
@@ -1181,7 +1183,7 @@ constexpr Event update_radio_setup(State& s, const Nav& n, storage::RadioConfig&
         return {};
     }
     if (n.up != n.down) {
-        step_list(s.radio, kRadioRows, Rows{kListVisible}, nav_dir(n));
+        s.nav_tick = step_list(s.radio, kRadioRows, Rows{kListVisible}, nav_dir(n));
     }
     if (!n.ok) {
         return {};
@@ -1203,7 +1205,7 @@ constexpr Event update_input_setup(State& s, const Nav& n, storage::RadioConfig&
     }
     const std::size_t count = input_rows(r);
     if (n.up != n.down) {
-        step_list(s.input_setup, count, Rows{kListVisible}, nav_dir(n));
+        s.nav_tick = step_list(s.input_setup, count, Rows{kListVisible}, nav_dir(n));
     }
     if (!n.ok || s.input_setup.selected >= count) {
         return {};
@@ -1216,7 +1218,7 @@ constexpr Event update_input_setup(State& s, const Nav& n, storage::RadioConfig&
 
 constexpr Event update_channel_reverse(State& s, const Nav& n, storage::ModelConfig& m) {
     if (n.up != n.down) {
-        step_list(s.reverse, kNumChannels, Rows{kListVisible}, nav_dir(n));
+        s.nav_tick = step_list(s.reverse, kNumChannels, Rows{kListVisible}, nav_dir(n));
     }
     if (n.ok) {
         m.channel_reverse ^= 1u << s.reverse.selected;
@@ -1264,6 +1266,7 @@ constexpr Event update_system(State& s, const Nav& n) {
 
 // Advances the menu state for one tick. `st` is edited in place; the caller persists it when told to.
 constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
+    s.nav_tick = false;
     if (s.screen == Screen::Closed) {
         return {};
     }

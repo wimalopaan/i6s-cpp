@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 #include "ferrox/chip/mcu.hpp"
@@ -242,6 +243,7 @@ void run_preflight(const ferrox::logic::storage::ModelConfig& model) {
     const auto sm = safety::stick_mode_from(g_storage.radio.stick_mode);
     const auto mt = static_cast<mixer::ModelType>(model.model_type);
     buzzer::PreflightTimer preflight{};
+    buzzer::PreflightWarning warning{};
     uint32_t buzz_ms = time::millis();
 
     for (;;) {
@@ -254,8 +256,10 @@ void run_preflight(const ferrox::logic::storage::ModelConfig& model) {
                            safety::switches_safe(in.switches, mt);
         g_keys = hw::keys::scan_keys();
         if (ready || (g_keys & safety::kKeyCancel) != 0) {
+            play_buzzer_cue(warning.exit_cue());
             return;
         }
+        warning.unsafe();
 
         hw::crsf::update_channels(time::millis(), safety::kSafeIdleChannels,
                                   ferrox::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
@@ -333,9 +337,7 @@ int main() {
     draw_splash(g_fb);
     hw::lcd::flush(g_fb);
     g_buzzer.set_enabled(g_storage.radio.audio_enabled != 0);
-    if (!was_watchdog_reset) {
-        play_buzzer_cue(logic::buzzer::Cue::Welcome);
-    }
+    play_buzzer_cue(was_watchdog_reset ? logic::buzzer::Cue::WatchdogRecover : logic::buzzer::Cue::Welcome);
     uint32_t buzz_ms = time::millis();
     const uint32_t splash_start_ms = time::millis();
     while (time::millis() - splash_start_ms < 1200) {
@@ -360,6 +362,7 @@ int main() {
     bool prev_armed = logic::flight::is_armed(model.arm_switch, boot_input.switches);
     logic::buzzer_inputs::ActivityTracker activity{};
     activity.prime(boot_input.raw, boot_input.switches);
+    logic::buzzer_inputs::PotCenterTracker<6> pot_centre{};
     logic::buzzer::InactivityTimer inactivity{};
     logic::vario::State vario{};
 
@@ -414,6 +417,9 @@ int main() {
         } else {
             const auto ev = logic::menu::update(menu_state,
                                                 logic::menu::Input{pressed, g_keys, now, auto_changes}, g_storage);
+            if (menu_state.nav_tick) {
+                play_buzzer_cue(logic::buzzer::Cue::NavStep);
+            }
             switch (ev.action) {
                 case logic::menu::Action::EnterModelSelect: refresh_model_names(); break;
                 case logic::menu::Action::SwitchModel:
@@ -464,7 +470,9 @@ int main() {
             }
         }
         if (rx_id_dirty && !armed) {
-            logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage);
+            if (logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage)) {
+                play_buzzer_cue(logic::buzzer::Cue::RxSave);
+            }
             rx_id_dirty = false;
         }
 
@@ -583,6 +591,10 @@ int main() {
         prev_armed = armed;
 
         const bool user_active = activity.step(input.raw, input.switches, g_keys);
+        const std::size_t pot_count = g_storage.radio.ext_adc != 0 ? 6 : 2;
+        if (pot_centre.step(std::span<const int16_t>(input.aux_pots).subspan(4, pot_count))) {
+            play_buzzer_cue(logic::buzzer::Cue::PotCenter);
+        }
         if (inactivity.step(user_active, logic::buzzer::Millis{dt_ms})) {
             play_buzzer_cue(logic::buzzer::Cue::WarnInactivity);
         }

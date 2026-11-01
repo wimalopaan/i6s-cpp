@@ -62,7 +62,7 @@ constexpr Event update(Controller& c, const Input& in) {
     c.hold_ms = std::min(c.hold_ms + in.dt.value, kHoldMs);
     if (c.hold_ms >= kHoldMs && !c.was_held) {
         c.was_held = true;
-        return {Action::Start, buzzer::Cue::None};
+        return {Action::Start, buzzer::Cue::BindHold};
     }
     return {};
 }

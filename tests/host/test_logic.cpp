@@ -2475,7 +2475,7 @@ void buzzer_test() {
 
     for (const ToneStyle style : {ToneStyle::Simple, ToneStyle::Rich}) {
         check(pattern_for(Cue::None, style).notes.empty(), "buzzer: None has no pattern");
-        for (uint8_t c = static_cast<uint8_t>(Cue::Click); c <= static_cast<uint8_t>(Cue::NavStep); ++c) {
+        for (uint8_t c = static_cast<uint8_t>(Cue::Click); c <= static_cast<uint8_t>(Cue::WatchdogRecover); ++c) {
             const auto pattern = pattern_for(static_cast<Cue>(c), style);
             check(!pattern.notes.empty(), "buzzer: every cue has a pattern");
             for (const Note& n : pattern.notes) {
@@ -3165,7 +3165,8 @@ void bind_test() {
     check(logic::bind::update(c, make(kLinked, kBind, kBind, 500)).action == Action::None, "bind: no start at 500 ms");
     check(logic::bind::update(c, make(kLinked, kBind, 0, 499)).action == Action::None, "bind: no start at 999 ms");
     const auto started = logic::bind::update(c, make(kLinked, kBind, 0, 1));
-    check(started.action == Action::Start, "bind: starts at 1000 ms hold");
+    check(started.action == Action::Start && started.cue == ferrox::logic::buzzer::Cue::BindHold,
+          "bind: starts at 1000 ms hold with the bind hold chirp");
     check(logic::bind::update(c, make(kLinked, kBind, 0, 300)).action == Action::None, "bind: start not repeated");
     logic::bind::update(c, make(kLinked, 0, 0, 10));
     check(c == Controller{}, "bind: release resets hold");
@@ -3758,6 +3759,53 @@ void telem_slots_test() {
           "ESC must return to the Telemetry row of model setup");
 }
 
+void wiring_cues_test() {
+    namespace mn = ferrox::logic::menu;
+    using ferrox::logic::buzzer::Cue;
+    using ferrox::logic::buzzer::pattern_for;
+    using ferrox::logic::buzzer::PreflightWarning;
+    using ferrox::logic::buzzer::Repeats;
+    using ferrox::logic::buzzer::ToneStyle;
+
+    const auto simple_bind = pattern_for(Cue::BindHold, ToneStyle::Simple);
+    check(simple_bind.notes.size() == 1 && simple_bind.notes[0].freq.value == 2400 &&
+              simple_bind.notes[0].duration.value == 150 && simple_bind.repeats == Repeats{0},
+          "wiring: bind hold is one 2400 Hz 150 ms tone in both styles");
+    check(pattern_for(Cue::BindHold, ToneStyle::Rich).notes[0].freq.value == 2400, "wiring: bind hold matches in Rich");
+    check(pattern_for(Cue::PreflightExit, ToneStyle::Simple).notes[0].freq.value == 2200 &&
+              pattern_for(Cue::PreflightExit, ToneStyle::Simple).notes[0].duration.value == 40,
+          "wiring: preflight exit is a 2200 Hz 40 ms tone");
+    check(pattern_for(Cue::RxSave, ToneStyle::Rich).repeats == Repeats{2}, "wiring: RX save repeats twice");
+    check(pattern_for(Cue::RxSave, ToneStyle::Simple).notes[0].freq.value == 2400 &&
+              pattern_for(Cue::RxSave, ToneStyle::Simple).notes[0].duration.value == 70,
+          "wiring: RX save is a 2400 Hz 70 ms tone");
+    const auto watchdog = pattern_for(Cue::WatchdogRecover, ToneStyle::Simple);
+    check(watchdog.notes[0].freq.value == 2600 && watchdog.notes[0].duration.value == 60 &&
+              watchdog.notes[0].pause.value == 40 && watchdog.repeats == Repeats{3},
+          "wiring: watchdog chirp is 2600 Hz 60 ms, 40 ms pause, three times");
+
+    PreflightWarning warning{};
+    check(warning.exit_cue() == Cue::None, "wiring: no preflight exit chirp without a warning");
+    warning.unsafe();
+    check(warning.exit_cue() == Cue::PreflightExit, "wiring: preflight exit chirp after a warning");
+
+    ferrox::logic::buzzer_inputs::PotCenterTracker<6> pots{};
+    const std::array<int16_t, 2> far{{100, -100}};
+    const std::array<int16_t, 2> near{{0, 10}};
+    check(!pots.step(far), "wiring: pots starting away from centre do not click");
+    check(pots.step(near), "wiring: pots leaving the deadband click");
+    check(!pots.step(near), "wiring: no repeat click while inside the deadband");
+    check(!pots.step(std::array<int16_t, 2>{{30, 10}}), "wiring: moving out of the deadband does not click");
+
+    auto st = ferrox::logic::storage::default_storage();
+    mn::State menu{};
+    menu.screen = mn::Screen::Main;
+    mn::update(menu, mn::Input{mn::kKeyDown, mn::kKeyDown, 0}, st);
+    check(menu.nav_tick, "wiring: a list step sets the nav tick");
+    mn::update(menu, mn::Input{0, 0, 1}, st);
+    check(!menu.nav_tick, "wiring: the nav tick clears on the next tick");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -3782,6 +3830,7 @@ int main() {
     telemetry_test();
     crsf_diag_test();
     buzzer_test();
+    wiring_cues_test();
     trim_controller_test();
     trim_autosave_test();
     instant_trim_test();

@@ -115,6 +115,10 @@ enum class Cue : uint8_t {
     NavStep,
     TimerReset,
     InstantTrim,
+    BindHold,
+    RxSave,
+    PreflightExit,
+    WatchdogRecover,
 };
 
 namespace tables {
@@ -187,6 +191,10 @@ inline constexpr std::array<Note, 3> kTimerElapsed{{
 inline constexpr std::array<Note, 1> kNavStep{{{FreqHz{2200}, DurationMs{30}, PauseMs{0}}}};
 inline constexpr std::array<Note, 1> kTimerReset{{{FreqHz{2400}, DurationMs{100}, PauseMs{0}}}};
 inline constexpr std::array<Note, 1> kInstantTrim{{{FreqHz{2400}, DurationMs{60}, PauseMs{40}}}};
+inline constexpr std::array<Note, 1> kBindHold{{{FreqHz{2400}, DurationMs{150}, PauseMs{0}}}};
+inline constexpr std::array<Note, 1> kRxSave{{{FreqHz{2400}, DurationMs{70}, PauseMs{50}}}};
+inline constexpr std::array<Note, 1> kPreflightExit{{{FreqHz{2200}, DurationMs{40}, PauseMs{0}}}};
+inline constexpr std::array<Note, 1> kWatchdogRecover{{{FreqHz{2600}, DurationMs{60}, PauseMs{40}}}};
 
 }  // namespace tables
 
@@ -221,6 +229,10 @@ constexpr Pattern pattern_for(Cue cue, ToneStyle style) {
         case Cue::TimerReset: return single(tables::kTimerReset);
         // Rust plays this raw tone pattern in both tone styles.
         case Cue::InstantTrim: return Pattern{tables::kInstantTrim, Repeats{2}};
+        case Cue::BindHold: return single(tables::kBindHold);
+        case Cue::RxSave: return Pattern{tables::kRxSave, Repeats{2}};
+        case Cue::PreflightExit: return single(tables::kPreflightExit);
+        case Cue::WatchdogRecover: return Pattern{tables::kWatchdogRecover, Repeats{3}};
     }
     return {};
 }
@@ -519,6 +531,14 @@ struct PreflightTimer {
         last = now;
         return true;
     }
+};
+
+// Rust plays a closing chirp when the preflight loop ends after having warned, including on cancel.
+struct PreflightWarning {
+    bool warned = false;
+
+    constexpr void unsafe() { warned = true; }
+    constexpr Cue exit_cue() const { return warned ? Cue::PreflightExit : Cue::None; }
 };
 
 struct ArmEdge {

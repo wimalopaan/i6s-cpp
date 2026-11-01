@@ -19,7 +19,6 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 
 - USB (device stack, HID and serial)
 - USB sim mode (trainer)
-- Remaining buzzer cues (pot centre, menu list navigation, watchdog chirp, preflight exit, bind hold, RX save)
 
 ## Known deviations from Rust
 

@@ -3,6 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <span>
 
 #include "ferrox/logic/input.hpp"
 #include "ferrox/logic/mixer.hpp"
@@ -47,5 +49,22 @@ constexpr bool vario_switch_active(uint8_t setting, const Switches& sw) {
     }
     return false;
 }
+
+// Pot centre click: fires when an aux pot leaves the ±25 deadband around centre (|prev| >= 25 to |curr| < 25), as in Rust.
+template <std::size_t N>
+struct PotCenterTracker {
+    std::array<int16_t, N> prev{};
+
+    constexpr bool step(std::span<const int16_t> pots) {
+        bool crossed = false;
+        for (std::size_t i = 0; i < pots.size() && i < N; ++i) {
+            const int curr = pots[i];
+            const int p = prev[i];
+            crossed = crossed || (std::abs(p) >= 25 && std::abs(curr) < 25);
+            prev[i] = static_cast<int16_t>(curr);
+        }
+        return crossed;
+    }
+};
 
 }  // namespace ferrox::logic::buzzer_inputs
