@@ -1270,6 +1270,98 @@ void dual_rate_test() {
     check(lit_pixels(fb) > 0, "dr: dual rate screen must draw");
 }
 
+void throttle_curve_test() {
+    namespace cv = logic::curve;
+    namespace mn = logic::menu;
+    using mn::Action;
+    using mn::Event;
+    using mn::Screen;
+
+    const cv::Points identity{0, 25, 50, 75, 100};
+    check(cv::evaluate(0, 5, false, identity) == 0, "curve: 5pt input 0 must give 0");
+    check(cv::evaluate(125, 5, false, identity) == 125, "curve: 5pt linear midpoint of first segment");
+    check(cv::evaluate(250, 5, false, identity) == 250, "curve: 5pt knot must be exact");
+    check(cv::evaluate(1000, 5, false, identity) == 1000, "curve: 5pt input 1000 must give 1000");
+    check(cv::evaluate(1500, 5, false, identity) == 1000, "curve: input above 1000 must clamp");
+    check(cv::evaluate(250, 5, true, identity) == 250, "curve: spline must pass through the knots");
+    check(cv::evaluate(750, 5, true, identity) == 750, "curve: spline knot at 750");
+
+    cv::Points flat{};
+    flat.fill(50);
+    check(cv::evaluate(333, 5, false, flat) == 500 && cv::evaluate(333, 5, true, flat) == 500,
+          "curve: a flat curve must stay flat");
+
+    const cv::Points nine{0, 13, 25, 38, 50, 63, 75, 88, 100};
+    check(cv::evaluate(500, 9, false, nine) == 500, "curve: 9pt knot must be exact");
+    check(cv::evaluate(1000, 9, true, nine) == 1000, "curve: 9pt spline end must be 1000");
+
+    const cv::Points seven{0, 17, 33, 50, 67, 83, 100};
+    check(cv::evaluate(333, 7, false, seven) == 330, "curve: 7pt knot at one third");
+    check(cv::evaluate(500, 7, true, seven) == 500, "curve: 7pt spline knot at one half");
+
+    cv::Points c = identity;
+    uint8_t pts = 5;
+    cv::advance_mode(c, pts);
+    check(pts == 7 && c[0] == 0 && c[3] == 50 && c[6] == 100, "curve: 5 -> 7 must resample evenly");
+    cv::advance_mode(c, pts);
+    check(pts == 9 && c[4] == 50 && c[8] == 100, "curve: 7 -> 9 must resample evenly");
+    cv::advance_mode(c, pts);
+    check(pts == 5 && c[1] == 25 && c[4] == 100, "curve: 9 -> 5 must keep every second point");
+    check(cv::to_percent(5) == 1 && cv::to_percent(4) == 0 && cv::to_percent(1000) == 100,
+          "curve: to_percent must round half up and clamp");
+
+    check(mn::curve_point_label(0, 50).view() == "P01:  50%", "curve: label must right-align the value");
+    check(mn::curve_point_label(1, 5).view() == "P02:   5%", "curve: label of one digit");
+    check(mn::curve_point_label(8, 100).view() == "P09: 100%", "curve: label of three digits");
+
+    logic::storage::RadioStorage st = logic::storage::default_storage();
+    mn::State ms{};
+    mn::open(ms);
+    ms.main.selected = mn::kItemThrottleCurve;
+    mn::update(ms, mn::Input{0, 0, 0}, st);
+    auto tap = [&](uint16_t key, uint32_t now) {
+        const Event e = mn::update(ms, mn::Input{key, key, now}, st);
+        mn::update(ms, mn::Input{0, 0, now + 1}, st);
+        return e;
+    };
+
+    tap(mn::kKeyOk, 10);
+    check(ms.screen == Screen::ThrottleCurve, "curve: Throttle Curve main item must open the screen");
+    tap(mn::kKeyOk, 20);
+    check(st.active_model.thr_curve_pts == 7, "curve: OK on Pts must switch 5 -> 7");
+    tap(mn::kKeyDown, 30);
+    tap(mn::kKeyOk, 40);
+    check(st.active_model.thr_curve_smooth == 1, "curve: OK on Crv must toggle smooth");
+    tap(mn::kKeyDown, 50);
+    tap(mn::kKeyOk, 60);
+    check(ms.editing && ms.throttle_curve.selected == 2, "curve: OK on a point must start editing P1");
+    for (uint32_t t = 70; t < 300; t += 10) {
+        tap(mn::kKeyDown, t);
+    }
+    check(st.active_model.thr_curve[0] == 0, "curve: Down must clamp the point at 0");
+    tap(mn::kKeyUp, 310);
+    check(st.active_model.thr_curve[0] == 1, "curve: Up must step the point by 1");
+    for (int i = 0; i < 7; ++i) {
+        tap(mn::kKeyOk, 320 + static_cast<uint32_t>(i) * 10);
+    }
+    check(!ms.editing && ms.throttle_curve.selected == 8, "curve: OK on the last point must leave edit mode");
+    tap(mn::kKeyUp, 500);
+    check(ms.throttle_curve.selected == 7, "curve: navigation must move between points");
+    const Event saved = tap(mn::kKeyCancel, 510);
+    check(saved.action == Action::SaveActiveModel && ms.screen == Screen::Main,
+          "curve: cancel must save and return to main");
+
+    logic::display::Framebuffer fb{};
+    fb.clear();
+    mn::ModelNames names{};
+    mn::State view{};
+    mn::open(view);
+    view.screen = Screen::ThrottleCurve;
+    view.throttle_curve.selected = 2;
+    mn::render(fb, view, names, st, mn::Live{});
+    check(lit_pixels(fb) > 0, "curve: throttle curve screen must draw");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -1283,6 +1375,7 @@ int main() {
     menu_test();
     calib_test();
     dual_rate_test();
+    throttle_curve_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

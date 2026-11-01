@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "ferrox/logic/channels.hpp"
+#include "ferrox/logic/curve.hpp"
 #include "ferrox/logic/format.hpp"
 #include "ferrox/logic/framebuffer.hpp"
 #include "ferrox/logic/glyphs.hpp"
@@ -57,6 +58,7 @@ enum class Screen : uint8_t {
     ModelSelect,
     ModelSetup,
     DualRate,
+    ThrottleCurve,
     ChannelReverse,
     ChannelMonitor,
     DiagAnalog,
@@ -64,6 +66,7 @@ enum class Screen : uint8_t {
 };
 
 inline constexpr std::size_t kItemDualRate = 2;
+inline constexpr std::size_t kItemThrottleCurve = 3;
 inline constexpr std::size_t kItemChannelReverse = 6;
 inline constexpr std::size_t kItemChannelMonitor = 8;
 inline constexpr std::size_t kItemCalibration = 9;
@@ -119,6 +122,7 @@ struct State {
     ListPos models{};
     ListPos setup{};
     ListPos dual_rate{};
+    ListPos throttle_curve{};  // 0 Pts, 1 Smooth, 2.. curve points
     ListPos reverse{};
     uint8_t axis{0};  // dual rate axis: 0 Roll, 1 Pitch, 2 Yaw
     uint8_t page{0};  // page of the channel monitor or analog diagnostics
@@ -239,6 +243,11 @@ constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
             s.screen = Screen::DualRate;
             s.dual_rate = ListPos{};
             s.axis = 0;
+            s.editing = false;
+        }
+        if (s.main.selected == kItemThrottleCurve) {
+            s.screen = Screen::ThrottleCurve;
+            s.throttle_curve = ListPos{};
             s.editing = false;
         }
         if (s.main.selected == kItemChannelReverse) {
@@ -452,6 +461,49 @@ constexpr Event update_dual_rate(State& s, const Nav& n, storage::ModelConfig& m
     return {};
 }
 
+constexpr Event update_throttle_curve(State& s, const Nav& n, storage::ModelConfig& m) {
+    const std::size_t items = 2 + curve::point_count(m.thr_curve_pts);
+    const uint8_t sel = s.throttle_curve.selected;
+    if (s.editing) {
+        if (n.cancel) {
+            s.editing = false;
+            return {Action::SaveActiveModel, 0};
+        }
+        const std::size_t pt = sel >= 2 ? sel - 2u : 0u;
+        step_clamped(m.thr_curve[pt], 0, 100, 1, n.up, n.down);
+        if (n.ok) {
+            if (sel + 1u < items) {
+                s.throttle_curve.selected = static_cast<uint8_t>(sel + 1);
+            } else {
+                s.editing = false;
+            }
+            return {Action::SaveActiveModel, 0};
+        }
+        return {};
+    }
+
+    if (n.cancel) {
+        s.screen = Screen::Main;
+        return {Action::SaveActiveModel, 0};
+    }
+    if (n.up != n.down) {
+        const std::size_t next = n.down ? (sel + 1u) % items : (sel == 0 ? items - 1 : sel - 1u);
+        s.throttle_curve.selected = static_cast<uint8_t>(next);
+    }
+    if (n.ok) {
+        if (sel == 0) {
+            curve::advance_mode(m.thr_curve, m.thr_curve_pts);
+            return {Action::SaveActiveModel, 0};
+        }
+        if (sel == 1) {
+            m.thr_curve_smooth = m.thr_curve_smooth != 0 ? 0 : 1;
+            return {Action::SaveActiveModel, 0};
+        }
+        s.editing = true;
+    }
+    return {};
+}
+
 constexpr Event update_channel_reverse(State& s, const Nav& n, storage::ModelConfig& m) {
     if (n.up != n.down) {
         step_list(s.reverse, kNumChannels, kListVisible, n.down);
@@ -527,6 +579,7 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
         case Screen::ModelSelect: return update_models(s, n);
         case Screen::ModelSetup: return update_setup(s, n, st.active_model);
         case Screen::DualRate: return update_dual_rate(s, n, st.active_model, st.radio);
+        case Screen::ThrottleCurve: return update_throttle_curve(s, n, st.active_model);
         case Screen::ChannelReverse: return update_channel_reverse(s, n, st.active_model);
         case Screen::ChannelMonitor: return update_monitor(s, n);
         case Screen::DiagAnalog: return update_diag(s, n);
@@ -726,6 +779,82 @@ constexpr void render_dual_rate(Framebuffer& fb, const State& s, const storage::
     widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Value" : "[OK] Edit   [ESC] Exit");
 }
 
+// "P01:  50%" as on the device: point number, then the value right-aligned in three columns.
+constexpr format::Text<9> curve_point_label(std::size_t idx, uint8_t val) {
+    const auto digit = [](std::size_t d) { return static_cast<char>('0' + d); };
+    const std::size_t num = idx + 1;
+    const std::size_t hundreds = val / 100;
+    const std::size_t tens = (val / 10) % 10;
+    format::Text<9> t{};
+    t.push('P');
+    t.push(digit(num / 10));
+    t.push(digit(num % 10));
+    t.push(':');
+    t.push(' ');
+    t.push(hundreds != 0 ? '1' : ' ');
+    t.push(hundreds != 0 || tens != 0 ? digit(tens) : ' ');
+    t.push(digit(val % 10));
+    t.push('%');
+    return t;
+}
+
+constexpr void render_throttle_curve(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
+    widgets::draw_header(fb, "THROTTLE CURVE");
+    const std::size_t pts = curve::point_count(m.thr_curve_pts);
+    const std::size_t sel = s.throttle_curve.selected;
+
+    const bool sel_pts = !s.editing && sel == 0;
+    if (sel_pts) {
+        fb.fill_rect(2, 13, 70, 9, true);
+    }
+    fb.draw_str_6x10(4, 13, "Pts:", sel_pts);
+    fb.draw_str_6x10(32, 13, pts == 9 ? "9-PT" : (pts == 7 ? "7-PT" : "5-PT"), sel_pts);
+
+    const bool sel_crv = !s.editing && sel == 1;
+    if (sel_crv) {
+        fb.fill_rect(2, 23, 70, 9, true);
+    }
+    fb.draw_str_6x10(4, 23, "Crv:", sel_crv);
+    fb.draw_str_6x10(32, 23, m.thr_curve_smooth != 0 ? "SMOOTH" : "LINEAR", sel_crv);
+
+    if (sel >= 2) {
+        const format::Text<9> label = curve_point_label(sel - 2, m.thr_curve[sel - 2]);
+        if (s.editing) {
+            fb.fill_rect(2, 35, 70, 11, true);
+            fb.draw_str_6x10(4, 37, label.view(), true);
+        } else {
+            fb.draw_rect(2, 35, 70, 11, true);
+            fb.draw_str_6x10(4, 37, label.view(), false);
+        }
+    } else {
+        fb.draw_str_6x10(4, 37, pts == 9 ? "Pts: 1..9" : (pts == 7 ? "Pts: 1..7" : "Pts: 1..5"), false);
+    }
+
+    // Graph box 49x37 at (76,13). Plot area 47 px wide, output 0..34 px high.
+    fb.draw_rect(76, 13, 49, 37, true);
+    const bool smooth = m.thr_curve_smooth != 0;
+    for (int px = 0; px < 47; ++px) {
+        const auto input = static_cast<uint16_t>(px * 1000 / 46);
+        const uint16_t out = curve::evaluate(input, m.thr_curve_pts, smooth, m.thr_curve);
+        fb.set_pixel(77 + px, 48 - out * 34 / 1000, true);
+    }
+    if (sel >= 2) {
+        const std::size_t idx = sel - 2;
+        const int input = static_cast<int>(idx * 1000 / (pts - 1));
+        const int dot_x = 77 + input * 46 / 1000;
+        const int dot_y = 48 - (m.thr_curve[idx] * 10 * 34) / 1000;
+        fb.fill_rect(dot_x - 1, dot_y - 1, 3, 3, true);
+    }
+
+    if (s.editing) {
+        widgets::draw_footer(fb, "[OK] Next Pt   [ESC] Done");
+    } else if (sel >= 2) {
+        widgets::draw_footer(fb, "[OK] Edit Pt   [ESC] Back");
+    } else {
+        widgets::draw_footer(fb, "[OK] Toggle    [ESC] Back");
+    }
+}
+
 constexpr void render_channel_reverse(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
     widgets::draw_header(fb, "CHANNEL REVERSE");
     for (std::size_t slot = 0; slot < kListVisible; ++slot) {
@@ -783,6 +912,7 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::ModelSelect: render_models(fb, s, names, st); break;
         case Screen::ModelSetup: render_setup(fb, s, st.active_model); break;
         case Screen::DualRate: render_dual_rate(fb, s, st.active_model); break;
+        case Screen::ThrottleCurve: render_throttle_curve(fb, s, st.active_model); break;
         case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;
         case Screen::ChannelMonitor: render_monitor(fb, s, live, st.active_model); break;
         case Screen::DiagAnalog: render_diag(fb, s, live); break;
