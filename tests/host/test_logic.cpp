@@ -23,6 +23,7 @@
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
 #include "ferrox/logic/switches.hpp"
+#include "ferrox/logic/telemetry.hpp"
 #include "ferrox/logic/trim.hpp"
 #include "ferrox/logic/vario.hpp"
 #include "ferrox/logic/widgets.hpp"
@@ -2141,6 +2142,153 @@ void a7105_radio_test() {
     check(!rxs.take_rx_save(), "rx id: save flag cleared after take");
 }
 
+void telemetry_test() {
+    namespace tm = logic::telemetry;
+    namespace fmt = logic::format;
+
+    check(tm::rf_mode_name(0) == "4Hz", "telemetry: rf mode 0 is 4Hz");
+    check(tm::rf_mode_name(2) == "50Hz", "telemetry: rf mode 2 is 50Hz");
+    check(tm::rf_mode_name(7) == "250Hz", "telemetry: rf mode 7 is 250Hz");
+    check(tm::rf_mode_name(9) == "500Hz", "telemetry: rf mode 9 is 500Hz");
+    check(tm::rf_mode_name(13) == "F1000", "telemetry: rf mode 13 is F1000");
+    check(tm::rf_mode_name(14) == "---", "telemetry: rf mode 14 is unknown");
+    check(tm::rf_mode_name(99) == "---", "telemetry: rf mode 99 is unknown");
+
+    check(fmt::format_fixed({.value = 5, .decimals = 1}).view() == "0.5", "telemetry: 5 with 1 decimal is 0.5");
+    check(fmt::format_fixed({.value = 420, .decimals = 2, .suffix = "V"}).view() == "4.20V",
+          "telemetry: 420 with 2 decimals is 4.20V");
+    check(fmt::format_fixed({.value = -15, .decimals = 1}).view() == "-1.5", "telemetry: -15 with 1 decimal");
+    check(fmt::format_fixed({.value = 0}).view() == "0", "telemetry: zero prints 0");
+    check(fmt::format_fixed({.value = -3, .pad_digits = 2, .pad_zero = true, .sign = fmt::SignMode::Force,
+                             .suffix = "dB"})
+                  .view() == "-03dB",
+          "telemetry: negative zero-padded sign");
+    check(fmt::format_fixed({.value = 7, .sign = fmt::SignMode::Force}).view() == "+7",
+          "telemetry: forced plus sign");
+    check(fmt::format_fixed({.value = 99, .pad_digits = 3, .suffix = "%"}).view() == " 99%",
+          "telemetry: space padding");
+
+    // Freshness: never seen, fresh, stale at 2500 ms, disconnected, and unsigned wrap-around.
+    check(tm::check_sensor_status({.value = 0}, {.value = 5000}, true) == tm::SensorStatus{},
+          "telemetry: never seen is neither fresh nor stale");
+    check(tm::check_sensor_status({.value = 1000}, {.value = 1500}, true) == tm::SensorStatus{true, false},
+          "telemetry: 500 ms old is fresh");
+    check(tm::check_sensor_status({.value = 1000}, {.value = 3499}, true) == tm::SensorStatus{true, false},
+          "telemetry: 2499 ms old is fresh");
+    check(tm::check_sensor_status({.value = 1000}, {.value = 3500}, true) == tm::SensorStatus{true, true},
+          "telemetry: 2500 ms old is stale");
+    check(tm::check_sensor_status({.value = 1000}, {.value = 1500}, false) == tm::SensorStatus{true, true},
+          "telemetry: disconnected is stale");
+    check(tm::check_sensor_status({.value = 0xFFFFFF00u}, {.value = 0x100u}, true) == tm::SensorStatus{true, false},
+          "telemetry: freshness survives tick wrap-around");
+
+    logic::crsf::Telemetry c{};
+    c.connected = true;
+    c.last_vbat_ms = 1000;
+    c.rx_battery_mv = 4200;
+    c.last_link_ms = 1000;
+    c.uplink_link_quality = 99;
+    c.uplink_snr = -3;
+    c.rf_mode = 2;
+    c.active_antenna = 1;
+    c.rx_current_ma = 0;
+    c.rx_capacity_mah = 1234;
+    c.tx_power_mw = 100;
+    c.last_vspd_ms = 1000;
+    c.vspeed_cms = -250;
+    c.last_alt_ms = 1000;
+    c.baro_alt_m = 42;
+    c.last_cells_ms = 1000;
+    c.cell_count = 4;
+    c.cell_min_mv = 3950;
+    c.last_rpm_ms = 1000;
+    c.rpm = 150000;
+    c.last_temp_ms = 1000;
+    c.temp_c_x10 = -15;
+    c.last_gps_ms = 1000;
+    c.gps_groundspeed_kmh_x10 = 255;
+    c.gps_satellites = 12;
+    c.gps_heading_cdeg = 9050;
+    c.last_att_ms = 1000;
+    c.yaw_cdeg = -300;
+    c.pitch_cdeg = 150;
+    c.roll_cdeg = -50;
+
+    logic::afhds2a::Telemetry a{};
+    a.connected = true;
+    a.last_rx_voltage_ms = 1000;
+    a.rx_voltage_mv = 12600;
+    a.rssi = 120;
+    a.packets_received = 456;
+    a.last_vspd_ms = 1000;
+    a.vspeed_cms = 150;
+    a.last_alt_ms = 1000;
+    a.alt_m = 42;
+
+    const tm::Sources crsf_src{.source = tm::Source::Crsf,
+                               .crsf = c,
+                               .afhds = a,
+                               .tx_battery = {.value = 3700},
+                               .packets_sent = {.value = 123},
+                               .timer = {}};
+    const tm::Sources afhds_src{.source = tm::Source::Afhds2a,
+                                .crsf = c,
+                                .afhds = a,
+                                .tx_battery = {.value = 3700},
+                                .packets_sent = {.value = 123},
+                                .timer = "12:34"};
+    const auto tile_at = [](uint8_t slot, uint32_t now, const tm::Sources& s) {
+        return tm::sensor_tile({.value = slot}, {.value = now}, s);
+    };
+    const auto is = [](const tm::Tile& t, std::string_view label, std::string_view value) {
+        return t.label == label && t.value.view() == value;
+    };
+
+    check(is(tile_at(0, 1500, crsf_src), "RX BAT", "4.20V"), "telemetry: CRSF RX battery tile");
+    check(tile_at(0, 4000, crsf_src).stale && is(tile_at(0, 4000, crsf_src), "RX BAT", "4.20V*"),
+          "telemetry: stale RX battery gets '*'");
+    check(is(tile_at(0, 1500, afhds_src), "RX BAT", "12.60V"), "telemetry: AFHDS RX battery tile");
+    check(is(tile_at(1, 1500, crsf_src), "LINK Q", " 99%"), "telemetry: CRSF link quality padded to 3");
+    check(is(tile_at(1, 1500, afhds_src), "RSSI", "100%"), "telemetry: AFHDS RSSI clamped to 100");
+    check(is(tile_at(2, 1500, crsf_src), "TX BAT", "3.70V"), "telemetry: TX battery tile");
+    check(is(tile_at(3, 1500, crsf_src), "CURRENT", "0.0A"), "telemetry: CRSF current without draw");
+    check(is(tile_at(3, 1500, afhds_src), "LINK", "OK"), "telemetry: AFHDS link OK");
+    check(is(tile_at(4, 1500, crsf_src), "CAP mAh", "1234"), "telemetry: CRSF capacity");
+    check(is(tile_at(5, 1500, crsf_src), "PWR mW", "100"), "telemetry: CRSF power");
+    check(is(tile_at(6, 1500, crsf_src), "SNR dB", "-03dB"), "telemetry: CRSF SNR");
+    check(is(tile_at(6, 1500, afhds_src), "SNR dB", "--dB"), "telemetry: AFHDS SNR placeholder");
+    check(is(tile_at(7, 1500, crsf_src), "RATE", "50Hz"), "telemetry: CRSF rate name");
+    check(is(tile_at(8, 1500, crsf_src), "ANTENNA", "ANT 2"), "telemetry: CRSF antenna 2");
+    check(is(tile_at(9, 1500, crsf_src), "PKTS TX", "123"), "telemetry: packets sent");
+    check(is(tile_at(10, 1500, afhds_src), "PKTS RX", "456"), "telemetry: packets received");
+    check(is(tile_at(11, 1500, afhds_src), "TIMER", "12:34"), "telemetry: timer text");
+    check(is(tile_at(11, 1500, crsf_src), "TIMER", "00:00"), "telemetry: timer placeholder");
+    check(is(tile_at(12, 1500, crsf_src), "VSPD", "-2.5m/s"), "telemetry: CRSF vertical speed");
+    check(is(tile_at(12, 1500, afhds_src), "VSPD", "+1.5m/s"), "telemetry: AFHDS vertical speed");
+    check(is(tile_at(13, 1500, crsf_src), "ALT", "42m"), "telemetry: altitude");
+    check(is(tile_at(14, 1500, crsf_src), "CELLS", "4S 3.95V"), "telemetry: CRSF cells with count");
+    check(is(tile_at(14, 1500, afhds_src), "CELLS", "12.60V"), "telemetry: AFHDS cells fallback");
+    check(is(tile_at(15, 1500, crsf_src), "RPM", "150k"), "telemetry: RPM in thousands");
+    check(is(tile_at(16, 1500, crsf_src), "TEMP", "-1.5C"), "telemetry: temperature");
+    check(is(tile_at(17, 1500, crsf_src), "GSPD", "25kmh"), "telemetry: ground speed");
+    check(is(tile_at(18, 1500, crsf_src), "SATS", "12"), "telemetry: satellites");
+    check(is(tile_at(19, 1500, crsf_src), "HDG", "90D"), "telemetry: GPS heading");
+    check(is(tile_at(20, 1500, crsf_src), "PITCH", "+15D"), "telemetry: pitch");
+    check(is(tile_at(21, 1500, crsf_src), "ROLL", "-5D"), "telemetry: roll");
+    check(tile_at(21, 1500, afhds_src).value.view() == "---", "telemetry: AFHDS attitude placeholder");
+    check(tile_at(22, 1500, crsf_src).slot_off && is(tile_at(22, 1500, crsf_src), "SLOT OFF", ""),
+          "telemetry: unknown slot is off");
+
+    c.last_gps_ms = 0;
+    check(is(tile_at(19, 1500, crsf_src), "HDG", "330D"), "telemetry: heading falls back to yaw");
+    c.last_vbat_ms = 0;
+    check(is(tile_at(0, 1500, crsf_src), "RX BAT", "----"), "telemetry: never-seen battery placeholder");
+    check(!tile_at(0, 1500, crsf_src).stale, "telemetry: never-seen is not stale");
+    c.connected = false;
+    check(tile_at(12, 1500, crsf_src).stale && tile_at(12, 1500, crsf_src).value.view() == "-2.5m/s*",
+          "telemetry: disconnected CRSF tile is stale");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -2161,6 +2309,7 @@ int main() {
     afhds2a_test();
     a7105_radio_test();
     vario_test();
+    telemetry_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

@@ -19,6 +19,7 @@
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
 #include "ferrox/logic/switches.hpp"
+#include "ferrox/logic/telemetry.hpp"
 #include "ferrox/logic/trim.hpp"
 #include "ferrox/logic/widgets.hpp"
 
@@ -145,7 +146,8 @@ constexpr std::string_view afhds_link_line(const View& v) {
 
 // Telemetry older than 2.5 s counts as stale, as in Rust `check_sensor_status`.
 constexpr bool sensor_fresh(const View& v, uint32_t last_ms) {
-    return last_ms != 0 && v.telem.connected && (v.now_ms - last_ms) < 2500u;
+    const auto st = telemetry::check_sensor_status({.value = last_ms}, {.value = v.now_ms}, v.telem.connected);
+    return st.has_data && !st.stale;
 }
 
 constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st, uint16_t battery_mv, const View& v,

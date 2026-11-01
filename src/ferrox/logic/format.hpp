@@ -137,6 +137,59 @@ constexpr Text<8> format_hex32(uint32_t val) {
     return t;
 }
 
+/// `None` prints only a minus sign; `Force` prints '+' for non-negative values.
+enum class SignMode : uint8_t { None, Force };
+
+/// Fixed-point number with padded integer part and unit suffix, e.g. "+05dB" or "4.20V".
+struct FixedFormat {
+    int32_t value = 0;
+    uint8_t decimals = 0;
+    uint8_t pad_digits = 0;  // minimum integer digits, padded with zeros or spaces
+    bool pad_zero = false;
+    SignMode sign = SignMode::None;
+    std::string_view suffix{};
+};
+
+/// Same output as Rust `ui/format.rs::format_fixed`; text beyond 12 characters is dropped.
+constexpr Text<12> format_fixed(const FixedFormat& f) {
+    Text<12> t;
+    const bool negative = f.value < 0;
+    auto mag = static_cast<uint32_t>(negative ? -static_cast<int64_t>(f.value) : static_cast<int64_t>(f.value));
+    if (negative) {
+        t.push('-');
+    } else if (f.sign == SignMode::Force) {
+        t.push('+');
+    }
+
+    std::array<uint8_t, 10> digits{};
+    std::size_t count = 0;
+    do {
+        digits[count++] = static_cast<uint8_t>(mag % 10);
+        mag /= 10;
+    } while (mag > 0);
+    while (count < digits.size() && count < static_cast<std::size_t>(f.decimals) + 1u) {
+        digits[count++] = 0;
+    }
+
+    const std::size_t int_digits = count - f.decimals;
+    for (std::size_t i = int_digits; i < f.pad_digits; ++i) {
+        t.push(f.pad_zero ? '0' : ' ');
+    }
+    for (std::size_t i = count; i-- > f.decimals;) {
+        t.push(static_cast<char>('0' + digits[i]));
+    }
+    if (f.decimals > 0) {
+        t.push('.');
+        for (std::size_t i = f.decimals; i-- > 0;) {
+            t.push(static_cast<char>('0' + digits[i]));
+        }
+    }
+    for (const char c : f.suffix) {
+        t.push(c);
+    }
+    return t;
+}
+
 /// Trims ASCII spaces on both ends.
 constexpr std::string_view trim_spaces(std::string_view s) {
     while (!s.empty() && s.front() == ' ') {

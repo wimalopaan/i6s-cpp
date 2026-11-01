@@ -4,7 +4,7 @@ C++26 port of the FlySky FS-i6X firmware (originally `ferrox-rc/flysky-i6x-rs`, 
 
 Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static polymorphism only (no virtual), no heap, no exceptions/RTTI.
 
-## Status: foundation, CRSF, storage, mixer, input, RC output, LCD, dashboard, menus, main-menu diagnostics, calibration, dual rate/expo, throttle curve, wing/mixer
+## Status: foundation, CRSF, storage, mixer, input, RC output, LCD, dashboard, menus, main-menu diagnostics, calibration, dual rate/expo, throttle curve, wing/mixer, telemetry tile logic
 
 Ported so far:
 - Chip/CMSIS: system clock (48 MHz), reset flags, DFU entry and jump, UID
@@ -45,7 +45,9 @@ Wing/mixer deviations: the pot and switch auto-select while moving a control (Ru
 
 Vario (pure logic, host-tested in `vario_test()`): `logic/vario.hpp` ports Rust `vario.rs`. It covers the vertical speed filter from native telemetry (3:1 EMA) or from altitude changes (dt ≥ 80 ms, decay after 500 ms), the disconnect reset, the activation switch and motor lockout above 1100 µs, the climb and sink deadbands, the climb pitch and cadence, and the sink modes (Mute, Pulse, Continuous). Not wired yet: the buzzer output and the VarioSetup menu are not ported. Not tested on hardware.
 
-Not yet ported: diagnostics pages 2–4 and system info firmware/storage lines, model setup rows copy, telemetry, protocol and reset, bind, buzzer (including calibration chimes), USB, trainer, trim key state machine and trim footers, flight timer state machine and arm chimes, custom telemetry slots, CRSF telemetry on P5.
+Telemetry (pure logic, host-tested in `telemetry_test()`): `logic/telemetry.hpp` ports the value logic of Rust `ui/dashboard/pages/telemetry.rs`. It covers sensor freshness (`check_sensor_status`: 2.5 s timeout and disconnect, wrap-safe), the RF rate names (`rf_mode_name`), and the text and stale `*` mark of the 22 sensor tiles (`sensor_tile`) for both AFHDS2A and CRSF sources. `format_fixed` is in `logic/format.hpp` (Rust `format_fixed`). Dashboard `sensor_fresh` uses the same freshness check. Not yet ported: the telemetry page layout, slot-to-tile storage, drawing of the tiles, and the CRSF branch of page P5. Deviations from Rust: for CRSF, tile 12 (VSPD) uses the CRSF vertical speed and tile 13 (ALT) uses the CRSF barometric altitude, while Rust uses the AFHDS2A fields in both cases. Not tested on hardware.
+
+Not yet ported: diagnostics pages 2–4 and system info firmware/storage lines, model setup rows copy, protocol and reset, bind, buzzer (including calibration chimes), USB, trainer, trim key state machine and trim footers, flight timer state machine and arm chimes, custom telemetry slots, CRSF telemetry on P5.
 
 
 ## Build
