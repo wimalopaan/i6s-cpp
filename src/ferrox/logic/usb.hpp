@@ -389,4 +389,120 @@ constexpr std::size_t format_channels_json(std::span<const uint16_t> chs, std::s
     return w.ok ? w.pos : 0;
 }
 
+// Same JSON shape as `format_channels_json`, prefixed with the battery voltage (two decimals).
+constexpr std::size_t format_telemetry_json(uint16_t battery_mv, std::span<const uint16_t> chs, std::span<char> out) {
+    TextWriter w{out};
+    const uint32_t centivolts = (static_cast<uint32_t>(battery_mv) + 5) / 10;
+    w.put("{\"vbat\":");
+    w.put_uint(centivolts / 100);
+    w.put(".");
+    if (centivolts % 100 < 10) w.put("0");
+    w.put_uint(centivolts % 100);
+    w.put(",\"ch\":[");
+    for (std::size_t i = 0; i < chs.size(); ++i) {
+        if (i > 0) w.put(",");
+        w.put_uint(chs[i]);
+    }
+    w.put("]}\r\n");
+    return w.ok ? w.pos : 0;
+}
+
+inline constexpr std::string_view kCliPrompt = "i6x> ";
+inline constexpr std::string_view kHelpText =
+    "Commands:\r\n"
+    "  help      - Show this help\r\n"
+    "  status    - Firmware & battery info\r\n"
+    "  channels  - Dump RF channel values (CH1..CH18)\r\n"
+    "  storage   - Dump EEPROM bus, address & I/O diagnostics\r\n"
+    "  telem     - Dump single telemetry frame\r\n"
+    "  stream    - Start continuous telemetry streaming (any key to stop)\r\n"
+    "  dfu       - Reboot into STM32 factory ROM DFU bootloader\r\n"
+    "  reboot    - Reboot transmitter\r\n";
+
+// CDC line coding reported to the host: 115200 baud, 1 stop bit, no parity, 8 data bits.
+inline constexpr auto kLineCoding = std::to_array<uint8_t>({0x00, 0xC2, 0x01, 0x00, 0x00, 0x00, 0x08});
+
+/// Fixed-capacity FIFO of bytes. Overflow is refused rather than overwriting.
+template <std::size_t N>
+struct ByteRing {
+    static_assert(N > 0, "ring needs storage");
+    std::array<uint8_t, N> buf{};
+    std::size_t head = 0;
+    std::size_t count = 0;
+
+    constexpr std::size_t size() const { return count; }
+    constexpr std::size_t free_space() const { return N - count; }
+    constexpr void clear() {
+        head = 0;
+        count = 0;
+    }
+
+    constexpr bool push(uint8_t v) {
+        if (count == N) return false;
+        buf[(head + count) % N] = v;
+        ++count;
+        return true;
+    }
+
+    // All-or-nothing: returns false and stores nothing if `s` does not fit.
+    constexpr bool push_text(std::string_view s) {
+        if (s.size() > free_space()) return false;
+        for (char c : s) {
+            push(static_cast<uint8_t>(c));
+        }
+        return true;
+    }
+
+    // Pushes as many bytes as fit; returns the count stored.
+    constexpr std::size_t push_all(std::span<const uint8_t> src) {
+        std::size_t n = 0;
+        while (n < src.size() && push(src[n])) ++n;
+        return n;
+    }
+
+    constexpr std::size_t pop_into(std::span<uint8_t> dst) {
+        std::size_t n = 0;
+        while (n < dst.size() && count > 0) {
+            dst[n++] = buf[head];
+            head = (head + 1) % N;
+            --count;
+        }
+        return n;
+    }
+};
+
+/// Line editing for the CLI: echo, backspace, and CR/LF/CRLF line ends (a CRLF pair ends one line).
+struct LineEditor {
+    enum class Action : uint8_t { None, Echo, Erase, EndOfLine };
+    static constexpr std::size_t kCapacity = 64;
+
+    std::array<char, kCapacity> buf{};
+    std::size_t len = 0;
+    bool last_cr = false;
+
+    constexpr Action feed(uint8_t b) {
+        if (b == '\r' || b == '\n') {
+            const bool second_of_pair = b == '\n' && last_cr;
+            last_cr = b == '\r';
+            return second_of_pair ? Action::None : Action::EndOfLine;
+        }
+        last_cr = false;
+        if (b == 0x08 || b == 0x7F) {
+            if (len == 0) return Action::None;
+            --len;
+            return Action::Erase;
+        }
+        if (len == kCapacity) return Action::None;
+        buf[len++] = static_cast<char>(b);
+        return Action::Echo;
+    }
+
+    constexpr std::string_view line() const { return {buf.data(), len}; }
+
+    constexpr void clear() {
+        len = 0;
+        last_cr = false;
+    }
+};
+
 }  // namespace ferrox::logic::usb

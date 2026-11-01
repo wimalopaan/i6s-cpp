@@ -3955,6 +3955,55 @@ void usb_logic_test() {
         std::array<char, 8> small{};
         check(u::format_channels_json(ch, small) == 0, "usb json: overflow returns zero bytes");
     }
+    {
+        const std::array<uint16_t, 2> ch{1500, 988};
+        std::array<char, 64> buf{};
+        const std::size_t n = u::format_telemetry_json(7404, ch, buf);
+        check(std::string_view(buf.data(), n) == "{\"vbat\":7.40,\"ch\":[1500,988]}\r\n",
+              "usb telemetry: battery voltage with two decimals");
+        std::array<char, 64> buf2{};
+        const std::size_t n2 = u::format_telemetry_json(6905, ch, buf2);
+        check(std::string_view(buf2.data(), n2) == "{\"vbat\":6.91,\"ch\":[1500,988]}\r\n",
+              "usb telemetry: millivolt rounding");
+        std::array<char, 64> buf3{};
+        check(u::format_telemetry_json(5003, ch, buf3) > 0 &&
+                  std::string_view(buf3.data()) == "{\"vbat\":5.00,\"ch\":[1500,988]}\r\n",
+              "usb telemetry: zero-padded hundredths");
+    }
+    {
+        u::ByteRing<4> ring{};
+        check(ring.push_text("abc") && ring.size() == 3, "usb ring: text fits");
+        check(!ring.push_text("xy") && ring.size() == 3, "usb ring: text is all-or-nothing");
+        check(ring.push_all(std::to_array<uint8_t>({'d', 'e'})) == 1 && ring.size() == 4, "usb ring: push_all stops when full");
+        std::array<uint8_t, 3> out{};
+        check(ring.pop_into(out) == 3 && out[0] == 'a' && out[2] == 'c', "usb ring: FIFO order");
+        check(ring.push_text("fg") && ring.size() == 3, "usb ring: wraps around");
+        std::array<uint8_t, 8> rest{};
+        const std::size_t r = ring.pop_into(rest);
+        check(r == 3 && rest[0] == 'd' && rest[1] == 'f' && rest[2] == 'g', "usb ring: wrapped contents");
+        ring.clear();
+        check(ring.size() == 0 && ring.free_space() == 4, "usb ring: clear");
+    }
+    {
+        u::LineEditor ed{};
+        using A = u::LineEditor::Action;
+        check(ed.feed('h') == A::Echo && ed.feed('i') == A::Echo, "usb line: echoes printable bytes");
+        check(ed.feed(0x7F) == A::Erase && ed.line() == "h", "usb line: DEL erases one char");
+        check(ed.feed(0x08) == A::Erase && ed.line().empty(), "usb line: backspace erases");
+        check(ed.feed(0x08) == A::None, "usb line: backspace on empty line is ignored");
+        ed.feed('s');
+        ed.feed('s');
+        check(ed.feed('\r') == A::EndOfLine && ed.line() == "ss", "usb line: CR ends line");
+        check(ed.feed('\n') == A::None, "usb line: LF after CR collapses");
+        ed.clear();
+        check(ed.feed('\n') == A::EndOfLine && ed.feed('\n') == A::EndOfLine,
+              "usb line: bare LF lines and repeated LF both end lines");
+        ed.clear();
+        for (std::size_t i = 0; i < u::LineEditor::kCapacity; ++i) ed.feed('x');
+        check(ed.feed('y') == A::None && ed.line().size() == u::LineEditor::kCapacity, "usb line: capacity is bounded");
+    }
+    check(u::kHelpText.size() > 0 && u::kLineCoding.size() == 7 && u::kLineCoding[0] == 0x00 && u::kLineCoding[1] == 0xC2,
+          "usb line coding: 115200 baud");
 }
 
 int main() {
