@@ -230,7 +230,8 @@ int main() {
             if (menu_state.screen == logic::menu::Screen::Closed) {
                 render(g_fb, page_state, View{input, g_storage, no_trim, channels, crsf});
             } else {
-                logic::menu::render(g_fb, menu_state, g_model_names, g_storage);
+                logic::menu::render(g_fb, menu_state, g_model_names, g_storage,
+                                    logic::menu::Live{channels, input.raw, chip::kProfile.name});
             }
             hw::lcd::flush(g_fb);
             last_draw_ms = now;

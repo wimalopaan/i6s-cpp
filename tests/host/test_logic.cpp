@@ -844,6 +844,7 @@ void dashboard_test() {
 
 void menu_test() {
     namespace mn = logic::menu;
+    namespace labels = logic::labels;
     using mn::Action;
     using mn::Event;
     using mn::Screen;
@@ -861,6 +862,12 @@ void menu_test() {
     auto press = [&](uint16_t key, uint32_t now) {
         const Event e = tick(key, key, now);
         tick(0, 0, now + 1);
+        return e;
+    };
+
+    auto press_in = [&](mn::State& state, uint16_t key, uint32_t now) {
+        const Event e = mn::update(state, mn::Input{key, key, now}, st);
+        mn::update(state, mn::Input{0, 0, now + 1}, st);
         return e;
     };
 
@@ -968,10 +975,11 @@ void menu_test() {
     logic::display::Framebuffer fb{};
     const mn::ModelNames names{};
     mn::open(s);
-    for (const Screen screen : {Screen::Main, Screen::ModelSelect, Screen::ModelSetup}) {
+    for (const Screen screen : {Screen::Main, Screen::ModelSelect, Screen::ModelSetup, Screen::ChannelReverse,
+                                Screen::ChannelMonitor, Screen::DiagAnalog, Screen::SystemInfo}) {
         s.screen = screen;
         fb.clear();
-        mn::render(fb, s, names, st);
+        mn::render(fb, s, names, st, mn::Live{});
     }
 
     check(logic::glyphs::kMenuGlyphs[0][4] == 194 && logic::glyphs::kMenuGlyphs[11][13] == 194,
@@ -997,6 +1005,76 @@ void menu_test() {
     const mn::ModelName named{'A', 'B', 'C', 0, 0, 0, 0, 0, 0, 0};
     check(mn::model_row_text(0, named, true).view() == std::string_view{"M01:ABC*"}, "active model row label");
     check(mn::model_row_text(9, named, false).view() == std::string_view{"M10:ABC"}, "two-digit model row label");
+
+    // Channel labels follow the wing/tail mix and the aux source table.
+    auto model = logic::storage::default_storage().active_model;
+    check(labels::channel_label(0, model).view() == std::string_view{"1:AIL"}, "channel 1 label");
+    check(labels::channel_label(4, model).view() == std::string_view{"5:SA"}, "channel 5 default aux source");
+    check(labels::channel_label(9, model).view() == std::string_view{"10:SD"}, "channel 10 default aux source");
+    check(labels::channel_label(17, model).view() == std::string_view{"18:None"}, "unset aux source is None");
+    model.wing_tail_mix = 1;
+    check(labels::channel_label(0, model).view() == std::string_view{"1:L.ELV"}, "elevon left label");
+    check(labels::channel_label(1, model).view() == std::string_view{"2:R.ELV"}, "elevon right label");
+    model.wing_tail_mix = 2;
+    check(labels::channel_label(3, model).view() == std::string_view{"4:R.VTL"}, "v-tail right label");
+    model.wing_tail_mix = 3;
+    check(labels::channel_label(0, model).view() == std::string_view{"1:L.AIL"}, "flaperon left label");
+    check(labels::channel_label(5, model).view() == std::string_view{"6:R.AIL"}, "flaperon right label");
+
+    // Channel reverse toggles the active model bit and saves on cancel.
+    mn::State rev{};
+    st.active_model.channel_reverse = 0;
+    rev.screen = Screen::ChannelReverse;
+    mn::update(rev, mn::Input{0, 0, 0}, st);
+    press_in(rev, mn::kKeyOk, 600);
+    check(st.active_model.channel_reverse == 1u, "OK must toggle the selected channel");
+    press_in(rev, mn::kKeyDown, 610);
+    press_in(rev, mn::kKeyOk, 620);
+    check(st.active_model.channel_reverse == 3u, "second channel must toggle independently");
+    press_in(rev, mn::kKeyOk, 630);
+    check(st.active_model.channel_reverse == 1u, "second OK must clear the bit again");
+    const Event saved = press_in(rev, mn::kKeyCancel, 640);
+    check(saved.action == Action::SaveActiveModel && rev.screen == Screen::Main, "cancel must save and return");
+
+    // Channel monitor wraps through its three pages in both directions.
+    mn::State mon{};
+    mon.screen = Screen::ChannelMonitor;
+    mn::update(mon, mn::Input{0, 0, 0}, st);
+    press_in(mon, mn::kKeyUp, 700);
+    check(mon.page == 2, "up from first monitor page must wrap to last");
+    press_in(mon, mn::kKeyDown, 710);
+    check(mon.page == 0, "down from last monitor page must wrap to first");
+    press_in(mon, mn::kKeyCancel, 720);
+    check(mon.screen == Screen::Main, "cancel must leave the monitor");
+
+    // Analog diagnostics toggles between its two pages.
+    mn::State diag{};
+    diag.screen = Screen::DiagAnalog;
+    mn::update(diag, mn::Input{0, 0, 0}, st);
+    press_in(diag, mn::kKeyOk, 800);
+    check(diag.page == 1, "OK must advance the diagnostic page");
+    press_in(diag, mn::kKeyUp, 810);
+    check(diag.page == 0, "up must go back a diagnostic page");
+
+    // Monitor and ADC gauges clamp to their full scale instead of overflowing.
+    logic::display::Framebuffer gauges{};
+    mn::Live live{};
+    live.rf.fill(3000);
+    live.adc.fill(9999);
+    live.mcu_name = "STM32F072VB";
+    mn::State gs{};
+    gs.screen = Screen::ChannelMonitor;
+    gauges.clear();
+    mn::render(gauges, gs, names, st, live);
+    check(lit_pixels(gauges) > 0, "monitor must draw gauges for out-of-range values");
+    gs.screen = Screen::DiagAnalog;
+    gauges.clear();
+    mn::render(gauges, gs, names, st, live);
+    check(lit_pixels(gauges) > 0, "diagnostics must draw clamped ADC gauges");
+    gs.screen = Screen::SystemInfo;
+    gauges.clear();
+    mn::render(gauges, gs, names, st, live);
+    check(lit_pixels(gauges) > 0, "system info must render the MCU name");
 }
 
 int main() {

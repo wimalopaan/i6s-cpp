@@ -6,9 +6,11 @@
 #include <cstdint>
 #include <string_view>
 
+#include "ferrox/logic/channels.hpp"
 #include "ferrox/logic/format.hpp"
 #include "ferrox/logic/framebuffer.hpp"
 #include "ferrox/logic/glyphs.hpp"
+#include "ferrox/logic/input.hpp"
 #include "ferrox/logic/labels.hpp"
 #include "ferrox/logic/power.hpp"
 #include "ferrox/logic/safety.hpp"
@@ -49,7 +51,23 @@ inline constexpr uint8_t kArmSwitchCount = 23;
 inline constexpr uint16_t kTimerStepSecs = 30;
 inline constexpr uint16_t kTimerMaxSecs = 3600;
 
-enum class Screen : uint8_t { Closed, Main, ModelSelect, ModelSetup };
+enum class Screen : uint8_t { Closed, Main, ModelSelect, ModelSetup, ChannelReverse, ChannelMonitor, DiagAnalog, SystemInfo };
+
+inline constexpr std::size_t kItemChannelReverse = 6;
+inline constexpr std::size_t kItemChannelMonitor = 8;
+inline constexpr std::size_t kItemDiagAnalog = 10;
+inline constexpr std::size_t kItemSystemInfo = 11;
+inline constexpr std::size_t kMonitorPages = 3;
+inline constexpr std::size_t kMonitorRows = 6;
+inline constexpr std::size_t kDiagPages = 2;
+inline constexpr std::size_t kAdcFullScale = 4095;
+
+// Live values shown by the diagnostic screens. Filled by the caller each frame.
+struct Live {
+    std::array<uint16_t, kNumChannels> rf{};  // output channels in us
+    input::Raw adc{};
+    std::string_view mcu_name{};
+};
 
 enum class Action : uint8_t {
     None,
@@ -87,6 +105,8 @@ struct State {
     ListPos main{};
     ListPos models{};
     ListPos setup{};
+    ListPos reverse{};
+    uint8_t page{0};  // page of the channel monitor or analog diagnostics
     bool editing{false};
     uint8_t name_cursor{0};
     Repeat up{};
@@ -200,6 +220,21 @@ constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
             s.editing = false;
             s.name_cursor = 0;
         }
+        if (s.main.selected == kItemChannelReverse) {
+            s.screen = Screen::ChannelReverse;
+            s.reverse = ListPos{};
+        }
+        if (s.main.selected == kItemChannelMonitor) {
+            s.screen = Screen::ChannelMonitor;
+            s.page = 0;
+        }
+        if (s.main.selected == kItemDiagAnalog) {
+            s.screen = Screen::DiagAnalog;
+            s.page = 0;
+        }
+        if (s.main.selected == kItemSystemInfo) {
+            s.screen = Screen::SystemInfo;
+        }
     }
     return {};
 }
@@ -303,6 +338,55 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m) {
 }
 
 // Advances the menu state for one tick. `st` is edited in place; the caller persists it when told to.
+constexpr Event update_channel_reverse(State& s, const Nav& n, storage::ModelConfig& m) {
+    if (n.up != n.down) {
+        step_list(s.reverse, kNumChannels, kListVisible, n.down);
+    }
+    if (n.ok) {
+        m.channel_reverse ^= 1u << s.reverse.selected;
+    }
+    if (n.cancel) {
+        s.screen = Screen::Main;
+        return {Action::SaveActiveModel, 0};
+    }
+    return {};
+}
+
+constexpr Event update_monitor(State& s, const Nav& n) {
+    if (n.cancel) {
+        s.screen = Screen::Main;
+        return {};
+    }
+    if (n.down) {
+        s.page = static_cast<uint8_t>((s.page + 1) % kMonitorPages);
+    }
+    if (n.up) {
+        s.page = static_cast<uint8_t>((s.page + kMonitorPages - 1) % kMonitorPages);
+    }
+    return {};
+}
+
+constexpr Event update_diag(State& s, const Nav& n) {
+    if (n.cancel) {
+        s.screen = Screen::Main;
+        return {};
+    }
+    if (n.up) {
+        s.page = static_cast<uint8_t>((s.page + kDiagPages - 1) % kDiagPages);
+    } else if (n.down || n.ok) {
+        s.page = static_cast<uint8_t>((s.page + 1) % kDiagPages);
+    }
+    return {};
+}
+
+constexpr Event update_system(State& s, const Nav& n) {
+    if (n.cancel) {
+        s.screen = Screen::Main;
+    }
+    return {};
+}
+
+// Advances the menu state for one tick. `st` is edited in place; the caller persists it when told to.
 constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
     if (s.screen == Screen::Closed) {
         return {};
@@ -328,6 +412,10 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
         case Screen::Main: return update_main(s, n, st.radio.active_model);
         case Screen::ModelSelect: return update_models(s, n);
         case Screen::ModelSetup: return update_setup(s, n, st.active_model);
+        case Screen::ChannelReverse: return update_channel_reverse(s, n, st.active_model);
+        case Screen::ChannelMonitor: return update_monitor(s, n);
+        case Screen::DiagAnalog: return update_diag(s, n);
+        case Screen::SystemInfo: return update_system(s, n);
         case Screen::Closed: break;
     }
     return {};
@@ -479,12 +567,76 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
     }
 }
 
+constexpr std::array<std::string_view, kMonitorPages> kMonitorTitles{"CHANNELS (1-6)", "CHANNELS (7-12)",
+                                                                   "CHANNELS (13-18)"};
+constexpr std::array<std::string_view, kDiagPages> kDiagTitles{"ANALOG (1-6)", "ANALOG (7-11)"};
+// Raw ADC index of each row. Page 1 starts at raw index 6 (PA6).
+constexpr std::array<std::array<std::string_view, 6>, kDiagPages> kDiagNames{{
+    {"RH:AIL", "RV:ELE", "LV:THR", "LH:RUD", "SW:SA ", "SW:SB "},
+    {"POT:V1", "POT:V2", "SW:SC ", "SW:SD ", "VBAT  ", ""},
+}};
+constexpr std::array<std::size_t, kDiagPages> kDiagRows{6, 5};
+
+constexpr void render_channel_reverse(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
+    widgets::draw_header(fb, "CHANNEL REVERSE");
+    for (std::size_t slot = 0; slot < kListVisible; ++slot) {
+        const std::size_t idx = s.reverse.scroll + slot;
+        if (idx >= kNumChannels) {
+            break;
+        }
+        const bool reversed = (m.channel_reverse & (1u << idx)) != 0;
+        widgets::draw_list_row(fb, static_cast<int>(slot), idx == s.reverse.selected, labels::kChannelNames[idx],
+                               reversed ? "REVERSE" : "NORMAL ", 76);
+    }
+    widgets::draw_scrollbar(fb, s.reverse.selected, static_cast<int>(kNumChannels), 14, 36);
+    widgets::draw_footer(fb, "[OK] Toggle   [ESC] Back");
+}
+
+constexpr void render_monitor(Framebuffer& fb, const State& s, const Live& live, const storage::ModelConfig& m) {
+    widgets::draw_header(fb, kMonitorTitles[s.page]);
+    constexpr int kMinUs = kChannelMinUs;
+    constexpr int kSpanUs = kChannelSpanUs;
+    for (std::size_t row = 0; row < kMonitorRows; ++row) {
+        const std::size_t ch = s.page * kMonitorRows + row;
+        const int us = std::clamp<int>(live.rf[ch], kMinUs, kMinUs + kSpanUs);
+        const int fill = std::min((us - kMinUs) * 38 / kSpanUs, 38);
+        const auto label = labels::channel_label(ch, m);
+        widgets::draw_gauge_row(fb, 12 + static_cast<int>(row) * 7, label.view(), fill, static_cast<uint16_t>(us));
+    }
+    widgets::draw_footer(fb, "[UP/DN] Page  [ESC] Back");
+}
+
+constexpr void render_diag(Framebuffer& fb, const State& s, const Live& live) {
+    widgets::draw_header(fb, kDiagTitles[s.page]);
+    const std::size_t start = s.page == 0 ? 0 : 6;
+    for (std::size_t row = 0; row < kDiagRows[s.page]; ++row) {
+        const uint16_t raw = std::min<uint16_t>(live.adc[start + row], kAdcFullScale);
+        const int fill = std::min(static_cast<int>(raw) * 38 / static_cast<int>(kAdcFullScale), 38);
+        widgets::draw_gauge_row(fb, 13 + static_cast<int>(row) * 7, kDiagNames[s.page][row], fill, raw);
+    }
+    widgets::draw_footer(fb, "[UP/DN/OK] Page  [ESC] Back");
+}
+
+constexpr void render_system(Framebuffer& fb, std::string_view mcu_name) {
+    widgets::draw_header(fb, "SYSTEM INFORMATION");
+    fb.draw_str_4x6(4, 14, "MCU:", false);
+    fb.draw_str_4x6(48, 14, mcu_name, false);
+    fb.draw_str_4x6(4, 22, "Flash: 128KB | SRAM: 16KB", false);
+    fb.draw_str_4x6(4, 30, "Profiles: 20 Models (16KB)", false);
+    widgets::draw_footer(fb, "[ESC] Back");
+}
+
 // Draws the menu screen that is open. Call only while `s.screen != Screen::Closed`.
-constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, const storage::RadioStorage& st) {
+constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, const storage::RadioStorage& st,
+                      const Live& live) {
     switch (s.screen) {
         case Screen::Main: render_main(fb, s); break;
         case Screen::ModelSelect: render_models(fb, s, names, st); break;
         case Screen::ModelSetup: render_setup(fb, s, st.active_model); break;
+        case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;
+        case Screen::ChannelMonitor: render_monitor(fb, s, live, st.active_model); break;
+        case Screen::DiagAnalog: render_diag(fb, s, live); break;
+        case Screen::SystemInfo: render_system(fb, live.mcu_name); break;
         case Screen::Closed: break;
     }
 }
