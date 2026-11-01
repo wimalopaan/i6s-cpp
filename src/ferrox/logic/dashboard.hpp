@@ -4,12 +4,14 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 
 #include "ferrox/logic/afhds2a.hpp"
 #include "ferrox/logic/channels.hpp"
 #include "ferrox/logic/flight.hpp"
+#include "ferrox/logic/flight_timer.hpp"
 #include "ferrox/logic/format.hpp"
 #include "ferrox/logic/labels.hpp"
 #include "ferrox/logic/framebuffer.hpp"
@@ -93,6 +95,9 @@ struct View {
     uint32_t now_ms = 0;
     uint32_t packets_sent = 0;
     SessionStats stats{};
+    // Flight timer footer and reset overlay; empty when the timer is off or no overlay is due.
+    std::optional<flight_timer::Display> timer{};
+    std::optional<flight_timer::Modal> timer_modal{};
 };
 
 using labels::model_name;
@@ -413,7 +418,7 @@ constexpr void draw_adaptive_layout(Framebuffer& fb, const input::InputState& in
     }
 }
 
-constexpr void draw_gimbal_page(Framebuffer& fb, const View& v) {
+constexpr void draw_gimbal_page(Framebuffer& fb, const View& v, uint8_t blink_phase) {
     draw_primary_sticks(fb, v);
 
     const auto& st = v.storage;
@@ -429,6 +434,10 @@ constexpr void draw_gimbal_page(Framebuffer& fb, const View& v) {
         const auto axis = *v.trims.last_active;
         const auto trim_text = format::format_trim(trim::axis_letter(axis), trim::value_of(v.trims.values, axis));
         widgets::draw_footer_split(fb, trim_text.view(), "Hold OK:Menu");
+    } else if (v.timer) {
+        const auto timer_text = format::format_timer(v.timer->value.value, v.timer->expired);
+        const bool blink_on = (blink_phase & 0x08u) != 0;
+        widgets::draw_footer_three(fb, "P1/5", timer_text.view(), "Hold OK:Menu", v.timer->expired && blink_on);
     } else {
         widgets::draw_footer_split(fb, "P1/5", "Hold OK:Menu");
     }
@@ -568,16 +577,38 @@ constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
     }
 }
 
+// Centered box shown after a timer reset: a hold progress bar, then a confirmation toast.
+constexpr void draw_timer_modal(Framebuffer& fb, const flight_timer::Modal& m) {
+    const Rect box{{18, 19}, {92, 26}};
+    fb.fill_rect(box, false);
+    fb.draw_rect(box, true);
+
+    if (m.reset_done) {
+        fb.draw_str_6x10({28, 28}, "TIMER RESET!", false);
+        return;
+    }
+    fb.draw_str_6x10({31, 22}, "RESET TIMER", false);
+    fb.draw_rect({{27, 33}, {74, 6}}, true);
+    const int fill_w = std::min(m.progress_pct * 70 / 100, 70);
+    if (fill_w > 0) {
+        fb.fill_rect({{29, 35}, {fill_w, 2}}, true);
+    }
+}
+
 // Renders the status bar and the current page, then advances the blink phase.
 constexpr void render(Framebuffer& fb, PageState& s, const View& v) {
     draw_status_bar(fb, v.storage, v.in.battery_mv, v, s.blink_phase);
 
     switch (s.page) {
-        case 0: draw_gimbal_page(fb, v); break;
+        case 0: draw_gimbal_page(fb, v, s.blink_phase); break;
         case 1: draw_channel_page(fb, v.rf_chs, false); break;
         case 2: draw_channel_page(fb, v.rf_chs, true); break;
         case 3: draw_model_page(fb, v); break;
         default: draw_telemetry_page(fb, v); break;
+    }
+
+    if (v.timer_modal) {
+        draw_timer_modal(fb, *v.timer_modal);
     }
 
     s.blink_phase = static_cast<uint8_t>(s.blink_phase + 1);

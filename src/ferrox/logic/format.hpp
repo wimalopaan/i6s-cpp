@@ -106,6 +106,22 @@ constexpr Text<9> format_trim(char axis, int8_t val) {
     return t;
 }
 
+/// Flight timer as "MM:SS", prefixed with '+' once expired. Minutes cap at 99.
+constexpr Text<6> format_timer(uint16_t secs, bool expired) {
+    Text<6> t;
+    if (expired) {
+        t.push('+');
+    }
+    const unsigned mins = std::min(static_cast<unsigned>(secs) / 60u, 99u);
+    const unsigned sec = static_cast<unsigned>(secs) % 60u;
+    t.push(static_cast<char>('0' + mins / 10));
+    t.push(static_cast<char>('0' + mins % 10));
+    t.push(':');
+    t.push(static_cast<char>('0' + sec / 10));
+    t.push(static_cast<char>('0' + sec % 10));
+    return t;
+}
+
 /// Battery voltage from millivolts as "4.20V" or "12.60V".
 constexpr Text<6> format_vbat(uint16_t mv) {
     const unsigned centi = mv / 10;

@@ -25,6 +25,7 @@
 #include "ferrox/logic/power.hpp"
 #include "ferrox/logic/safety.hpp"
 #include "ferrox/logic/storage.hpp"
+#include "ferrox/logic/flight_timer.hpp"
 #include "ferrox/logic/trim.hpp"
 #include "ferrox/time/systick.hpp"
 
@@ -82,6 +83,13 @@ ferrox::logic::buzzer::RssiWarnTimer g_rssi_warn{};
 ferrox::logic::trim::Controller g_trims{};
 // Trim auto-save trigger; decides when g_trims is written to the active model's EEPROM slot.
 ferrox::logic::trim::AutoSave g_trim_save{};
+
+// Flight timer state machine; runs on the active model and resets when the model changes.
+ferrox::logic::flight_timer::State g_flight_timer{};
+
+ferrox::logic::flight_timer::Config timer_config(const ferrox::logic::storage::ModelConfig& m) {
+    return {.limit = {m.timer_secs}, .source = {m.timer_source}, .arm = {m.arm_switch}};
+}
 
 void load_trims_from_model() {
     const auto& t = g_storage.active_model.trims;
@@ -401,6 +409,20 @@ int main() {
             g_trim_save.saved(logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage));
         }
 
+        const auto timer_cue = logic::flight_timer::update(
+            g_flight_timer,
+            logic::flight_timer::Input{
+                .model = {g_storage.radio.active_model},
+                .config = timer_config(model),
+                .was_armed = prev_armed,
+                .menu_active = menu_open,
+                .cancel_held = (g_keys & logic::safety::kKeyCancel) != 0,
+                .throttle = logic::flight::flight_controls(input.gimbals, stick_mode).throttle,
+                .switches = input.switches,
+                .dt = logic::vario::Millis{dt_ms},
+            });
+        play_buzzer_cue(timer_cue);
+
         const auto channels =
             logic::flight::rf_channels(input, stick_mode, model, g_trims.values, g_storage.radio.throttle_trim);
         const bool crsf = model.rf_protocol == 1;
@@ -426,7 +448,9 @@ int main() {
             } else if (menu_state.screen == logic::menu::Screen::Closed) {
                 render(g_fb, page_state,
                        View{input, g_storage, g_trims, channels, crsf, rf_telem, rf_binding, g_rf_ok, rf_bound, now,
-                            rf_sent, g_rf_stats});
+                            rf_sent, g_rf_stats,
+                            logic::flight_timer::display(g_flight_timer, timer_config(model)),
+                            logic::flight_timer::modal(g_flight_timer)});
             } else {
                 logic::menu::render(g_fb, menu_state, g_model_names, g_storage,
                                     logic::menu::Live{channels, input.raw, chip::kProfile.name});

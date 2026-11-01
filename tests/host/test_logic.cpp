@@ -2670,6 +2670,173 @@ void trim_autosave_test() {
     check(ticks_until_save(s, v, false) == 100, "trim save: a change after reset is saved after 2000 ms");
 }
 
+void flight_timer_test() {
+    using logic::flight_timer::Config;
+    using logic::flight_timer::Input;
+    using logic::flight_timer::Modal;
+    using logic::flight_timer::Seconds;
+    using logic::flight_timer::State;
+    using logic::buzzer::Cue;
+    using logic::vario::Millis;
+
+    constexpr auto kOff = Cue::None;
+    static_assert(logic::format::format_timer(300, true).view() == "+05:00");
+    static_assert(logic::format::format_timer(65, false).view() == "01:05");
+    static_assert(logic::format::format_timer(6000, false).view() == "99:00");
+    check(logic::format::format_timer(0, false).view() == "00:00", "timer format: zero");
+
+    auto make = [](uint16_t limit, uint8_t source, uint8_t arm, uint32_t dt_ms) {
+        Input in{};
+        in.model = {0};
+        in.config = Config{.limit = {limit}, .source = {source}, .arm = {arm}};
+        in.dt = Millis{dt_ms};
+        return in;
+    };
+    // Always-running source (3), no arm switch, so the tick logic is isolated.
+    const Config always{.limit = {3}, .source = {3}, .arm = {0}};
+    auto tick = [](State& s, Input in) { return logic::flight_timer::update(s, in); };
+
+    {
+        State s{};
+        Input in = make(3, 3, 0, 1000);
+        in.model = {1};
+        check(tick(s, in) == Cue::TimerCountdown && s.remaining.value == 2, "timer: first tick resets to limit");
+        check(logic::flight_timer::display(s, always) == logic::flight_timer::Display{{2}, false},
+              "timer: display shows remaining");
+    }
+
+    {
+        State s{};
+        Input in = make(3, 3, 0, 1000);
+        check(tick(s, in) == Cue::TimerCountdown, "timer: countdown beep at 2 s");
+        check(tick(s, in) == Cue::TimerCountdown, "timer: countdown beep at 1 s");
+        check(tick(s, in) == Cue::TimerElapsed && s.remaining.value == 0, "timer: elapsed alarm at zero");
+        check(logic::flight_timer::display(s, always) == logic::flight_timer::Display{{0}, true},
+              "timer: expired display shows zero with plus");
+        check(tick(s, in) == kOff && s.elapsed.value == 1, "timer: counts up after expiry");
+        check(logic::flight_timer::display(s, always) == logic::flight_timer::Display{{1}, true},
+              "timer: expired display counts elapsed");
+    }
+
+    {
+        State s{};
+        Input in = make(120, 3, 0, 1000);
+        Cue last = kOff;
+        bool minute_early = false;
+        for (int i = 1; i <= 60; ++i) {
+            const Cue c = tick(s, in);
+            if (i < 60 && c == Cue::TimerMinute) {
+                minute_early = true;
+            }
+            last = c;
+        }
+        check(!minute_early && last == Cue::TimerMinute && s.remaining.value == 60,
+              "timer: minute beep at each full minute");
+    }
+
+    {
+        State s{};
+        Input in = make(0, 3, 0, 1000);
+        check(tick(s, in) == kOff && s.elapsed.value == 1, "timer: no limit counts elapsed");
+        check(logic::flight_timer::display(s, Config{.limit = {0}, .source = {3}, .arm = {0}}) ==
+                  logic::flight_timer::Display{{1}, false},
+              "timer: no limit shows elapsed without expired");
+    }
+
+    {
+        State s{};
+        check(!logic::flight_timer::display(s, Config{}).has_value(), "timer: source off hides footer");
+        Input in = make(10, 1, 0, 1000);
+        in.throttle = -1000;
+        in.model = {0};
+        tick(s, in);
+        check(s.remaining.value == 10, "timer: throttle source stays idle at low stick");
+        in.throttle = 0;
+        tick(s, in);
+        check(s.remaining.value == 9, "timer: throttle source runs above low stick");
+    }
+
+    {
+        // Switch-based arm: pick a switch state that is armed and one that is not.
+        logic::Switches up{};
+        up.sa = logic::SwitchPos::Up;
+        logic::Switches down{};
+        down.sa = logic::SwitchPos::Down;
+        const bool up_armed = logic::flight::is_armed(1, up);
+        const logic::Switches on_sw = up_armed ? up : down;
+        const logic::Switches off_sw = up_armed ? down : up;
+
+        State s{};
+        Input in = make(10, 3, 1, 1000);
+        in.switches = off_sw;
+        tick(s, in);
+        check(s.remaining.value == 10, "timer: disarmed holds the timer");
+
+        in.switches = on_sw;
+        in.was_armed = false;
+        tick(s, in);
+        check(s.remaining.value == 9, "timer: arming resets then runs");
+        in.was_armed = true;
+        tick(s, in);
+        tick(s, in);
+        check(s.remaining.value == 7, "timer: armed ticks count down");
+
+        in.switches = off_sw;
+        in.was_armed = true;
+        tick(s, in);
+        check(s.remaining.value == 7 && !s.latched.value, "timer: disarming stops the count");
+
+        in.switches = on_sw;
+        in.was_armed = false;
+        tick(s, in);
+        check(s.remaining.value == 9, "timer: rearming resets to the limit");
+    }
+
+    {
+        State s{};
+        Input in = make(300, 0, 0, 500);
+        in.model = {0};
+        tick(s, in);
+        s.remaining = {50};
+        in.cancel_held = true;
+        check(tick(s, in) == kOff && s.cancel_hold_ms == 500, "timer cancel: hold accumulates");
+        check(logic::flight_timer::modal(s) == Modal{false, 50}, "timer cancel: progress modal at half hold");
+        check(tick(s, in) == Cue::TimerReset && s.remaining.value == 300, "timer cancel: hold 1 s resets");
+        check(s.toast_ms == 800 && s.cooldown_ms == 1500 && s.cancel_waiting_release,
+              "timer cancel: reset starts toast, cooldown and release guard");
+        check(logic::flight_timer::modal(s) == Modal{true, 100}, "timer cancel: confirmation toast shown");
+        check(tick(s, in) == kOff && s.cancel_hold_ms == 0, "timer cancel: held key does not repeat");
+        check(tick(s, in) == kOff, "timer cancel: still held during cooldown");
+        in.cancel_held = false;
+        check(tick(s, in) == kOff && !s.cancel_waiting_release, "timer cancel: release clears the guard");
+        in.cancel_held = true;
+        check(tick(s, in) == kOff && s.cancel_hold_ms == 500, "timer cancel: second hold waits out cooldown");
+        check(tick(s, in) == Cue::TimerReset, "timer cancel: second hold resets after cooldown");
+    }
+
+    {
+        State s{};
+        Input in = make(300, 0, 0, 500);
+        in.model = {0};
+        in.menu_active = true;
+        in.cancel_held = true;
+        tick(s, in);
+        check(tick(s, in) == kOff && s.cancel_hold_ms == 0 && s.toast_ms == 0, "timer cancel: menu blocks the hold");
+    }
+
+    {
+        State s{};
+        Input in = make(300, 0, 0, 80);
+        in.model = {0};
+        in.cancel_held = true;
+        tick(s, in);
+        check(!logic::flight_timer::modal(s).has_value(), "timer cancel: modal hidden for short taps");
+        in.dt = Millis{500};
+        tick(s, in);
+        check(logic::flight_timer::modal(s) == Modal{false, 58}, "timer cancel: modal progress rounds down");
+    }
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -2694,6 +2861,7 @@ int main() {
     buzzer_test();
     trim_controller_test();
     trim_autosave_test();
+    flight_timer_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

@@ -113,6 +113,7 @@ enum class Cue : uint8_t {
     TimerCountdown,
     TimerElapsed,
     NavStep,
+    TimerReset,
 };
 
 namespace tables {
@@ -183,6 +184,7 @@ inline constexpr std::array<Note, 3> kTimerElapsed{{
     {FreqHz{3000}, DurationMs{120}, PauseMs{0}},
 }};
 inline constexpr std::array<Note, 1> kNavStep{{{FreqHz{2200}, DurationMs{30}, PauseMs{0}}}};
+inline constexpr std::array<Note, 1> kTimerReset{{{FreqHz{2400}, DurationMs{100}, PauseMs{0}}}};
 
 }  // namespace tables
 
@@ -214,6 +216,7 @@ constexpr Pattern pattern_for(Cue cue, ToneStyle style) {
         case Cue::TimerCountdown: return single(tables::kTimerCountdown);
         case Cue::TimerElapsed: return rich ? single(tables::kTimerElapsed) : single(tables::kTimerElapsedSimple);
         case Cue::NavStep: return single(tables::kNavStep);
+        case Cue::TimerReset: return single(tables::kTimerReset);
     }
     return {};
 }
