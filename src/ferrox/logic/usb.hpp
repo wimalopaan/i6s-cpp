@@ -54,7 +54,8 @@ constexpr bool has_cdc(UsbMode m) {
     return m == UsbMode::Serial || m == UsbMode::Composite;
 }
 
-// Rust `is_sim_mode`: the trainer-sim behaviour only applies to the joystick once the host has connected.
+// Rust `is_sim_mode`: sim mode is the joystick mode with a configured host. The main loop then mutes
+// the RF link, stops CRSF and PPM out (see main.cpp).
 constexpr bool is_sim_mode(UsbMode m, bool connected) {
     return m == UsbMode::Joystick && connected;
 }

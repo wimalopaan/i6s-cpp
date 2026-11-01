@@ -12,13 +12,14 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 - AFHDS 2A: protocol logic, A7105 driver, radio state machine, ISRs
 - Storage: I2C EEPROM, A/B radio slots, model slots, legacy v1–v4 migration
 - USB: device stack (HID gamepad, CDC serial with CLI and telemetry), mode switched from Radio Setup
+- USB sim mode (trainer): joystick mode with a host connected mutes the RF link, stops CRSF and PPM out
 - Mixer, input, RC output, safety/preflight, calibration, trim, flight timer, vario, bind
 - Dashboard pages P1–P5 (P5: AFHDS 2A or CRSF diagnostics, or the custom 2×2 telemetry slot page)
 - Menus: main menu, model setup (incl. copy), model select, dual rate/expo, throttle curve, wing/mixer, aux channels, diagnostics, system info, radio setup, vario setup, telemetry slot setup, protocol and reset
 
 ## Not yet ported
 
-- USB sim mode (trainer)
+- None
 
 ## Known deviations from Rust
 

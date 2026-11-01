@@ -645,6 +645,11 @@ inline void poll(lu::Millis now, std::span<const uint16_t, logic::kNumChannels> 
     poll_cdc(now, chs, battery_mv);
 }
 
+/// True while the joystick mode has a configured host (Rust `usb::is_sim_mode`).
+inline bool is_sim_mode() {
+    return lu::is_sim_mode(g_mode, g_config != 0);
+}
+
 /// Starts the device stack in `mode` (pull-up on, interrupts enabled).
 inline void start(UsbMode mode) {
     g_mode = mode;

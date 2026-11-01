@@ -3984,7 +3984,8 @@ void usb_logic_test() {
     check(!u::has_cdc(M::Joystick) && u::has_cdc(M::Serial) && u::has_cdc(M::Composite) && !u::has_cdc(M::Off),
           "usb: CDC is used by serial and composite only");
     check(u::is_sim_mode(M::Joystick, true) && !u::is_sim_mode(M::Joystick, false) &&
-              !u::is_sim_mode(M::Serial, true),
+              !u::is_sim_mode(M::Serial, true) && !u::is_sim_mode(M::Composite, true) &&
+              !u::is_sim_mode(M::Off, true),
           "usb: sim mode needs the joystick mode and a connected host");
     check(u::interval_elapsed({110}, {10}, {100}) && !u::interval_elapsed({109}, {10}, {100}),
           "usb: interval elapses at the boundary");

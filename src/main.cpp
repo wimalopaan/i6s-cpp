@@ -64,6 +64,10 @@ ferrox::logic::display::Framebuffer g_fb{};
 bool g_rf_ok = false;
 ferrox::logic::dashboard::SessionStats g_rf_stats{};
 bool g_rf_silenced = true;
+#if FERROX_USE_USB
+// USB sim mode as last applied to the RF link, CRSF UART and PPM out.
+bool g_sim_mode = false;
+#endif
 // Protocol the CRSF UART and A7105 mute were last applied for. Lets the loop follow edits to the active model.
 ferrox::logic::protocol::Protocol g_link_protocol{};
 // Trainer safety handover between the instructor sticks and the student frame.
@@ -159,7 +163,34 @@ void set_rf_silenced(bool silenced) {
     g_rf_silenced = silenced;
 }
 
+// Rust `is_sim_mode`: the joystick is connected. Always false without USB.
+bool usb_sim_active() {
+#if FERROX_USE_USB
+    return ferrox::hw::usb::is_sim_mode();
+#else
+    return false;
+#endif
+}
+
+// Sim state last applied to the RF link. Constant false without USB, so the no-USB build keeps its code.
+bool sim_applied() {
+#if FERROX_USE_USB
+    return g_sim_mode;
+#else
+    return false;
+#endif
+}
+
+void set_sim_applied(bool sim) {
+#if FERROX_USE_USB
+    g_sim_mode = sim;
+#else
+    (void)sim;
+#endif
+}
+
 // Applies power, RX output settings and the silence state of the active model. Keeps the RX ID.
+// Sim mode also silences the A7105 (Rust `rf::set_silenced(sim_mode)`).
 void apply_rf_link() {
     using namespace ferrox;
     if (!g_rf_ok) {
@@ -168,7 +199,8 @@ void apply_rf_link() {
     const auto& model = g_storage.active_model;
     hw::rf::set_rf_power(model.rf_power);
     hw::rf::set_rx_settings(model.servo_rate_hz, {model.rx_out_mode == 1}, {model.rx_serial_proto == 1});
-    set_rf_silenced(logic::protocol::link_for(logic::protocol::from_raw(model.rf_protocol)).rf_silenced);
+    set_rf_silenced(logic::protocol::link_for(logic::protocol::from_raw(model.rf_protocol)).rf_silenced ||
+                    sim_applied());
 }
 
 // Full RF setup for the active model, used at boot and on model switch.
@@ -180,13 +212,15 @@ void apply_rf_model() {
     apply_rf_link();
 }
 
-// Applies the RF protocol of the active model: CRSF UART on or off, and the A7105 mute. Idempotent.
+// Applies the RF protocol of the active model and the USB sim state: CRSF UART on or off, and the A7105 mute.
+// Idempotent. Sim mode keeps the CRSF UART off (Rust `crsf::set_enabled(!sim_mode)`).
 void apply_protocol_link() {
     using namespace ferrox;
     const auto& model = g_storage.active_model;
     const auto protocol = logic::protocol::from_raw(model.rf_protocol);
     g_link_protocol = protocol;
-    if (logic::protocol::link_for(protocol).crsf_uart) {
+    set_sim_applied(usb_sim_active());
+    if (logic::protocol::link_for(protocol).crsf_uart && !sim_applied()) {
         const uint8_t baud_idx =
             model.crsf_baud < logic::kBaudRates.size() ? model.crsf_baud : logic::kDefaultBaudIndex;
         hw::crsf::set_enabled(true, baud_idx,
@@ -395,9 +429,11 @@ int main() {
         const bool instant_rising =
             g_instant_edge.update(logic::trim::instant_switch_down(g_storage.radio, input.raw));
 
-        if (logic::protocol::from_raw(g_storage.active_model.rf_protocol) != g_link_protocol) {
+        if (logic::protocol::from_raw(g_storage.active_model.rf_protocol) != g_link_protocol ||
+            usb_sim_active() != sim_applied()) {
             apply_protocol_link();
         }
+        const bool sim = sim_applied();
         const bool afhds = g_rf_ok && g_storage.active_model.rf_protocol == 0;
 
         if (logic::calib::active(g_calib_wizard)) {
@@ -555,7 +591,7 @@ int main() {
             channels = g_handover.process(input.switches.sd == logic::SwitchPos::Down,
                                           hw::trainer::student_channels(), channels);
         }
-        if (trainer_out) {
+        if (trainer_out && !sim) {
             hw::trainer::publish_out(channels);
         }
         const bool crsf = model.rf_protocol == 1;
@@ -563,12 +599,16 @@ int main() {
         hw::usb::poll(logic::usb::Millis{now}, channels, input.switches, input.battery_mv);
 #endif
         if (crsf) {
-            hw::crsf::update_channels(now, channels, ferrox::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
-                                      ferrox::logic::crsf::ArmedState{armed});
-        } else if (afhds) {
+            if (!sim) {
+                hw::crsf::update_channels(now, channels, ferrox::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
+                                          ferrox::logic::crsf::ArmedState{armed});
+            }
+        } else if (afhds && !sim) {
             hw::rf::publish_channels(channels);
         }
-        hw::crsf::poll_telemetry(now);
+        if (!sim) {
+            hw::crsf::poll_telemetry(now);
+        }
 
         if (now - last_draw_ms >= 100) {
             g_fb.clear();
