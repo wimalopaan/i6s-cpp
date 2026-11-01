@@ -819,18 +819,27 @@ void dashboard_test() {
     logic::trim::TrimValues trims{};
     std::array<uint16_t, logic::kNumChannels> chs{};
     chs.fill(1500);
-    logic::dashboard::View view{in, st, trims, chs, true};
+    logic::dashboard::View view{in, st, trims, chs, true, {}, false, false, false, 0};
 
     {
         logic::afhds2a::Telemetry linked{};
         linked.connected = true;
-        const logic::dashboard::View bind_view{in, st, trims, chs, false, {}, true, true};
-        const logic::dashboard::View link_view{in, st, trims, chs, false, linked, false, true};
-        const logic::dashboard::View down_view{in, st, trims, chs, false, {}, false, false};
-        check(logic::dashboard::rf_status_label(bind_view) == "BIND", "dashboard shows BIND while binding");
-        check(logic::dashboard::rf_status_label(link_view) == "LINK", "dashboard shows LINK when connected");
-        check(logic::dashboard::rf_status_label(down_view) == "NO RF", "dashboard shows NO RF without radio");
+        linked.rssi = 87;
+        linked.last_rx_voltage_ms = 1000;
+        linked.rx_voltage_mv = 4950;
+        using logic::dashboard::View;
+        const View bind_view{in, st, trims, chs, false, {}, true, true, false, 1000};
+        const View link_view{in, st, trims, chs, false, linked, false, true, true, 1500};
+        const View stale_view{in, st, trims, chs, false, linked, false, true, true, 9000};
+        const View down_view{in, st, trims, chs, false, {}, false, false, false, 0};
+        const View crsf_view{in, st, trims, chs, true, {}, false, false, false, 0};
+        check(logic::dashboard::rf_status_fixed(bind_view) == "BIND", "dashboard shows BIND while binding");
+        check(logic::dashboard::rf_status_fixed(link_view).empty(), "dashboard shows RSSI when linked");
+        check(logic::dashboard::rf_status_fixed(down_view) == "NO RF", "dashboard shows NO RF without radio");
+        check(logic::dashboard::rf_status_fixed(crsf_view) == "CRSF", "dashboard shows CRSF for CRSF models");
         check(logic::dashboard::afhds_link_line(link_view) == "AFHDS2A: CONNECTED", "model page shows link state");
+        check(logic::dashboard::sensor_fresh(link_view, linked.last_rx_voltage_ms), "fresh telemetry is not stale");
+        check(!logic::dashboard::sensor_fresh(stale_view, linked.last_rx_voltage_ms), "telemetry older than 2.5 s is stale");
     }
 
     logic::display::Framebuffer fb{};

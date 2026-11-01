@@ -61,29 +61,62 @@ struct View {
     afhds2a::Telemetry telem{};
     bool binding = false;
     bool rf_ok = false;
+    bool bound = false;
+    uint32_t now_ms = 0;
 };
 
 using labels::model_name;
 using labels::model_type_label;
 
-constexpr std::string_view rf_status_label(const View& v) {
-    if (v.crsf) {
-        return "CRSF";
-    }
-    if (!v.rf_ok) {
+// Fixed status text; empty when the RSSI value is shown instead. Same order as Rust `status_bar.rs`.
+constexpr std::string_view rf_status_fixed(const View& v) {
+    if (!v.crsf && !v.rf_ok) {
         return "NO RF";
     }
     if (v.binding) {
         return "BIND";
     }
-    return v.telem.connected ? "LINK" : "NO LINK";
+    if (!v.crsf && v.telem.connected) {
+        return {};
+    }
+    if (v.crsf) {
+        return "CRSF";
+    }
+    return v.bound ? "RF:OK" : "NO RF";
 }
+
+constexpr void draw_rf_status(Framebuffer& fb, const View& v) {
+    const auto fixed = rf_status_fixed(v);
+    if (!fixed.empty()) {
+        fb.draw_str_4x6(64, 3, fixed, false);
+        return;
+    }
+    const auto r = std::min<unsigned>(v.telem.rssi, 100u);
+    if (r >= 100u) {
+        fb.draw_str_4x6(64, 3, "R:100", false);
+        return;
+    }
+    const auto digits = format::format_dec2(r);
+    format::Text<5> t;
+    t.push('R');
+    t.push(':');
+    for (const char c : digits.view()) {
+        t.push(c);
+    }
+    fb.draw_str_4x6(64, 3, t.view(), false);
+}
+
 
 constexpr std::string_view afhds_link_line(const View& v) {
     if (v.binding) {
         return "AFHDS2A: BINDING";
     }
     return v.telem.connected ? "AFHDS2A: CONNECTED" : "AFHDS2A: NO LINK";
+}
+
+// Telemetry older than 2.5 s counts as stale, as in Rust `check_sensor_status`.
+constexpr bool sensor_fresh(const View& v, uint32_t last_ms) {
+    return last_ms != 0 && v.telem.connected && (v.now_ms - last_ms) < 2500u;
 }
 
 constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st, uint16_t battery_mv, const View& v,
@@ -102,7 +135,7 @@ constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st,
         fb.draw_str_6x10(2, 2, trimmed, false);
     }
 
-    fb.draw_str_4x6(64, 3, rf_status_label(v), false);
+    draw_rf_status(fb, v);
 
     const auto vbat = format::format_vbat(battery_mv);
     const auto warn_mv = static_cast<uint16_t>(st.radio.vbat_warn_deci * 100u);
@@ -415,9 +448,47 @@ constexpr void draw_model_page(Framebuffer& fb, const View& v) {
     widgets::draw_footer_split(fb, "P4/5", "MODEL DASHBOARD");
 }
 
-constexpr void draw_telemetry_placeholder(Framebuffer& fb) {
-    fb.draw_str_6x10(22, 26, "NOT PORTED YET", false);
-    widgets::draw_footer_split(fb, "P5/5", "TELEMETRY");
+// AFHDS 2A sensor page. CRSF telemetry is not ported, so CRSF models show a placeholder.
+constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
+    if (v.crsf) {
+        fb.draw_str_6x10(22, 26, "NOT PORTED YET", false);
+        widgets::draw_footer_split(fb, "P5/5", "TELEMETRY");
+        return;
+    }
+
+    fb.draw_vline(64, 12, 42, true);
+    fb.draw_hline(2, 31, 124, true);
+
+    const bool rssi_ok = sensor_fresh(v, v.telem.last_rx_voltage_ms);
+    fb.draw_str_6x10(2, 14, "RSSI:", false);
+    if (rssi_ok) {
+        const auto r = std::min<unsigned>(v.telem.rssi, 100u);
+        const auto digits = format::format_dec2(r);
+        format::Text<4> t;
+        for (const char c : digits.view()) {
+            t.push(c);
+        }
+        t.push('%');
+        fb.draw_str_6x10(44, 14, t.view(), false);
+    } else {
+        fb.draw_str_6x10(44, 14, "--%", false);
+    }
+
+    fb.draw_str_6x10(2, 24, v.telem.connected ? "LINK: OK" : "LINK: DISC", false);
+
+    fb.draw_str_6x10(66, 14, "RX:", false);
+    const bool rx_fresh = sensor_fresh(v, v.telem.last_rx_voltage_ms) && v.telem.rx_voltage_mv > 0;
+    const auto rx_text = format::format_vbat(v.telem.rx_voltage_mv);
+    fb.draw_str_6x10(88, 14, rx_fresh ? rx_text.view() : std::string_view("----"), false);
+
+    fb.draw_str_6x10(66, 24, "TX:", false);
+    fb.draw_str_6x10(88, 24, format::format_vbat(v.in.battery_mv).view(), false);
+
+    if (v.binding) {
+        widgets::draw_footer(fb, "[ESC] Finish Bind");
+    } else {
+        widgets::draw_footer_split(fb, "P5/5", "TELEMETRY SENSORS");
+    }
 }
 
 // Renders the status bar and the current page, then advances the blink phase.
@@ -429,7 +500,7 @@ constexpr void render(Framebuffer& fb, PageState& s, const View& v) {
         case 1: draw_channel_page(fb, v.rf_chs, false); break;
         case 2: draw_channel_page(fb, v.rf_chs, true); break;
         case 3: draw_model_page(fb, v); break;
-        default: draw_telemetry_placeholder(fb); break;
+        default: draw_telemetry_page(fb, v); break;
     }
 
     s.blink_phase = static_cast<uint8_t>(s.blink_phase + 1);
