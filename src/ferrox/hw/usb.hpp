@@ -689,4 +689,17 @@ inline void stop() {
     cdc_reset_state();
 }
 
+/// Re-inits the stack when the stored mode changes (Radio Setup row); no-op otherwise.
+inline void set_mode(UsbMode mode) {
+    if (mode == g_mode) {
+        return;
+    }
+    if (g_mode != UsbMode::Off) {
+        stop();
+    }
+    if (mode != UsbMode::Off) {
+        start(mode);
+    }
+}
+
 }  // namespace ferrox::hw::usb

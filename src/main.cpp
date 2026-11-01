@@ -453,6 +453,9 @@ int main() {
                     apply_lcd_settings(g_storage.radio);
                     apply_trainer_config(g_storage.radio);
                     g_trims.throttle_enabled = g_storage.radio.throttle_trim != 0;
+#if FERROX_USE_USB
+                    hw::usb::set_mode(logic::usb::mode_from_stored(g_storage.radio.usb_mode));
+#endif
                     break;
                 case logic::menu::Action::CopyActiveModel:
                     logic::model_copy::copy_model<hw::I2c2Eeprom>(
