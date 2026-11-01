@@ -63,12 +63,23 @@ struct Telemetry {
     uint32_t packets_received = 0;
 };
 
+// Strong types so a TX ID and an RX ID cannot be swapped at a call site.
+struct TxId {
+    uint32_t value = 0;
+    constexpr bool operator==(const TxId&) const = default;
+};
+
+struct RxId {
+    uint32_t value = 0;
+    constexpr bool operator==(const RxId&) const = default;
+};
+
 // Hopping table derived from the TX UID (LCG + band/separation rules).
-constexpr HoppingTable hopping_table(uint32_t tx_id) {
+constexpr HoppingTable hopping_table(TxId tx) {
     HoppingTable table{};
     std::size_t idx = 0;
-    uint32_t rnd = tx_id;
-    const uint32_t tx_byte3 = (tx_id >> 24) & 0xFFu;
+    uint32_t rnd = tx.value;
+    const uint32_t tx_byte3 = (tx.value >> 24) & 0xFFu;
     uint32_t attempts = 0;
     while (idx < kNumFreq) {
         ++attempts;
@@ -118,20 +129,20 @@ constexpr void put_u32_le(Packet& p, std::size_t off, uint32_t v) {
     }
 }
 
-constexpr void put_header(Packet& p, uint8_t cmd, uint32_t tx_id, uint32_t rx_id) {
+constexpr void put_header(Packet& p, uint8_t cmd, TxId tx, RxId rx) {
     p[0] = cmd;
-    put_u32_le(p, 1, tx_id);
-    put_u32_le(p, 5, rx_id);
+    put_u32_le(p, 1, tx.value);
+    put_u32_le(p, 5, rx.value);
 }
 
 }  // namespace detail
 
 // 14 base channels as 12-bit LE values in slots 0..13, channels 15..18 split
 // across the upper nibbles of slots 0..11 (iBUS-style extension).
-constexpr Packet build_sticks(uint32_t tx_id, uint32_t rx_id,
+constexpr Packet build_sticks(TxId tx, RxId rx,
                               const std::array<uint16_t, kNumChannels>& ch) {
     Packet p{};
-    detail::put_header(p, kPacketSticks, tx_id, rx_id);
+    detail::put_header(p, kPacketSticks, tx, rx);
     for (std::size_t i = 0; i < 14; ++i) {
         const uint16_t v = clamp_channel_us(ch[i]);
         p[9 + i * 2] = static_cast<uint8_t>(v & 0xFF);
@@ -147,9 +158,9 @@ constexpr Packet build_sticks(uint32_t tx_id, uint32_t rx_id,
     return p;
 }
 
-constexpr Packet build_settings(uint32_t tx_id, uint32_t rx_id, const RxSettings& s) {
+constexpr Packet build_settings(TxId tx, RxId rx, const RxSettings& s) {
     Packet p{};
-    detail::put_header(p, kPacketSettings, tx_id, rx_id);
+    detail::put_header(p, kPacketSettings, tx, rx);
     p[9] = 0xFD;
     p[10] = 0xFF;
     p[11] = static_cast<uint8_t>(s.rate_hz & 0xFF);
@@ -166,9 +177,9 @@ constexpr Packet build_settings(uint32_t tx_id, uint32_t rx_id, const RxSettings
     return p;
 }
 
-constexpr Packet build_failsafe(uint32_t tx_id, uint32_t rx_id) {
+constexpr Packet build_failsafe(TxId tx, RxId rx) {
     Packet p{};
-    detail::put_header(p, kPacketFailsafe, tx_id, rx_id);
+    detail::put_header(p, kPacketFailsafe, tx, rx);
     for (std::size_t ch = 0; ch < 14; ++ch) {
         const uint16_t v = ch == 2 ? kFailsafeThrottleUs : 0xFFFF;
         p[9 + ch * 2] = static_cast<uint8_t>(v & 0xFF);
@@ -177,9 +188,9 @@ constexpr Packet build_failsafe(uint32_t tx_id, uint32_t rx_id) {
     return p;
 }
 
-constexpr Packet build_bind(uint32_t tx_id, uint32_t rx_id, BindStep step, const HoppingTable& hop) {
+constexpr Packet build_bind(TxId tx, RxId rx, BindStep step, const HoppingTable& hop) {
     Packet p{};
-    detail::put_u32_le(p, 1, tx_id);
+    detail::put_u32_le(p, 1, tx.value);
     switch (step) {
         case BindStep::Phase1:
             p[0] = kPacketBind1;
@@ -200,7 +211,7 @@ constexpr Packet build_bind(uint32_t tx_id, uint32_t rx_id, BindStep step, const
             break;
         case BindStep::Confirm:
             p[0] = kPacketBind2;
-            detail::put_u32_le(p, 5, rx_id);
+            detail::put_u32_le(p, 5, rx.value);
             p[9] = 0x02;
             for (std::size_t i = 11; i < 27; ++i) p[i] = 0xFF;
             p[27] = 0x01;
@@ -219,8 +230,8 @@ constexpr uint32_t read_u32_le(const Frame& f, std::size_t off) {
 // Link state for one bound TX/RX pair. Pure: the caller supplies the raw
 // A7105 RSSI register and the current time.
 struct Link {
-    uint32_t tx_id = 0;
-    uint32_t rx_id = 0;
+    TxId tx_id{};
+    RxId rx_id{};
     bool binding = false;
     BindStep bind_step = BindStep::Phase1;
     bool bind_done = false;
@@ -230,7 +241,7 @@ struct Link {
     uint8_t rf_power_idx = 0;
     Telemetry telemetry{};
 
-    constexpr explicit Link(uint32_t uid) : tx_id(uid) {}
+    constexpr explicit Link(TxId uid) : tx_id(uid) {}
 
     constexpr void set_rx_settings(uint16_t rate_hz, bool ppm_out, bool sbus) {
         settings = make_rx_settings(rate_hz, ppm_out, sbus);
@@ -244,7 +255,7 @@ struct Link {
         if (!binding || rx[0] != kPacketBind2 || rx[9] != 0x01) {
             return false;
         }
-        rx_id = read_u32_le(rx, 5);
+        rx_id = RxId{read_u32_le(rx, 5)};
         bind_step = BindStep::Confirm;
         return true;
     }
@@ -253,12 +264,13 @@ struct Link {
         if (rx[0] != 0xAA && rx[0] != 0xAC) {
             return RxEvent::Ignored;
         }
-        if (read_u32_le(rx, 1) != tx_id) {
+        if (read_u32_le(rx, 1) != tx_id.value) {
             return RxEvent::Ignored;
         }
-        const uint32_t rid = read_u32_le(rx, 5);
-        const bool placeholder = rx_id == 0xFFFF'FFFFu || rx_id == 0 || (rx_id & 0xFFFF'0000u) == 0x0001'0000u;
-        if (placeholder && rid != 0xFFFF'FFFFu && rid != 0) {
+        const RxId rid{read_u32_le(rx, 5)};
+        const uint32_t cur = rx_id.value;
+        const bool placeholder = cur == 0xFFFF'FFFFu || cur == 0 || (cur & 0xFFFF'0000u) == 0x0001'0000u;
+        if (placeholder && rid.value != 0xFFFF'FFFFu && rid.value != 0) {
             rx_id = rid;
             rx_id_needs_save = true;
             bind_done = true;

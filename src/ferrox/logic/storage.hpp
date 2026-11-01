@@ -473,11 +473,13 @@ constexpr ModelConfig unpack_legacy_v1(const LegacyModelConfigV1& v1) {
     return v2;
 }
 
-constexpr void sanitize_calib(uint16_t& min, uint16_t& center, uint16_t& max) {
-    if (min >= center || center >= max || max > kAdcMax) {
-        min = kAdcMin;
-        center = kAdcCenter;
-        max = kAdcMax;
+// Works on any calibration record with min/center/max fields (sticks and pots).
+template <typename Calib>
+constexpr void sanitize_calib(Calib& c) {
+    if (c.min >= c.center || c.center >= c.max || c.max > kAdcMax) {
+        c.min = kAdcMin;
+        c.center = kAdcCenter;
+        c.max = kAdcMax;
     }
 }
 
@@ -658,13 +660,13 @@ constexpr void sanitize(RadioStorage& s) {
         r.stick_invert_mask = 0x03;
     }
     for (auto& stick : r.sticks) {
-        sanitize_calib(stick.min, stick.center, stick.max);
+        sanitize_calib(stick);
     }
     if (r.ext_adc > 1) {
         r.ext_adc = 0;
     }
     for (auto& pot : r.aux_pots) {
-        sanitize_calib(pot.min, pot.center, pot.max);
+        sanitize_calib(pot);
     }
     for (auto& mode : r.adc_modes) {
         if (mode > 6) {

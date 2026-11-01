@@ -62,9 +62,11 @@ inline bool is_half_duplex() {
     return g_half_duplex;
 }
 
+enum class Duplex : uint8_t { Full, Half };
+
 /// Configures USART2 for CRSF (full-duplex) or single-wire half-duplex on PD5.
-inline void set_uart_enabled(bool enabled, uint8_t baud_index, bool half_duplex) {
-    g_half_duplex = half_duplex;
+inline void set_uart_enabled(bool enabled, uint8_t baud_index, Duplex duplex) {
+    g_half_duplex = duplex == Duplex::Half;
     g_echo_skip = 0;
 
     if (enabled) {
@@ -75,7 +77,7 @@ inline void set_uart_enabled(bool enabled, uint8_t baud_index, bool half_duplex)
         set_high_speed_mask<Port::D>(1u << kTxPin);
         set_alt_function<Port::D>(kTxPin, 0);
 
-        if (half_duplex) {
+        if (g_half_duplex) {
             set_open_drain_mask<Port::D>(1u << kTxPin, true);
             set_pull_mask<Port::D>(1u << kTxPin, Pull::Up);
             set_mode_mask<Port::A>(1u << kRxPin, Mode::Input);
@@ -89,7 +91,7 @@ inline void set_uart_enabled(bool enabled, uint8_t baud_index, bool half_duplex)
 
         USART2->CR1 = 0;
         USART2->CR2 = 0;
-        USART2->CR3 = half_duplex ? USART_CR3_HDSEL : 0;
+        USART2->CR3 = g_half_duplex ? USART_CR3_HDSEL : 0;
         USART2->BRR = logic::brr_for_baud_index(baud_index);
         USART2->ICR = 0xFFFF'FFFFu;
 

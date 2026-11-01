@@ -58,8 +58,8 @@ inline void init_timer() {
 }
 
 /// Brings up SPI, the A7105 and the frame timer. Radio stays silenced until set_silenced(false).
-inline bool init(uint32_t tx_id) {
-    g_radio.emplace(tx_id);
+inline bool init(logic::afhds2a::TxId tx) {
+    g_radio.emplace(tx);
     a7105::init_bus();
     init_gio2_exti();
     if (!a7105::reset()) {
@@ -118,7 +118,7 @@ inline void set_rf_power(uint8_t idx) {
     }
 }
 
-inline void set_rx_id(uint32_t id) {
+inline void set_rx_id(logic::afhds2a::RxId id) {
     arch::CriticalSection cs;
     g_radio->set_rx_id(id);
 }
@@ -138,12 +138,12 @@ inline bool is_binding() {
     return g_radio->binding();
 }
 
-inline uint32_t rx_id() {
+inline logic::afhds2a::RxId rx_id() {
     arch::CriticalSection cs;
     return g_radio->link.rx_id;
 }
 
-inline std::optional<uint32_t> take_pending_rx_save() {
+inline std::optional<logic::afhds2a::RxId> take_pending_rx_save() {
     arch::CriticalSection cs;
     return g_radio->take_rx_save();
 }

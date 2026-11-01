@@ -931,18 +931,18 @@ void menu_test() {
 
     mn::ListPos p{};
     for (int i = 0; i < 3; ++i) {
-        mn::step_list(p, 12, mn::kMainVisible, true);
+        mn::step_list(p, 12, mn::Rows{mn::kMainVisible}, mn::Dir::Down);
     }
     check(p.selected == 3 && p.scroll == 1, "scroll must follow selection past the visible window");
 
     // Key repeat: immediate on press, then after 300 ms every 70 ms while held.
     mn::Repeat r{};
-    check(mn::repeat_step(r, true, true, 0), "press must step immediately");
-    check(!mn::repeat_step(r, false, true, 299), "no repeat before 300 ms");
-    check(mn::repeat_step(r, false, true, 300), "first repeat at 300 ms");
-    check(!mn::repeat_step(r, false, true, 369), "no repeat before 70 ms interval");
-    check(mn::repeat_step(r, false, true, 370), "repeat at 70 ms interval");
-    check(!mn::repeat_step(r, false, false, 400) && !r.active, "release must stop repeat");
+    check(mn::repeat_step(r, mn::KeyState{true, true}, 0), "press must step immediately");
+    check(!mn::repeat_step(r, mn::KeyState{false, true}, 299), "no repeat before 300 ms");
+    check(mn::repeat_step(r, mn::KeyState{false, true}, 300), "first repeat at 300 ms");
+    check(!mn::repeat_step(r, mn::KeyState{false, true}, 369), "no repeat before 70 ms interval");
+    check(mn::repeat_step(r, mn::KeyState{false, true}, 370), "repeat at 70 ms interval");
+    check(!mn::repeat_step(r, mn::KeyState{false, false}, 400) && !r.active, "release must stop repeat");
 
     // Model select: open from item 0, navigate, load a model.
     press(mn::kKeyUp, 100);    // wraps to item 11
@@ -1646,7 +1646,7 @@ void afhds2a_test() {
 
     std::array<uint16_t, af::kNumChannels> ch{1500, 988, 2012, 1123, 1456, 1789, 1357, 1642, 1890,
                                               1050, 1555, 1999, 1001, 1620, 1234, 1987, 1432, 1876};
-    const af::Packet sticks = af::build_sticks(0x12345678, 0x9ABCDEF0, ch);
+    const af::Packet sticks = af::build_sticks(af::TxId{0x12345678}, af::RxId{0x9ABCDEF0}, ch);
     check(sticks[0] == af::kPacketSticks, "afhds2a: sticks command byte");
     check(sticks[37] == 0x00, "afhds2a: sticks trailer byte");
 
@@ -1668,7 +1668,7 @@ void afhds2a_test() {
 
     // Legacy 14-channel decoder masks the low 12 bits of each slot.
     std::array<uint16_t, af::kNumChannels> ch14{1500, 1000, 2000, 1200, 1400, 1600, 1800, 1100, 1300, 1500, 1700, 1900, 1050, 1950};
-    const af::Packet legacy = af::build_sticks(0x11223344, 0x55667788, [&] {
+    const af::Packet legacy = af::build_sticks(af::TxId{0x11223344}, af::RxId{0x55667788}, [&] {
         auto a = ch;
         for (std::size_t i = 0; i < 14; ++i) a[i] = ch14[i];
         return a;
@@ -1680,7 +1680,7 @@ void afhds2a_test() {
     }
     check(legacy_ok, "afhds2a: legacy 14-channel decoding");
 
-    const af::Packet fs = af::build_failsafe(0xAABBCCDD, 0);
+    const af::Packet fs = af::build_failsafe(af::TxId{0xAABBCCDD}, af::RxId{0});
     check(fs[0] == af::kPacketFailsafe, "afhds2a: failsafe command byte");
     check((fs[9 + 2 * 2] | (fs[10 + 2 * 2] << 8)) == af::kFailsafeThrottleUs, "afhds2a: failsafe throttle is 988us");
     bool hold_ok = true;
@@ -1689,8 +1689,8 @@ void afhds2a_test() {
     }
     check(hold_ok, "afhds2a: failsafe holds non-throttle channels");
 
-    af::Link link{0x11223344};
-    link.rx_id = 0x55667788;
+    af::Link link{af::TxId{0x11223344}};
+    link.rx_id = af::RxId{0x55667788};
     af::Packet st = af::build_settings(link.tx_id, link.rx_id, link.settings);
     check(st[0] == af::kPacketSettings && st[9] == 0xFD && st[10] == 0xFF, "afhds2a: settings header");
     check(st[11] == 0x32 && st[12] == 0x00 && st[13] == 0x00, "afhds2a: default 50 Hz PWM");
@@ -1713,7 +1713,7 @@ void afhds2a_test() {
     check(af::rssi_from_raw(100) == 96, "afhds2a: RSSI formula 256 - raw*8/5");
 
     // Hopping table: all in band and separated by at least 5 channels.
-    const af::HoppingTable hop = af::hopping_table(0x12345678);
+    const af::HoppingTable hop = af::hopping_table(af::TxId{0x12345678});
     bool hop_ok = true;
     for (std::size_t i = 0; i < hop.size(); ++i) {
         hop_ok = hop_ok && hop[i] >= 1 && hop[i] <= 164;
@@ -1725,7 +1725,7 @@ void afhds2a_test() {
     check(hop_ok, "afhds2a: hopping table in band with channel separation");
 
     // Bind confirmation carries the RX ID and the state machine accepts the reply.
-    af::Link bl{0x12345678};
+    af::Link bl{af::TxId{0x12345678}};
     bl.binding = true;
     af::Frame reply{};
     reply[0] = af::kPacketBind2;
@@ -1734,15 +1734,15 @@ void afhds2a_test() {
     reply[7] = 0x34;
     reply[8] = 0x12;
     reply[9] = 0x01;
-    check(bl.on_bind_reply(reply) && bl.rx_id == 0x12345678 && bl.bind_step == af::BindStep::Confirm,
+    check(bl.on_bind_reply(reply) && bl.rx_id.value == 0x12345678 && bl.bind_step == af::BindStep::Confirm,
           "afhds2a: bind reply moves to confirmation with RX ID");
     const af::Packet confirm = af::build_bind(bl.tx_id, bl.rx_id, af::BindStep::Confirm, hop);
     check(confirm[0] == af::kPacketBind2 && confirm[9] == 0x02 && confirm[5] == 0x78,
           "afhds2a: bind confirmation packet");
 
     // Downlink handling: TX ID filter, sensor decoding, requests.
-    af::Link tl{0x12345678};
-    tl.rx_id = 0x9ABCDEF0;
+    af::Link tl{af::TxId{0x12345678}};
+    tl.rx_id = af::RxId{0x9ABCDEF0};
     af::Frame rx{};
     rx[0] = 0xAA;
     rx[1] = 0x78;
@@ -1767,8 +1767,8 @@ void afhds2a_test() {
     check(tl.on_downlink(rx, 0, 0) == af::RxEvent::Ignored, "afhds2a: foreign TX ID ignored");
     rx[1] = 0x78;
 
-    af::Link tt{0x12345678};
-    tt.rx_id = 0x9ABCDEF0;
+    af::Link tt{af::TxId{0x12345678}};
+    tt.rx_id = af::RxId{0x9ABCDEF0};
     af::Frame rx2 = rx;
     rx2[10] = 0x01;
     rx2[11] = 0x01;
@@ -1818,7 +1818,7 @@ void a7105_radio_test() {
     check(gate.allow_tx(5), "heartbeat: new heartbeat resumes TX");
     check(gate.stale == 0, "heartbeat: stale count reset");
 
-    af::Radio bind(0x12345678);
+    af::Radio bind(af::TxId{0x12345678});
     check(!bind.binding(), "radio: starts in normal mode");
     const auto bind_power = bind.set_bind_mode(true);
     check(bind_power && *bind_power == a7::kBindPower, "radio: bind mode uses bind power");
@@ -1849,7 +1849,7 @@ void a7105_radio_test() {
     bind_reply[7] = 0x34;
     bind_reply[8] = 0x12;
     bind.on_rx_frame(bind_reply, 0, 0);
-    check(bind.link.rx_id == 0x12345678, "bind: receiver answer captures RX ID");
+    check(bind.link.rx_id.value == 0x12345678, "bind: receiver answer captures RX ID");
     check(bind.link.bind_step == af::BindStep::Confirm, "bind: receiver answer enters confirm");
 
     for (int i = 0; i < 3; ++i) {
@@ -1861,11 +1861,11 @@ void a7105_radio_test() {
           "bind: fourth confirm leaves bind mode with high power");
     check(bind.link.bind_done, "bind: bind_done after confirm");
     const auto saved = bind.take_rx_save();
-    check(saved && *saved == 0x12345678, "bind: RX ID queued for persistence");
+    check(saved && saved->value == 0x12345678, "bind: RX ID queued for persistence");
     check(!bind.take_rx_save(), "bind: save flag cleared after take");
 
-    af::Radio normal(0x12345678);
-    normal.set_rx_id(0x11223344);
+    af::Radio normal(af::TxId{0x12345678});
+    normal.set_rx_id(af::RxId{0x11223344});
     bool sticks_before_failsafe = true;
     for (uint32_t i = 1; i <= 1568; ++i) {
         sticks_before_failsafe = sticks_before_failsafe && normal.on_timer_tick().packet[0] == af::kPacketSticks;
@@ -1874,7 +1874,7 @@ void a7105_radio_test() {
     check(normal.on_timer_tick().packet[0] == af::kPacketFailsafe, "normal: failsafe frame at packet 1569");
     check(normal.on_timer_tick().packet[0] == af::kPacketSticks, "normal: sticks resume after failsafe");
 
-    af::Radio lossy(0x12345678);
+    af::Radio lossy(af::TxId{0x12345678});
     lossy.link.telemetry.connected = true;
     lossy.link.telemetry.rssi = 80;
     for (int i = 0; i < 52; ++i) {
@@ -1885,9 +1885,9 @@ void a7105_radio_test() {
     check(!lossy.link.telemetry.connected && lossy.link.telemetry.rssi == 0,
           "loss: 53rd missed frame drops the link");
 
-    af::Radio rxs(0xAABBCCDD);
-    rxs.set_rx_id(0);
-    check(!rxs.link.bind_done && rxs.link.rx_id == 0xFFFF'FFFFu, "rx id: zero becomes placeholder");
+    af::Radio rxs(af::TxId{0xAABBCCDD});
+    rxs.set_rx_id(af::RxId{0});
+    check(!rxs.link.bind_done && rxs.link.rx_id.value == 0xFFFF'FFFFu, "rx id: zero becomes placeholder");
     af::Frame downlink{};
     downlink[0] = 0xAC;
     downlink[1] = 0xDD;
@@ -1899,10 +1899,10 @@ void a7105_radio_test() {
     downlink[7] = 0x34;
     downlink[8] = 0x12;
     rxs.on_rx_frame(downlink, 0x20, 1000);
-    check(rxs.link.rx_id == 0x12345678, "rx id: placeholder replaced by downlink ID");
+    check(rxs.link.rx_id.value == 0x12345678, "rx id: placeholder replaced by downlink ID");
     check(rxs.link.telemetry.connected, "rx id: downlink marks link connected");
     const auto rx_saved = rxs.take_rx_save();
-    check(rx_saved && *rx_saved == 0x12345678, "rx id: captured ID requests save");
+    check(rx_saved && rx_saved->value == 0x12345678, "rx id: captured ID requests save");
     check(!rxs.take_rx_save(), "rx id: save flag cleared after take");
 }
 

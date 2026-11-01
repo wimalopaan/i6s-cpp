@@ -66,7 +66,7 @@ struct Radio {
     uint32_t packets_sent = 0;
     std::array<uint16_t, kNumChannels> channels{};
 
-    constexpr explicit Radio(uint32_t tx_id) : link(tx_id), hop(hopping_table(tx_id)) {}
+    constexpr explicit Radio(TxId tx) : link(tx), hop(hopping_table(tx)) {}
 
     constexpr bool binding() const { return link.binding; }
 
@@ -177,8 +177,8 @@ struct Radio {
         link.binding = false;
         link.bind_done = true;
         link.next = PacketKind::Sticks;
-        if (link.rx_id == 0 || link.rx_id == 0xFFFF'FFFFu) {
-            link.rx_id = 0x0001'0000u | (link.tx_id & 0xFFFFu);
+        if (link.rx_id.value == 0 || link.rx_id.value == 0xFFFF'FFFFu) {
+            link.rx_id = RxId{0x0001'0000u | (link.tx_id.value & 0xFFFFu)};
         }
         link.rx_id_needs_save = true;
         return a7105::power_from_index(link.rf_power_idx);
@@ -192,9 +192,9 @@ struct Radio {
         return a7105::power_from_index(link.rf_power_idx);
     }
 
-    constexpr void set_rx_id(uint32_t id) {
-        link.rx_id = id == 0 ? 0xFFFF'FFFFu : id;
-        link.bind_done = id != 0 && id != 0xFFFF'FFFFu;
+    constexpr void set_rx_id(RxId id) {
+        link.rx_id = id.value == 0 ? RxId{0xFFFF'FFFFu} : id;
+        link.bind_done = id.value != 0 && id.value != 0xFFFF'FFFFu;
         loss = 0;
         link.telemetry.connected = false;
     }
@@ -208,7 +208,7 @@ struct Radio {
     }
 
     // Returns the RX ID once after it was captured or changed, so the caller can persist it.
-    constexpr std::optional<uint32_t> take_rx_save() {
+    constexpr std::optional<RxId> take_rx_save() {
         if (!link.rx_id_needs_save) {
             return std::nullopt;
         }

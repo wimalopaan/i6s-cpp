@@ -173,6 +173,26 @@ struct Nav {
     bool cancel{false};
 };
 
+// Direction of a list step. Only meaningful when exactly one of Nav::up and Nav::down is set.
+enum class Dir : uint8_t { Up, Down };
+
+constexpr Dir nav_dir(const Nav& n) { return n.down ? Dir::Down : Dir::Up; }
+
+// Number of list rows that fit on screen (kept apart from the item count).
+struct Rows {
+    std::size_t value;
+};
+
+struct KeyState {
+    bool pressed{false};
+    bool held{false};
+};
+
+struct Range {
+    int min;
+    int max;
+};
+
 // Next/previous character in the name editor cycle: ' ', 'A'..'Z', '0'..'9', '-', '_'.
 constexpr char next_ascii(char c) {
     if (c == ' ') return 'A';
@@ -203,11 +223,12 @@ constexpr void open(State& s) {
 }
 
 // Moves the selection one step with wrap-around and keeps it inside the visible window.
-constexpr void step_list(ListPos& p, std::size_t count, std::size_t visible, bool down) {
+constexpr void step_list(ListPos& p, std::size_t count, Rows rows, Dir dir) {
+    const std::size_t visible = rows.value;
     if (count == 0) {
         return;
     }
-    if (down) {
+    if (dir == Dir::Down) {
         if (p.selected + 1 < count) {
             ++p.selected;
             if (p.selected >= p.scroll + visible) {
@@ -231,7 +252,9 @@ constexpr void step_list(ListPos& p, std::size_t count, std::size_t visible, boo
 }
 
 // Reports a step on press, then again after the repeat delay at the repeat interval.
-constexpr bool repeat_step(Repeat& r, bool pressed, bool held, uint32_t now) {
+constexpr bool repeat_step(Repeat& r, KeyState key, uint32_t now) {
+    const bool pressed = key.pressed;
+    const bool held = key.held;
     if (!held) {
         r.active = false;
         return false;
@@ -253,7 +276,7 @@ constexpr uint8_t window_scroll(std::size_t selected, std::size_t visible) {
 
 constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
     if (n.up != n.down) {
-        step_list(s.main, kMainItems.size(), kMainVisible, n.down);
+        step_list(s.main, kMainItems.size(), Rows{kMainVisible}, nav_dir(n));
     }
     if (n.cancel) {
         s.screen = Screen::Closed;
@@ -323,7 +346,7 @@ constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
 
 constexpr Event update_models(State& s, const Nav& n) {
     if (n.up != n.down) {
-        step_list(s.models, storage::kNumModels, kListVisible, n.down);
+        step_list(s.models, storage::kNumModels, Rows{kListVisible}, nav_dir(n));
     }
     if (n.cancel) {
         s.screen = Screen::Main;
@@ -342,7 +365,7 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m) {
 
     if (!s.editing) {
         if (n.up != n.down) {
-            step_list(s.setup, kSetupRows, kSetupRows, n.down);
+            step_list(s.setup, kSetupRows, Rows{kSetupRows}, nav_dir(n));
         }
         if (n.cancel) {
             s.screen = Screen::Main;
@@ -455,11 +478,11 @@ constexpr uint8_t step_dr_switch(const storage::RadioConfig& r, uint8_t cur, boo
 
 // One repeat step up or down that stays inside [min, max]. Values off the step grid are not snapped.
 template <typename T>
-constexpr void step_clamped(T& v, int min, int max, int step, bool up, bool down) {
+constexpr void step_clamped(T& v, Range range, int step, const Nav& n) {
     const int cur = v;
-    if (up && cur + step <= max) {
+    if (n.up && cur + step <= range.max) {
         v = static_cast<T>(cur + step);
-    } else if (down && cur - step >= min) {
+    } else if (n.down && cur - step >= range.min) {
         v = static_cast<T>(cur - step);
     }
 }
@@ -475,7 +498,7 @@ constexpr Event update_dual_rate(State& s, const Nav& n, storage::ModelConfig& m
     }
     if (!s.editing) {
         if (n.up != n.down) {
-            step_list(s.dual_rate, kDrFields, kListVisible, n.down);
+            step_list(s.dual_rate, kDrFields, Rows{kListVisible}, nav_dir(n));
         }
         if (n.ok) {
             s.editing = true;
@@ -497,10 +520,10 @@ constexpr Event update_dual_rate(State& s, const Nav& n, storage::ModelConfig& m
                 s.axis = static_cast<uint8_t>((s.axis + 1) % 3);
             }
             break;
-        case 2: step_clamped(m.dr_high[axis], 50, 100, 5, n.up, n.down); break;
-        case 3: step_clamped(m.dr_low[axis], 30, 100, 5, n.up, n.down); break;
-        case 4: step_clamped(m.expo_high[axis], -100, 100, 5, n.up, n.down); break;
-        case 5: step_clamped(m.expo_low[axis], -100, 100, 5, n.up, n.down); break;
+        case 2: step_clamped(m.dr_high[axis], Range{50, 100}, 5, n); break;
+        case 3: step_clamped(m.dr_low[axis], Range{30, 100}, 5, n); break;
+        case 4: step_clamped(m.expo_high[axis], Range{-100, 100}, 5, n); break;
+        case 5: step_clamped(m.expo_low[axis], Range{-100, 100}, 5, n); break;
         default: break;
     }
     if (n.ok) {
@@ -518,7 +541,7 @@ constexpr Event update_throttle_curve(State& s, const Nav& n, storage::ModelConf
             return {Action::SaveActiveModel, 0};
         }
         const std::size_t pt = sel >= 2 ? sel - 2u : 0u;
-        step_clamped(m.thr_curve[pt], 0, 100, 1, n.up, n.down);
+        step_clamped(m.thr_curve[pt], Range{0, 100}, 1, n);
         if (n.ok) {
             if (sel + 1u < items) {
                 s.throttle_curve.selected = static_cast<uint8_t>(sel + 1);
@@ -711,7 +734,7 @@ constexpr Event update_wing_mixer(State& s, const Nav& n, storage::ModelConfig& 
             s.editing = false;
             return save;
         }
-        step_clamped(m.template_diff, -100, 100, 5, n.up, n.down);
+        step_clamped(m.template_diff, Range{-100, 100}, 5, n);
         if (n.ok) {
             s.editing = false;
             return save;
@@ -724,7 +747,7 @@ constexpr Event update_wing_mixer(State& s, const Nav& n, storage::ModelConfig& 
         return save;
     }
     if (n.up != n.down) {
-        step_list(s.wing, wing_row_count(m), kListVisible, n.down);
+        step_list(s.wing, wing_row_count(m), Rows{kListVisible}, nav_dir(n));
     }
     if (!n.ok) {
         return {};
@@ -763,7 +786,7 @@ constexpr Event update_mixer_line(State& s, const Nav& n, storage::ModelConfig& 
             return {};
         }
         if (n.up != n.down) {
-            step_list(s.mix_line, kMixFields, kListVisible, n.down);
+            step_list(s.mix_line, kMixFields, Rows{kListVisible}, nav_dir(n));
         }
         if (n.ok) {
             s.editing = true;
@@ -797,8 +820,8 @@ constexpr Event update_mixer_line(State& s, const Nav& n, storage::ModelConfig& 
                                                 [&](uint8_t c) { return is_weight_src_available(c, m); });
             }
             break;
-        case 3: step_clamped(mix.weight, -100, 100, 5, n.up, n.down); break;
-        case 4: step_clamped(mix.offset, -100, 100, 5, n.up, n.down); break;
+        case 3: step_clamped(mix.weight, Range{-100, 100}, 5, n); break;
+        case 4: step_clamped(mix.offset, Range{-100, 100}, 5, n); break;
         case 5:
             if (up || down) {
                 mix.switch_sel = step_available(mix.switch_sel, labels::kSwitchCondNames.size(), down,
@@ -828,7 +851,7 @@ constexpr Event update_global_vars(State& s, const Nav& n, storage::ModelConfig&
             s.editing = false;
             return save;
         }
-        step_clamped(m.gvars[s.gvars.selected], -1000, 1000, 50, n.up, n.down);
+        step_clamped(m.gvars[s.gvars.selected], Range{-1000, 1000}, 50, n);
         if (n.ok) {
             s.editing = false;
             return save;
@@ -841,7 +864,7 @@ constexpr Event update_global_vars(State& s, const Nav& n, storage::ModelConfig&
         return save;
     }
     if (n.up != n.down) {
-        step_list(s.gvars, m.gvars.size(), kListVisible, n.down);
+        step_list(s.gvars, m.gvars.size(), Rows{kListVisible}, nav_dir(n));
     }
     if (n.ok) {
         s.editing = true;
@@ -881,7 +904,7 @@ constexpr Event update_aux(State& s, const Nav& n, storage::ModelConfig& m, cons
     }
     if (!s.editing) {
         if (n.up != n.down) {
-            step_list(s.aux, kAuxChannelCount, kListVisible, n.down);
+            step_list(s.aux, kAuxChannelCount, Rows{kListVisible}, nav_dir(n));
         }
         if (n.ok) {
             s.editing = true;
@@ -934,7 +957,7 @@ constexpr Event update_radio_setup(State& s, const Nav& n, storage::RadioConfig&
         return {};
     }
     if (n.up != n.down) {
-        step_list(s.radio, kRadioRows, kListVisible, n.down);
+        step_list(s.radio, kRadioRows, Rows{kListVisible}, nav_dir(n));
     }
     if (!n.ok) {
         return {};
@@ -956,7 +979,7 @@ constexpr Event update_input_setup(State& s, const Nav& n, storage::RadioConfig&
     }
     const std::size_t count = input_rows(r);
     if (n.up != n.down) {
-        step_list(s.input_setup, count, kListVisible, n.down);
+        step_list(s.input_setup, count, Rows{kListVisible}, nav_dir(n));
     }
     if (!n.ok || s.input_setup.selected >= count) {
         return {};
@@ -969,7 +992,7 @@ constexpr Event update_input_setup(State& s, const Nav& n, storage::RadioConfig&
 
 constexpr Event update_channel_reverse(State& s, const Nav& n, storage::ModelConfig& m) {
     if (n.up != n.down) {
-        step_list(s.reverse, kNumChannels, kListVisible, n.down);
+        step_list(s.reverse, kNumChannels, Rows{kListVisible}, nav_dir(n));
     }
     if (n.ok) {
         m.channel_reverse ^= 1u << s.reverse.selected;
@@ -1032,8 +1055,8 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
     const bool up_pressed = (in.pressed & kKeyUp) != 0;
     const bool down_pressed = (in.pressed & kKeyDown) != 0;
     Nav n{};
-    n.up = repeat_step(s.up, up_pressed, up_held, in.now_ms);
-    n.down = repeat_step(s.down, down_pressed, down_held, in.now_ms);
+    n.up = repeat_step(s.up, KeyState{up_pressed, up_held}, in.now_ms);
+    n.down = repeat_step(s.down, KeyState{down_pressed, down_held}, in.now_ms);
     n.ok = (in.pressed & kKeyOk) != 0;
     n.cancel = (in.pressed & kKeyCancel) != 0;
 

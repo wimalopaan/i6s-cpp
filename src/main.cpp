@@ -72,18 +72,18 @@ void apply_crsf_config() {
     using namespace ferrox;
     const auto& model = g_storage.active_model;
     const uint8_t baud_idx = model.crsf_baud < logic::kBaudRates.size() ? model.crsf_baud : logic::kDefaultBaudIndex;
-    hw::crsf::set_enabled(true, baud_idx, model.crsf_half_duplex != 0);
+    hw::crsf::set_enabled(true, baud_idx, model.crsf_half_duplex != 0 ? hw::uart::Duplex::Half : hw::uart::Duplex::Full);
 }
 
 // TX ID is the XOR of the three 32-bit words of the MCU UID, as in the Rust firmware.
-uint32_t tx_id_from_uid() {
+ferrox::logic::afhds2a::TxId tx_id_from_uid() {
     using namespace ferrox;
     const auto uid = chip::read_uid(chip::kProfile);
     auto word = [&uid](std::size_t i) {
         return static_cast<uint32_t>(uid[i]) | (static_cast<uint32_t>(uid[i + 1]) << 8) |
                (static_cast<uint32_t>(uid[i + 2]) << 16) | (static_cast<uint32_t>(uid[i + 3]) << 24);
     };
-    return word(0) ^ word(4) ^ word(8);
+    return ferrox::logic::afhds2a::TxId{word(0) ^ word(4) ^ word(8)};
 }
 
 // Silences the A7105 for CRSF models. Only changes state when the protocol changes.
@@ -112,7 +112,7 @@ void apply_rf_model() {
     if (!g_rf_ok) {
         return;
     }
-    ferrox::hw::rf::set_rx_id(g_storage.active_model.rx_id);
+    ferrox::hw::rf::set_rx_id(ferrox::logic::afhds2a::RxId{g_storage.active_model.rx_id});
     apply_rf_link();
 }
 
@@ -324,8 +324,8 @@ int main() {
         const bool armed = logic::flight::is_armed(model.arm_switch, input.switches);
         if (g_rf_ok) {
             if (const auto id = hw::rf::take_pending_rx_save()) {
-                if (*id != 0 && *id != 0xFFFF'FFFFu && model.rx_id != *id) {
-                    g_storage.active_model.rx_id = *id;
+                if (id->value != 0 && id->value != 0xFFFF'FFFFu && model.rx_id != id->value) {
+                    g_storage.active_model.rx_id = id->value;
                     rx_id_dirty = true;
                 }
             }

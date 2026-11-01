@@ -29,7 +29,8 @@ inline constexpr uint32_t kPingPeriodMs = 1000;
 inline constexpr std::size_t kMaxRxBytesPerPoll = 128;
 
 /// Enables or disables CRSF on USART2 and the module power switch.
-inline void set_enabled(bool enabled, uint8_t baud_idx, bool half_duplex) {
+inline void set_enabled(bool enabled, uint8_t baud_idx, uart::Duplex duplex) {
+    const bool half_duplex = duplex == uart::Duplex::Half;
     if (enabled == g_enabled &&
         (!enabled || (baud_idx == g_baud_idx && half_duplex == g_half_duplex))) {
         return;
@@ -38,7 +39,7 @@ inline void set_enabled(bool enabled, uint8_t baud_idx, bool half_duplex) {
     g_baud_idx = baud_idx;
     g_half_duplex = half_duplex;
 
-    uart::set_uart_enabled(enabled, baud_idx, half_duplex);
+    uart::set_uart_enabled(enabled, baud_idx, duplex);
     uart::set_module_power(enabled);
 
     if (!enabled) {
