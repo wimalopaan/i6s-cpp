@@ -23,7 +23,7 @@ struct ActivityTracker {
         switches = sw;
     }
 
-    constexpr bool step(const input::Raw& raw, const Switches& sw, uint16_t keys) {
+    constexpr bool step(const input::Raw& raw, const Switches& sw, const uint16_t keys) {
         constexpr std::array<uint16_t, 6> kThreshold{30, 30, 30, 30, 40, 40};
         const std::array<uint16_t, 6> now{raw[0], raw[1], raw[2], raw[3], raw[6], raw[7]};
         bool moved = false;
@@ -40,7 +40,7 @@ struct ActivityTracker {
 };
 
 // Vario setting: 0 is off, 1 is always on, and 2..=23 select arm condition 1..=22 (as in Rust).
-constexpr bool vario_switch_active(uint8_t setting, const Switches& sw) {
+constexpr bool vario_switch_active(const uint8_t setting, const Switches& sw) {
     if (setting == 1) {
         return true;
     }

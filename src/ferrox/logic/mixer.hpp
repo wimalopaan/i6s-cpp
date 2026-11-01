@@ -17,7 +17,7 @@ enum class ModelType : uint8_t { Airplane = 0, Glider = 1, Heli = 2, Quad = 3, G
 
 enum class WingTail : uint8_t { Normal = 0, Elevon = 1, VTail = 2, Flaperon = 3 };
 
-constexpr WingTail wing_tail_from(uint8_t val) {
+constexpr WingTail wing_tail_from(const uint8_t val) {
     switch (val) {
         case 1: return WingTail::Elevon;
         case 2: return WingTail::VTail;
@@ -48,12 +48,12 @@ struct TimerArmed {
 };
 using GVars = std::array<int16_t, 5>;
 
-constexpr int32_t clamp_mix(int32_t v) {
+constexpr int32_t clamp_mix(const int32_t v) {
     return std::clamp<int32_t>(v, kMixerMin, kMixerMax);
 }
 
 /// Attenuates the down (negative) side by diff% when diff > 0, the up side when diff < 0.
-constexpr int32_t apply_differential(int32_t val, int8_t diff) {
+constexpr int32_t apply_differential(const int32_t val, const int8_t diff) {
     if (diff == 0) {
         return val;
     }
@@ -68,7 +68,7 @@ constexpr int32_t apply_differential(int32_t val, int8_t diff) {
 }
 
 /// Dual rate and integer cubic expo on a normalized stick input.
-constexpr int16_t apply_dr_expo(int16_t input, uint8_t rate, int8_t expo) {
+constexpr int16_t apply_dr_expo(const int16_t input, const uint8_t rate, const int8_t expo) {
     const int32_t rate_clamped = std::clamp<int32_t>(rate, 30, 100);
     const int32_t x = (static_cast<int32_t>(input) * rate_clamped) / 100;
 
@@ -90,7 +90,7 @@ constexpr int16_t apply_dr_expo(int16_t input, uint8_t rate, int8_t expo) {
     return static_cast<int16_t>(clamp_mix(result));
 }
 
-constexpr int32_t three_pos_value(SwitchPos p) {
+constexpr int32_t three_pos_value(const SwitchPos p) {
     switch (p) {
         case SwitchPos::Up: return kMixerMin;
         case SwitchPos::Mid: return kMixerCenter;
@@ -100,7 +100,7 @@ constexpr int32_t three_pos_value(SwitchPos p) {
 }
 
 /// Switch condition codes used by mix lines and the arm switch (0 = always active).
-constexpr bool is_switch_active(uint8_t condition, const Switches& s) {
+constexpr bool is_switch_active(const uint8_t condition, const Switches& s) {
     switch (condition) {
         case 0: return true;
         case 1: return s.sa == SwitchPos::Up;
@@ -130,12 +130,12 @@ constexpr bool is_switch_active(uint8_t condition, const Switches& s) {
 }
 
 /// Arm switch is valid only for condition codes 1..=22; 0 or out-of-range means not armed.
-constexpr bool eval_arm_switch(uint8_t arm_switch, const Switches& s) {
+constexpr bool eval_arm_switch(const uint8_t arm_switch, const Switches& s) {
     return arm_switch > 0 && arm_switch <= 22 && is_switch_active(arm_switch, s);
 }
 
 /// True for high rates, false for low rates.
-constexpr bool is_dr_high(uint8_t dr_switch, const Switches& s) {
+constexpr bool is_dr_high(const uint8_t dr_switch, const Switches& s) {
     switch (dr_switch) {
         case 1: return s.sa == SwitchPos::Up;
         case 2: return s.sb == SwitchPos::Up;
@@ -148,8 +148,8 @@ constexpr bool is_dr_high(uint8_t dr_switch, const Switches& s) {
 }
 
 /// Flight timer trigger. `latched` is updated for the THt mode.
-constexpr bool is_timer_active(uint8_t timer_source, int16_t throttle, TimerLatch& latched,
-                               const Switches& s, TimerArmed is_armed) {
+constexpr bool is_timer_active(const uint8_t timer_source, const int16_t throttle, TimerLatch& latched,
+                               const Switches& s, const TimerArmed is_armed) {
     if (!is_armed.value) {
         return false;
     }
@@ -170,12 +170,12 @@ constexpr bool is_timer_active(uint8_t timer_source, int16_t throttle, TimerLatc
     }
 }
 
-constexpr int32_t pot_at(std::span<const int16_t> pots, std::size_t i) {
+constexpr int32_t pot_at(std::span<const int16_t> pots, const std::size_t i) {
     return i < pots.size() ? pots[i] : 0;
 }
 
 /// Maps a mixer source identifier to a normalized value (-1000..+1000).
-constexpr int32_t evaluate_source(uint8_t src, const Sticks& sticks, std::span<const int16_t> pots,
+constexpr int32_t evaluate_source(const uint8_t src, const Sticks& sticks, std::span<const int16_t> pots,
                                   const Switches& s, const ChannelValues& channels,
                                   const GVars& gvars) {
     switch (src) {
@@ -216,8 +216,8 @@ constexpr int32_t evaluate_source(uint8_t src, const Sticks& sticks, std::span<c
 /// Full mixer pipeline: conditioning, wing/tail templates, aux mapping, matrix mixes,
 /// output scaling, trims, safety interlocks and channel reversing.
 constexpr std::array<uint16_t, kNumChannels> compute_channels(
-    StickInputs inputs, std::span<const int16_t> pots, const Switches& sw,
-    const storage::ModelConfig& model, const trim::TrimValues& trims, uint8_t throttle_trim_mode) {
+    const StickInputs inputs, std::span<const int16_t> pots, const Switches& sw,
+    const storage::ModelConfig& model, const trim::TrimValues& trims, const uint8_t throttle_trim_mode) {
     const auto [raw_roll, raw_pitch, curved_throttle, raw_yaw] = inputs;
     // Stage 1 and 2: dual rates and expo.
     const bool high_rate = is_dr_high(model.dr_switch, sw);

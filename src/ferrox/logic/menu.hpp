@@ -225,7 +225,7 @@ struct Range {
 };
 
 // Next/previous character in the name editor cycle: ' ', 'A'..'Z', '0'..'9', '-', '_'.
-constexpr char next_ascii(char c) {
+constexpr char next_ascii(const char c) {
     if (c == ' ') return 'A';
     if (c >= 'A' && c <= 'Y') return static_cast<char>(c + 1);
     if (c == 'Z') return '0';
@@ -235,7 +235,7 @@ constexpr char next_ascii(char c) {
     return ' ';
 }
 
-constexpr char prev_ascii(char c) {
+constexpr char prev_ascii(const char c) {
     if (c == ' ') return '_';
     if (c == '_') return '-';
     if (c == '-') return '9';
@@ -254,7 +254,7 @@ constexpr void open(State& s) {
 }
 
 // Moves the selection one step with wrap-around and keeps it inside the visible window.
-constexpr bool step_list(ListPos& p, std::size_t count, Rows rows, Dir dir) {
+constexpr bool step_list(ListPos& p, const std::size_t count, const Rows rows, const Dir dir) {
     const std::size_t visible = rows.value;
     if (count == 0) {
         return false;
@@ -284,7 +284,7 @@ constexpr bool step_list(ListPos& p, std::size_t count, Rows rows, Dir dir) {
 }
 
 // Reports a step on press, then again after the repeat delay at the repeat interval.
-constexpr bool repeat_step(Repeat& r, KeyState key, uint32_t now) {
+constexpr bool repeat_step(Repeat& r, const KeyState key, const uint32_t now) {
     const bool pressed = key.pressed;
     const bool held = key.held;
     if (!held) {
@@ -307,11 +307,11 @@ struct ItemIndex {
     friend constexpr bool operator==(const ItemIndex&, const ItemIndex&) = default;
 };
 
-constexpr uint8_t window_scroll(ItemIndex selected, Rows visible) {
+constexpr uint8_t window_scroll(const ItemIndex selected, const Rows visible) {
     return static_cast<uint8_t>(selected.value >= visible.value ? selected.value - visible.value + 1 : 0);
 }
 
-constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
+constexpr Event update_main(State& s, const Nav& n, const uint8_t active_model) {
     if (n.up != n.down) {
         s.nav_tick = step_list(s.main, kMainItems.size(), Rows{kMainVisible}, nav_dir(n));
     }
@@ -412,15 +412,15 @@ constexpr std::optional<uint8_t> pot_change_source(const auto_select::Changes& c
     return std::nullopt;
 }
 
-constexpr bool is_switch_cond_available(uint8_t cond, const storage::RadioConfig& r);
+constexpr bool is_switch_cond_available(const uint8_t cond, const storage::RadioConfig& r);
 
 // Arm switch codes are condition codes 1..22 (0 is unused by auto-select).
-constexpr bool is_arm_switch_available(uint8_t sw, const storage::RadioConfig& r) {
+constexpr bool is_arm_switch_available(const uint8_t sw, const storage::RadioConfig& r) {
     return sw < kArmSwitchCount && is_switch_cond_available(sw, r);
 }
 
 constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, const storage::RadioConfig& r,
-                             model_copy::SrcSlot active) {
+                             const model_copy::SrcSlot active) {
     const auto row = static_cast<SetupRow>(s.setup.selected);
     const Event save{Action::SaveActiveModel, 0};
 
@@ -577,7 +577,7 @@ inline constexpr std::array<std::string_view, kDrFields> kDrLabels{
 };
 
 // Mirrors the firmware rules: SA..SD need a 2/3-position or instant-trim input, SE/SF need the external switch board.
-constexpr bool is_dr_switch_available(uint8_t sw, const storage::RadioConfig& r) {
+constexpr bool is_dr_switch_available(const uint8_t sw, const storage::RadioConfig& r) {
     if (sw == 0) {
         return true;
     }
@@ -593,7 +593,7 @@ constexpr bool is_dr_switch_available(uint8_t sw, const storage::RadioConfig& r)
 }
 
 // Next (down = false) or previous (down = true) available switch code, wrapping over 0..6.
-constexpr uint8_t step_dr_switch(const storage::RadioConfig& r, uint8_t cur, bool down) {
+constexpr uint8_t step_dr_switch(const storage::RadioConfig& r, const uint8_t cur, const bool down) {
     constexpr uint8_t kCount = 7;
     for (uint8_t i = 1; i < kCount; ++i) {
         const auto cand = static_cast<uint8_t>(down ? (cur + kCount - i) % kCount : (cur + i) % kCount);
@@ -607,7 +607,7 @@ constexpr uint8_t step_dr_switch(const storage::RadioConfig& r, uint8_t cur, boo
 // One repeat step up or down that stays inside [min, max]. Values off the step grid are not snapped.
 // Returns true only when the value changed.
 template <typename T>
-constexpr bool step_clamped(T& v, Range range, int step, const Nav& n) {
+constexpr bool step_clamped(T& v, const Range range, const int step, const Nav& n) {
     const int cur = v;
     if (n.up && cur + step <= range.max) {
         v = static_cast<T>(cur + step);
@@ -622,7 +622,7 @@ constexpr bool step_clamped(T& v, Range range, int step, const Nav& n) {
 
 // Value-edit tone for a clamped step, played only when the value moved.
 template <typename T>
-constexpr void step_clamped_tone(State& s, T& v, Range range, int step, const Nav& n) {
+constexpr void step_clamped_tone(State& s, T& v, const Range range, const int step, const Nav& n) {
     if (step_clamped(v, range, step, n)) {
         s.cue = buzzer::Cue::ValueStep;
     }
@@ -736,24 +736,24 @@ inline constexpr std::array<std::string_view, kMixFields> kMixLabels{
 };
 inline constexpr std::array<std::string_view, 5> kGvarLabels{"GV1:", "GV2:", "GV3:", "GV4:", "GV5:"};
 
-constexpr input::AdcMode adc_mode_at(const storage::RadioConfig& r, std::size_t idx) {
+constexpr input::AdcMode adc_mode_at(const storage::RadioConfig& r, const std::size_t idx) {
     return input::resolve_mode(idx, r.adc_modes[idx]);
 }
 
-constexpr bool is_two_or_three_pos(input::AdcMode mode) {
+constexpr bool is_two_or_three_pos(const input::AdcMode mode) {
     return mode == input::AdcMode::TwoPos || mode == input::AdcMode::ThreePos;
 }
 
-constexpr bool is_switch_input(input::AdcMode mode) {
+constexpr bool is_switch_input(const input::AdcMode mode) {
     return is_two_or_three_pos(mode) || mode == input::AdcMode::InstantTrim;
 }
 
-constexpr bool is_pot_input(input::AdcMode mode) {
+constexpr bool is_pot_input(const input::AdcMode mode) {
     return mode == input::AdcMode::Pot || mode == input::AdcMode::PotDetent;
 }
 
 // Channels 1..18 that drive an output: primary controls, flaperon CH6, assigned aux channels or mix targets.
-constexpr bool is_channel_configured(uint8_t ch, const storage::ModelConfig& m) {
+constexpr bool is_channel_configured(const uint8_t ch, const storage::ModelConfig& m) {
     if (ch == 0 || ch > 18) {
         return false;
     }
@@ -774,7 +774,7 @@ constexpr bool is_channel_configured(uint8_t ch, const storage::ModelConfig& m) 
     return false;
 }
 
-constexpr bool is_source_available(uint8_t src, const storage::RadioConfig& r, const storage::ModelConfig& m) {
+constexpr bool is_source_available(const uint8_t src, const storage::RadioConfig& r, const storage::ModelConfig& m) {
     const bool ext_adc = r.ext_adc != 0;
     if (src <= 4) {
         return true;  // None, Roll, Pitch, Thr, Yaw
@@ -815,7 +815,7 @@ constexpr bool is_source_available(uint8_t src, const storage::RadioConfig& r, c
     return src <= 45;  // GV1..GV5
 }
 
-constexpr bool is_weight_src_available(uint8_t ws, const storage::ModelConfig& m) {
+constexpr bool is_weight_src_available(const uint8_t ws, const storage::ModelConfig& m) {
     if (ws == 0) {
         return true;  // Fixed
     }
@@ -828,7 +828,7 @@ constexpr bool is_weight_src_available(uint8_t ws, const storage::ModelConfig& m
     return ws <= 41;  // GV1..GV5
 }
 
-constexpr bool is_switch_cond_available(uint8_t cond, const storage::RadioConfig& r) {
+constexpr bool is_switch_cond_available(const uint8_t cond, const storage::RadioConfig& r) {
     switch (cond) {
         case 0: return true;
         case 1:
@@ -859,7 +859,7 @@ constexpr bool is_switch_cond_available(uint8_t cond, const storage::RadioConfig
 
 // Next (down = false) or previous (down = true) code that passes `ok`, wrapping over 0..count-1. Returns cur if none does.
 template <typename Ok>
-constexpr uint8_t step_available(uint8_t cur, std::size_t count, bool down, Ok ok) {
+constexpr uint8_t step_available(const uint8_t cur, const std::size_t count, const bool down, Ok ok) {
     for (std::size_t i = 1; i < count; ++i) {
         const auto cand = static_cast<uint8_t>(down ? (cur + count - i) % count : (cur + i) % count);
         if (ok(cand)) {
@@ -870,7 +870,7 @@ constexpr uint8_t step_available(uint8_t cur, std::size_t count, bool down, Ok o
 }
 
 // Vario switch codes that can be picked: OFF and ON always, others when their arm condition exists.
-constexpr bool is_vario_switch_available(uint8_t sw, const storage::RadioConfig& r) {
+constexpr bool is_vario_switch_available(const uint8_t sw, const storage::RadioConfig& r) {
     if (sw <= 1) {
         return true;
     }
@@ -878,11 +878,11 @@ constexpr bool is_vario_switch_available(uint8_t sw, const storage::RadioConfig&
 }
 
 // Deadband cycles as in Rust: climb 0.1..1.0 m/s, sink steps by 2 tenths and can reach 2.1 from an odd start.
-constexpr uint8_t next_climb_deadband(uint8_t tenths) {
+constexpr uint8_t next_climb_deadband(const uint8_t tenths) {
     return tenths >= kVarioClimbMaxTenths ? 1 : static_cast<uint8_t>(tenths + 1);
 }
 
-constexpr uint8_t next_sink_deadband(uint8_t tenths) {
+constexpr uint8_t next_sink_deadband(const uint8_t tenths) {
     return tenths >= kVarioSinkMaxTenths ? 2 : static_cast<uint8_t>(tenths + 2);
 }
 
@@ -951,7 +951,7 @@ constexpr Event update_vario(State& s, const Nav& n, storage::ModelConfig& m, co
         }
     } else if (n.up != n.down) {
         m.vario_switch = step_available(m.vario_switch, kVarioSwitchCount, n.down,
-                                        [&r](uint8_t c) { return is_vario_switch_available(c, r); });
+                                        [&r](const uint8_t c) { return is_vario_switch_available(c, r); });
     }
     if (n.ok || n.cancel) {
         s.editing = false;
@@ -1066,14 +1066,14 @@ constexpr Event update_mixer_line(State& s, const Nav& n, storage::ModelConfig& 
                 }
             } else if (up || down) {
                 mix.source = step_available(mix.source, labels::kSourceNames.size(), down,
-                                            [&](uint8_t c) { return is_source_available(c, r, m); });
+                                            [&](const uint8_t c) { return is_source_available(c, r, m); });
                 s.cue = buzzer::Cue::ValueStep;
             }
             break;
         case 2:
             if (up || down) {
                 mix.weight_src = step_available(mix.weight_src, labels::kWeightSrcNames.size(), down,
-                                                [&](uint8_t c) { return is_weight_src_available(c, m); });
+                                                [&](const uint8_t c) { return is_weight_src_available(c, m); });
                 s.cue = buzzer::Cue::ValueStep;
             }
             break;
@@ -1087,7 +1087,7 @@ constexpr Event update_mixer_line(State& s, const Nav& n, storage::ModelConfig& 
                 }
             } else if (up || down) {
                 mix.switch_sel = step_available(mix.switch_sel, labels::kSwitchCondNames.size(), down,
-                                                [&](uint8_t c) { return is_switch_cond_available(c, r); });
+                                                [&](const uint8_t c) { return is_switch_cond_available(c, r); });
                 s.cue = buzzer::Cue::ValueStep;
             }
             break;
@@ -1141,7 +1141,7 @@ constexpr Event update_global_vars(State& s, const Nav& n, storage::ModelConfig&
 // Next (down = false) or previous (down = true) usable aux source, wrapping like Rust next/prev_available_aux_source.
 // An unknown current source is treated as index 0.
 template <typename Ok>
-constexpr uint8_t step_aux_source(uint8_t cur, bool down, Ok ok) {
+constexpr uint8_t step_aux_source(const uint8_t cur, const bool down, Ok ok) {
     std::size_t pos = 0;
     for (std::size_t i = 0; i < kAuxSources.size(); ++i) {
         if (kAuxSources[i] == cur) {
@@ -1182,7 +1182,7 @@ constexpr Event update_aux(State& s, const Nav& n, storage::ModelConfig& m, cons
         m.aux_channels[s.aux.selected] = *pot;
     } else if (n.up != n.down) {
         auto& src = m.aux_channels[s.aux.selected];
-        src = step_aux_source(src, n.down, [&](uint8_t c) { return is_source_available(c, r, m); });
+        src = step_aux_source(src, n.down,         [&](const uint8_t c) { return is_source_available(c, r, m); });
     }
     if (n.ok) {
         s.editing = false;
@@ -1195,7 +1195,7 @@ constexpr void toggle_flag(uint8_t& v) {
 }
 
 // Advances one Radio Setup row with the same cycle rules as the Rust menu.
-constexpr void cycle_radio_row(storage::RadioConfig& r, std::size_t row) {
+constexpr void cycle_radio_row(storage::RadioConfig& r, const std::size_t row) {
     switch (row) {
         case 0: r.throttle_trim = static_cast<uint8_t>((r.throttle_trim + 1) % 3); break;
         case 1: toggle_flag(r.audio_enabled); break;
@@ -1386,7 +1386,7 @@ struct Total {
     friend constexpr bool operator==(const Total&, const Total&) = default;
 };
 
-constexpr format::Text<8> counter_text(Ordinal cur, Total total) {
+constexpr format::Text<8> counter_text(const Ordinal cur, const Total total) {
     format::Text<8> t;
     format::detail::push_uint(t, static_cast<unsigned>(cur.value));
     t.push('/');
@@ -1395,7 +1395,7 @@ constexpr format::Text<8> counter_text(Ordinal cur, Total total) {
 }
 
 // "Mnn:name" with a trailing '*' for the active model.
-constexpr format::Text<20> model_row_text(std::size_t idx, const ModelName& name, bool active) {
+constexpr format::Text<20> model_row_text(const std::size_t idx, const ModelName& name, const bool active) {
     format::Text<20> t;
     t.push('M');
     const auto num = format::format_dec2(static_cast<unsigned>(idx) + 1u);
@@ -1414,7 +1414,7 @@ constexpr format::Text<20> model_row_text(std::size_t idx, const ModelName& name
 }
 
 // "mm:ss", minutes capped at 99.
-constexpr format::Text<5> timer_text(uint16_t secs) {
+constexpr format::Text<5> timer_text(const uint16_t secs) {
     format::Text<5> t;
     const auto mm = format::format_dec2(std::min<unsigned>(secs / 60u, 99u));
     const auto ss = format::format_dec2(secs % 60u);
@@ -1429,7 +1429,7 @@ constexpr format::Text<5> timer_text(uint16_t secs) {
 }
 
 // 3-slot icon row: 13 px pitch, icon at x = 4, label at x = 19. Icon is inverted on the highlight bar.
-constexpr void draw_icon_row(Framebuffer& fb, int slot, bool selected, const glyphs::Glyph12& icon,
+constexpr void draw_icon_row(Framebuffer& fb, const int slot, const bool selected, const glyphs::Glyph12& icon,
                              std::string_view label) {
     const int y = 13 + slot * 14;
     if (selected) {
@@ -1654,7 +1654,7 @@ struct DrField {
     friend constexpr bool operator==(const DrField&, const DrField&) = default;
 };
 
-constexpr format::Text<6> dr_value(const storage::ModelConfig& m, Axis axis_sel, DrField field) {
+constexpr format::Text<6> dr_value(const storage::ModelConfig& m, const Axis axis_sel, const DrField field) {
     const std::size_t axis = axis_sel.value;
     switch (field.value) {
         case 0: return to_text(labels::kDrSwitchNames[std::min<std::size_t>(m.dr_switch, 6)]);
@@ -1681,8 +1681,8 @@ constexpr void render_dual_rate(Framebuffer& fb, const State& s, const storage::
 }
 
 // "P01:  50%" as on the device: point number, then the value right-aligned in three columns.
-constexpr format::Text<9> curve_point_label(std::size_t idx, uint8_t val) {
-    const auto digit = [](std::size_t d) { return static_cast<char>('0' + d); };
+constexpr format::Text<9> curve_point_label(const std::size_t idx, const uint8_t val) {
+    const auto digit = [](const std::size_t d) { return static_cast<char>('0' + d); };
     const std::size_t num = idx + 1;
     const std::size_t hundreds = val / 100;
     const std::size_t tens = (val / 10) % 10;
@@ -1757,7 +1757,7 @@ constexpr void render_throttle_curve(Framebuffer& fb, const State& s, const stor
 }
 
 // Value text of a Radio Setup row, right-aligned by the caller.
-constexpr format::Text<12> radio_value(const storage::RadioConfig& r, std::size_t row) {
+constexpr format::Text<12> radio_value(const storage::RadioConfig& r, const std::size_t row) {
     format::Text<12> t;
     auto put = [&t](std::string_view sv) {
         for (const char c : sv) {
@@ -1900,27 +1900,27 @@ constexpr void render_monitor(Framebuffer& fb, const State& s, const Live& live,
 }
 
 // Gauge fill for a raw ADC value, 0..kGaugeMaxFill.
-constexpr int adc_fill(uint16_t raw) {
+constexpr int adc_fill(const uint16_t raw) {
     const uint16_t clamped = std::min<uint16_t>(raw, kAdcFullScale);
     return std::min(static_cast<int>(clamped) * kGaugeMaxFill / static_cast<int>(kAdcFullScale), kGaugeMaxFill);
 }
 
-constexpr std::string_view ext_switch_config_label(bool enabled) {
+constexpr std::string_view ext_switch_config_label(const bool enabled) {
     return enabled ? "EXT SW: ENABLED (PC12/15)" : "EXT SW: DISABLED (OFF)";
 }
 
-constexpr std::string_view switch_pos_label(SwitchPos pos) {
+constexpr std::string_view switch_pos_label(const SwitchPos pos) {
     return pos == SwitchPos::Down ? "DN (LOW)" : "UP (HIGH)";
 }
 
-constexpr int switch_fill(SwitchPos pos) { return pos == SwitchPos::Down ? kSwitchBarFill : 0; }
+constexpr int switch_fill(const SwitchPos pos) { return pos == SwitchPos::Down ? kSwitchBarFill : 0; }
 
-constexpr std::string_view p7_config_label(bool enabled) {
+constexpr std::string_view p7_config_label(const bool enabled) {
     return enabled ? "P7 ADC: ENABLED (15-CH)" : "P7 ADC: DISABLED (OFF)";
 }
 
 // Four-character value of a P7 row: the raw count when the ADC is enabled, " OFF" otherwise.
-constexpr format::Text<4> p7_value(uint16_t raw, bool enabled) {
+constexpr format::Text<4> p7_value(const uint16_t raw, const bool enabled) {
     format::Text<4> t;
     if (enabled) {
         const auto digits = widgets::format_u16_4(std::min<uint16_t>(raw, kAdcFullScale));
@@ -1936,7 +1936,7 @@ constexpr format::Text<4> p7_value(uint16_t raw, bool enabled) {
 }
 
 // "ADDR: 0x50 (FT24C128A 16KB)" with the device address in hex.
-constexpr format::Text<27> eeprom_addr_line(uint8_t addr) {
+constexpr format::Text<27> eeprom_addr_line(const uint8_t addr) {
     format::Text<27> t;
     for (const char c : std::string_view{"ADDR: 0x"}) {
         t.push(c);
@@ -1956,7 +1956,7 @@ constexpr std::string_view eeprom_state_label(const storage::EepromStatus& e) {
     return e.read_ok ? "STATUS: READY (HEALTHY)" : "STATUS: READ ERR (FAIL)";
 }
 
-constexpr void draw_analog_page(Framebuffer& fb, std::size_t page, const input::Raw& adc) {
+constexpr void draw_analog_page(Framebuffer& fb, const std::size_t page, const input::Raw& adc) {
     const std::size_t start = page == 0 ? 0 : 6;
     for (std::size_t row = 0; row < kAnalogRows[page]; ++row) {
         const uint16_t raw = std::min<uint16_t>(adc[start + row], kAdcFullScale);
@@ -1964,7 +1964,7 @@ constexpr void draw_analog_page(Framebuffer& fb, std::size_t page, const input::
     }
 }
 
-constexpr void draw_ext_switches_page(Framebuffer& fb, const Switches& sw, bool enabled) {
+constexpr void draw_ext_switches_page(Framebuffer& fb, const Switches& sw, const bool enabled) {
     fb.draw_str_4x6(Point{2, 13}, ext_switch_config_label(enabled), false);
     fb.draw_str_4x6(Point{2, 23}, "SW:SE", false);
     widgets::draw_bar_gauge(fb, {{32, 23}, {30, 6}}, switch_fill(sw.se));
@@ -1975,7 +1975,7 @@ constexpr void draw_ext_switches_page(Framebuffer& fb, const Switches& sw, bool 
     fb.draw_str_4x6(Point{2, 44}, "Active-LOW mod to GND", false);
 }
 
-constexpr void draw_ext_adc_page(Framebuffer& fb, const input::Raw& adc, bool enabled) {
+constexpr void draw_ext_adc_page(Framebuffer& fb, const input::Raw& adc, const bool enabled) {
     fb.draw_str_4x6(Point{2, 13}, p7_config_label(enabled), false);
     for (std::size_t i = 0; i < kP7Names.size(); ++i) {
         const int y = 25 + static_cast<int>(i) * 7;
@@ -2029,7 +2029,7 @@ constexpr void render_system(Framebuffer& fb, const Live& live) {
 }
 
 // "+50%" with a forced sign, as the device shows Diff, Weight and Offset.
-constexpr format::Text<6> signed_percent(int v) {
+constexpr format::Text<6> signed_percent(const int v) {
     format::Text<6> t;
     t.push(v < 0 ? '-' : '+');
     for (const char c : format::format_int(v < 0 ? -v : v).view()) {
@@ -2040,7 +2040,7 @@ constexpr format::Text<6> signed_percent(int v) {
 }
 
 template <std::size_t N>
-constexpr std::string_view name_at(const std::array<std::string_view, N>& names, std::size_t idx) {
+constexpr std::string_view name_at(const std::array<std::string_view, N>& names, const std::size_t idx) {
     return names[std::min(idx, N - 1)];
 }
 
@@ -2054,7 +2054,7 @@ constexpr format::Text<N> text_of(std::string_view sv) {
 }
 
 // "M01:" for mix line 0..31.
-constexpr format::Text<4> mix_label(std::size_t idx) {
+constexpr format::Text<4> mix_label(const std::size_t idx) {
     const std::size_t num = idx + 1;
     format::Text<4> t;
     t.push('M');
@@ -2065,7 +2065,7 @@ constexpr format::Text<4> mix_label(std::size_t idx) {
 }
 
 // "CH12" for a non-zero target channel.
-constexpr format::Text<4> target_text(uint8_t ch) {
+constexpr format::Text<4> target_text(const uint8_t ch) {
     format::Text<4> t;
     t.push('C');
     t.push('H');
@@ -2073,7 +2073,7 @@ constexpr format::Text<4> target_text(uint8_t ch) {
     return t;
 }
 
-constexpr format::Text<11> mix_value(const storage::MixLine& mix, std::size_t idx) {
+constexpr format::Text<11> mix_value(const storage::MixLine& mix, const std::size_t idx) {
     switch (idx) {
         case 0:
             return mix.target_ch == 0 ? text_of<11>("Disabled") : text_of<11>(target_text(mix.target_ch).view());

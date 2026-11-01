@@ -11,7 +11,7 @@
 
 namespace ferrox::logic::labels {
 
-constexpr std::string_view model_type_label(uint8_t type) {
+constexpr std::string_view model_type_label(const uint8_t type) {
     switch (static_cast<mixer::ModelType>(type)) {
         case mixer::ModelType::Airplane: return "AIRPLANE";
         case mixer::ModelType::Glider: return "GLIDER";
@@ -28,12 +28,12 @@ inline constexpr std::array<std::string_view, 23> kSwitchCondNames{
     "SEv", "SF^", "SFv", "SG^", "SGv", "SH^", "SHv", "SWI^", "SWIv", "SWJ^", "SWJv",
 };
 
-constexpr std::string_view switch_cond_label(uint8_t cond) {
+constexpr std::string_view switch_cond_label(const uint8_t cond) {
     return cond < kSwitchCondNames.size() ? kSwitchCondNames[cond] : kSwitchCondNames[0];
 }
 
 // Vario sink mode: 0 mute, 1 pulse, 2 continuous (shown as DRONE).
-constexpr std::string_view vario_sink_mode_label(uint8_t mode) {
+constexpr std::string_view vario_sink_mode_label(const uint8_t mode) {
     switch (mode) {
         case 0: return "MUTE";
         case 1: return "PULSE";
@@ -41,7 +41,7 @@ constexpr std::string_view vario_sink_mode_label(uint8_t mode) {
     }
 }
 
-constexpr std::string_view vario_motor_mute_label(uint8_t mute) { return mute != 0 ? "ENABLED" : "DISABLED"; }
+constexpr std::string_view vario_motor_mute_label(const uint8_t mute) { return mute != 0 ? "ENABLED" : "DISABLED"; }
 
 inline constexpr std::array<std::string_view, 18> kChannelNames{
     "CH1 (AIL)", "CH2 (ELE)", "CH3 (THR)", "CH4 (RUD)", "CH5 (SA)",  "CH6 (SB)",
@@ -75,7 +75,7 @@ inline constexpr std::array<std::string_view, 46> kSourceNames{
 };
 
 // Channel function name. Wing/tail mix replaces the stick names on channels 1, 2, 4 and 6.
-constexpr std::string_view channel_source_name(std::size_t ch, const storage::ModelConfig& m) {
+constexpr std::string_view channel_source_name(const std::size_t ch, const storage::ModelConfig& m) {
     const uint8_t mix = m.wing_tail_mix;
     if (ch == 5 && mix == 3) {
         return "R.AIL";
@@ -95,7 +95,7 @@ constexpr std::string_view channel_source_name(std::size_t ch, const storage::Mo
 }
 
 // "N:NAME" for a 0-based channel index, e.g. "1:AIL", "18:None".
-constexpr format::Text<10> channel_label(std::size_t ch, const storage::ModelConfig& m) {
+constexpr format::Text<10> channel_label(const std::size_t ch, const storage::ModelConfig& m) {
     format::Text<10> t;
     format::detail::push_uint(t, static_cast<unsigned>(ch) + 1u);
     t.push(':');

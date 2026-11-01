@@ -14,7 +14,7 @@ namespace ferrox::logic::glyphs {
 using display::Point;
 
 /// 5x7 switch position arrow.
-constexpr void draw_switch_arrow(display::Framebuffer& fb, Point p, SwitchPos pos) {
+constexpr void draw_switch_arrow(display::Framebuffer& fb, const Point p, const SwitchPos pos) {
     const auto [x, y] = p;
     switch (pos) {
         case SwitchPos::Up:
@@ -36,7 +36,7 @@ constexpr void draw_switch_arrow(display::Framebuffer& fb, Point p, SwitchPos po
 }
 
 /// Compact 3x7 switch position arrow for dense rows.
-constexpr void draw_switch_arrow_compact(display::Framebuffer& fb, Point p, SwitchPos pos) {
+constexpr void draw_switch_arrow_compact(display::Framebuffer& fb, const Point p, const SwitchPos pos) {
     const auto [x, y] = p;
     switch (pos) {
         case SwitchPos::Up:
@@ -56,7 +56,7 @@ constexpr void draw_switch_arrow_compact(display::Framebuffer& fb, Point p, Swit
 }
 
 /// 11x7 battery gauge. The fill scales `mv` between `min_mv` and `max_mv` across 8 pixels.
-constexpr void draw_battery_gauge(display::Framebuffer& fb, Point p, uint16_t mv, widgets::Range range) {
+constexpr void draw_battery_gauge(display::Framebuffer& fb, const Point p, const uint16_t mv, const widgets::Range range) {
     const auto [x, y] = p;
     const auto [min_mv, max_mv] = range;
     fb.draw_vline({x, y + 2}, 3, true);
@@ -82,7 +82,7 @@ inline constexpr std::array<uint8_t, 95> kLogo28x27{
     227, 3,   0,   124, 30,  240, 128, 247, 1,   6,   248, 7,   96,  0,   14,
 };
 
-constexpr void draw_ferrox_logo(display::Framebuffer& fb, Point p) {
+constexpr void draw_ferrox_logo(display::Framebuffer& fb, const Point p) {
     for (int row = 0; row < kLogoHeight; ++row) {
         for (int col = 0; col < kLogoWidth; ++col) {
             const int bit = row * kLogoWidth + col;
@@ -112,7 +112,7 @@ inline constexpr std::array<Glyph12, 12> kMenuGlyphs{{
 }};
 
 /// Draws a 12x12 icon at p; only set bits are drawn, in colour `on`.
-constexpr void draw_glyph_12x12(display::Framebuffer& fb, Point p, const Glyph12& data, bool on) {
+constexpr void draw_glyph_12x12(display::Framebuffer& fb, const Point p, const Glyph12& data, const bool on) {
     for (int row = 0; row < 12; ++row) {
         for (int col = 0; col < 12; ++col) {
             const int bit = row * 12 + col;

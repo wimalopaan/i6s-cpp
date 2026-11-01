@@ -32,7 +32,7 @@ inline void init() {
     TIM1->SR = 0;
 }
 
-inline void on(logic::buzzer::FreqHz freq) {
+inline void on(const logic::buzzer::FreqHz freq) {
     const auto timing = logic::buzzer::pwm_timing(freq);
     TIM1->ARR = timing.arr;
     TIM1->CCR1 = timing.ccr;
@@ -55,7 +55,7 @@ struct Output {
     logic::buzzer::FreqHz applied{};
 
     // Applies the frequency from logic::buzzer::Player::output(). Zero means silent.
-    inline void sync(logic::buzzer::FreqHz target) {
+    inline void sync(const logic::buzzer::FreqHz target) {
         if (target == applied) {
             return;
         }

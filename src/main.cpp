@@ -131,7 +131,7 @@ void store_trims_in_model() {
 }
 
 // Plays a cue in the stored tone style. Cue::None is a no-op.
-void play_buzzer_cue(ferrox::logic::buzzer::Cue cue) {
+void play_buzzer_cue(const ferrox::logic::buzzer::Cue cue) {
     g_buzzer.play_cue(cue, ferrox::logic::buzzer::tone_style_from_u8(g_storage.radio.tone_style));
 }
 
@@ -147,7 +147,7 @@ void pump_buzzer(uint32_t& last_ms) {
 ferrox::logic::afhds2a::TxId tx_id_from_uid() {
     using namespace ferrox;
     const auto uid = chip::read_uid(chip::kProfile);
-    auto word = [&uid](std::size_t i) {
+    auto word = [&uid](const std::size_t i) {
         return static_cast<uint32_t>(uid[i]) | (static_cast<uint32_t>(uid[i + 1]) << 8) |
                (static_cast<uint32_t>(uid[i + 2]) << 16) | (static_cast<uint32_t>(uid[i + 3]) << 24);
     };
@@ -155,7 +155,7 @@ ferrox::logic::afhds2a::TxId tx_id_from_uid() {
 }
 
 // Silences the A7105 for CRSF models. Only changes state when the protocol changes.
-void set_rf_silenced(bool silenced) {
+void set_rf_silenced(const bool silenced) {
     if (!g_rf_ok || silenced == g_rf_silenced) {
         return;
     }
@@ -181,7 +181,7 @@ bool sim_applied() {
 #endif
 }
 
-void set_sim_applied(bool sim) {
+void set_sim_applied(const bool sim) {
 #if FERROX_USE_USB
     g_sim_mode = sim;
 #else
@@ -258,7 +258,7 @@ void apply_trainer_config(const ferrox::logic::storage::RadioConfig& r) {
 }
 
 // Stores the current model, then loads the model at `index` as the active one.
-void switch_model(uint8_t index) {
+void switch_model(const uint8_t index) {
     using namespace ferrox::logic::storage;
     using Dev = ferrox::hw::I2c2Eeprom;
     store_trims_in_model();

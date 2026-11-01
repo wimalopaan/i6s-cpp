@@ -52,7 +52,7 @@ inline constexpr uint8_t kBindPower = kPowerTest;
 
 /// Maps the user power index (0 HIGH, 1 MID, 2 LOW, 3 TEST) to the TX_TEST register value.
 /// Unknown indices fall back to HIGH.
-constexpr uint8_t power_from_index(uint8_t idx) {
+constexpr uint8_t power_from_index(const uint8_t idx) {
     switch (idx) {
         case 1: return kPowerMid;
         case 2: return kPowerLow;
@@ -61,11 +61,11 @@ constexpr uint8_t power_from_index(uint8_t idx) {
     }
 }
 
-constexpr uint8_t cmd_write(uint8_t addr) { return static_cast<uint8_t>(addr & 0x3F); }
-constexpr uint8_t cmd_read(uint8_t addr) { return static_cast<uint8_t>((addr & 0x3F) | 0x40); }
+constexpr uint8_t cmd_write(const uint8_t addr) { return static_cast<uint8_t>(addr & 0x3F); }
+constexpr uint8_t cmd_read(const uint8_t addr) { return static_cast<uint8_t>((addr & 0x3F) | 0x40); }
 
 /// MODE bit 5 (CRCF) is 0 when the last received packet passed CRC.
-constexpr bool crc_ok(uint8_t mode_reg) { return (mode_reg & (1u << 5)) == 0; }
+constexpr bool crc_ok(const uint8_t mode_reg) { return (mode_reg & (1u << 5)) == 0; }
 
 // Register init for AFHDS 2A at 500 kbps GFSK, indexed by register address.
 inline constexpr std::array<uint8_t, 50> kAfhds2aInit = {

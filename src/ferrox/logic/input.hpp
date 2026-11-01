@@ -59,7 +59,7 @@ struct InputState {
 
 enum class AdcMode : uint8_t { Default = 0, TwoPos, ThreePos, SixPos, Pot, PotDetent, InstantTrim };
 
-constexpr AdcMode mode_from_u8(uint8_t val) {
+constexpr AdcMode mode_from_u8(const uint8_t val) {
     switch (val) {
         case 1: return AdcMode::TwoPos;
         case 2: return AdcMode::ThreePos;
@@ -72,7 +72,7 @@ constexpr AdcMode mode_from_u8(uint8_t val) {
 }
 
 /// Effective mode for aux index 0..9 (0..3: SA..SD, 4..5: VRA..VRB, 6..9: VRC..VRF).
-constexpr AdcMode resolve_mode(std::size_t idx, uint8_t val) {
+constexpr AdcMode resolve_mode(const std::size_t idx, const uint8_t val) {
     const AdcMode mode = mode_from_u8(val);
     if (mode != AdcMode::Default) {
         return mode;
@@ -87,7 +87,7 @@ constexpr AdcMode resolve_mode(std::size_t idx, uint8_t val) {
 }
 
 /// Raw ADC index for aux index 0..9.
-constexpr std::size_t aux_index_to_raw(std::size_t ch) {
+constexpr std::size_t aux_index_to_raw(const std::size_t ch) {
     switch (ch) {
         case 0: return 4;   // SA: PA4
         case 1: return 5;   // SB: PA5
@@ -102,7 +102,7 @@ constexpr std::size_t aux_index_to_raw(std::size_t ch) {
     }
 }
 
-constexpr uint8_t decode_switch_6pos(uint16_t raw) {
+constexpr uint8_t decode_switch_6pos(const uint16_t raw) {
     if (raw < 682) return 1;
     if (raw < 1365) return 2;
     if (raw < 2048) return 3;
@@ -111,13 +111,13 @@ constexpr uint8_t decode_switch_6pos(uint16_t raw) {
     return 6;
 }
 
-constexpr SwitchPos decode_switch_3pos(uint16_t raw) {
+constexpr SwitchPos decode_switch_3pos(const uint16_t raw) {
     if (raw < 1365) return SwitchPos::Up;
     if (raw < 2730) return SwitchPos::Mid;
     return SwitchPos::Down;
 }
 
-constexpr SwitchPos decode_switch_2pos(uint16_t raw) {
+constexpr SwitchPos decode_switch_2pos(const uint16_t raw) {
     return raw < 2048 ? SwitchPos::Up : SwitchPos::Down;
 }
 
@@ -131,7 +131,7 @@ struct AxisCalib {
     uint16_t deadband = 0;
 
     /// Passes changes of 6 counts or more immediately; averages small jitter.
-    constexpr uint16_t filter_raw(uint16_t raw) {
+    constexpr uint16_t filter_raw(const uint16_t raw) {
         if (filtered_raw == 0) {
             filtered_raw = static_cast<uint32_t>(raw) * 4;
         }
@@ -145,12 +145,12 @@ struct AxisCalib {
         return static_cast<uint16_t>(filtered_raw / 4);
     }
 
-    constexpr int16_t finish(int32_t val) const {
+    constexpr int16_t finish(const int32_t val) const {
         return static_cast<int16_t>(invert ? -val : val);
     }
 
     /// Normalizes around the center with the configured deadband.
-    constexpr int16_t normalize(uint16_t raw) {
+    constexpr int16_t normalize(const uint16_t raw) {
         const uint16_t s = filter_raw(raw);
         int32_t val = 0;
         if (deadband > 0 && static_cast<uint16_t>(std::abs(int32_t{s} - center)) <= deadband) {
@@ -170,7 +170,7 @@ struct AxisCalib {
     }
 
     /// Normalizes a center-detented pot: solid zero inside the detent window.
-    constexpr int16_t normalize_detent(AdcReading raw, Deadband window) {
+    constexpr int16_t normalize_detent(const AdcReading raw, const Deadband window) {
         const uint16_t s = filter_raw(raw.value);
         int32_t val = 0;
         if (static_cast<uint16_t>(std::abs(int32_t{s} - center)) <= window.value) {
@@ -190,10 +190,10 @@ struct AxisCalib {
     }
 
 private:
-    static constexpr uint16_t sat_sub(uint16_t a, uint16_t b) {
+    static constexpr uint16_t sat_sub(const uint16_t a, const uint16_t b) {
         return a > b ? static_cast<uint16_t>(a - b) : uint16_t{0};
     }
-    static constexpr uint16_t sat_add(uint16_t a, uint16_t b) {
+    static constexpr uint16_t sat_add(const uint16_t a, const uint16_t b) {
         const uint32_t s = uint32_t{a} + b;
         return s > 0xFFFF ? uint16_t{0xFFFF} : static_cast<uint16_t>(s);
     }
@@ -226,7 +226,7 @@ constexpr void apply_calibration(const storage::RadioConfig& cfg, Calibration& c
     }
 
     const uint16_t stick_deadband = cfg.gimbal_type == 1 ? kHallDeadband : 0;
-    auto apply_stick = [&](AxisCalib& axis, std::size_t idx) {
+    auto apply_stick = [&](AxisCalib& axis, const std::size_t idx) {
         axis.invert = ((cfg.stick_invert_mask >> (idx & 3)) & 1u) != 0;
         axis.deadband = stick_deadband;
         axis.min = cfg.sticks[idx].min;
@@ -250,13 +250,13 @@ constexpr void apply_calibration(const storage::RadioConfig& cfg, Calibration& c
     }
 }
 
-constexpr SwitchPos decode_switch_for(AdcMode mode, uint16_t raw) {
+constexpr SwitchPos decode_switch_for(const AdcMode mode, const uint16_t raw) {
     return mode == AdcMode::ThreePos ? decode_switch_3pos(raw) : decode_switch_2pos(raw);
 }
 
 constexpr Switches decode_switches(const Raw& raw, const BoardSwitches& board, const Calibration& c) {
     Switches s{};
-    const auto mode = [&](std::size_t i) { return resolve_mode(i, c.adc_modes[i]); };
+    const auto mode = [&](const std::size_t i) { return resolve_mode(i, c.adc_modes[i]); };
 
     s.sa = mode(0) == AdcMode::ThreePos ? decode_switch_3pos(raw[4]) : decode_switch_2pos(raw[4]);
     s.sb = mode(1) == AdcMode::TwoPos ? decode_switch_2pos(raw[5]) : decode_switch_3pos(raw[5]);
@@ -269,7 +269,7 @@ constexpr Switches decode_switches(const Raw& raw, const BoardSwitches& board, c
     }
 
     if (c.ext_adc) {
-        const auto ext = [&](std::size_t aux_idx) {
+        const auto ext = [&](const std::size_t aux_idx) {
             const AdcMode m = mode(aux_idx);
             return (m == AdcMode::ThreePos || m == AdcMode::TwoPos) ? decode_switch_for(m, raw[aux_idx + 5])
                                                                     : SwitchPos::Up;

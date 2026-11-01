@@ -80,28 +80,28 @@ inline constinit lu::Millis g_stream_last{};
 inline constinit Reset g_reset = Reset::None;
 inline constinit lu::Millis g_reset_at{};
 
-inline volatile uint16_t& ep_reg(uint8_t n) {
+inline volatile uint16_t& ep_reg(const uint8_t n) {
     return reinterpret_cast<volatile uint16_t*>(USB)[2u * n];
 }
 
-inline volatile uint16_t& pma(uint16_t off) {
+inline volatile uint16_t& pma(const uint16_t off) {
     return *reinterpret_cast<volatile uint16_t*>(kPmaBase + 2u * off);
 }
 
-inline void spin(uint32_t cycles) {
+inline void spin(const uint32_t cycles) {
     for (uint32_t i = 0; i < cycles; ++i) {
         __NOP();
     }
 }
 
 // CTR bits are rc_w0 (write 1 to keep), DTOG and STAT bits toggle on write 1.
-inline void ep_set_status(uint8_t n, uint16_t stat_mask, uint16_t status) {
+inline void ep_set_status(const uint8_t n, const uint16_t stat_mask, const uint16_t status) {
     volatile uint16_t& r = ep_reg(n);
     const uint16_t cur = r;
     r = static_cast<uint16_t>((cur & kEpKeepMask) | kEpCtrMask | ((cur ^ status) & stat_mask));
 }
 
-inline void ep_set_dtog(uint8_t n, uint16_t dtog_bit, bool one) {
+inline void ep_set_dtog(const uint8_t n, const uint16_t dtog_bit, const bool one) {
     volatile uint16_t& r = ep_reg(n);
     const uint16_t cur = r;
     const bool is_one = (cur & dtog_bit) != 0;
@@ -109,13 +109,13 @@ inline void ep_set_dtog(uint8_t n, uint16_t dtog_bit, bool one) {
 }
 
 // Clears the CTR flag for `dir` and keeps the other direction's flag.
-inline void ep_ack(uint8_t n, Dir dir) {
+inline void ep_ack(const uint8_t n, const Dir dir) {
     volatile uint16_t& r = ep_reg(n);
     const uint16_t cur = r;
     r = static_cast<uint16_t>((cur & kEpKeepMask) | (dir == Dir::Rx ? USB_EP_CTR_TX : USB_EP_CTR_RX));
 }
 
-inline void pma_write(uint16_t off, std::span<const uint8_t> src) {
+inline void pma_write(const uint16_t off, std::span<const uint8_t> src) {
     for (std::size_t i = 0; i < src.size(); i += 2) {
         const uint16_t lo = src[i];
         const uint16_t hi = i + 1 < src.size() ? src[i + 1] : 0;
@@ -123,7 +123,7 @@ inline void pma_write(uint16_t off, std::span<const uint8_t> src) {
     }
 }
 
-inline void pma_read(uint16_t off, std::span<uint8_t> dst) {
+inline void pma_read(const uint16_t off, std::span<uint8_t> dst) {
     for (std::size_t i = 0; i < dst.size(); i += 2) {
         const uint16_t w = pma(static_cast<uint16_t>(off + i));
         dst[i] = static_cast<uint8_t>(w & 0xFF);
@@ -134,7 +134,7 @@ inline void pma_read(uint16_t off, std::span<uint8_t> dst) {
 }
 
 // BTABLE entry for endpoint n lives at logical offset 8 * n.
-inline void set_buffers(uint8_t n, uint16_t tx_off, uint16_t rx_off, uint16_t rx_count) {
+inline void set_buffers(const uint8_t n, const uint16_t tx_off, const uint16_t rx_off, const uint16_t rx_count) {
     const auto base = static_cast<uint16_t>(8u * n);
     pma(base) = tx_off;
     pma(static_cast<uint16_t>(base + 2)) = 0;
@@ -142,7 +142,7 @@ inline void set_buffers(uint8_t n, uint16_t tx_off, uint16_t rx_off, uint16_t rx
     pma(static_cast<uint16_t>(base + 6)) = rx_count;
 }
 
-inline void ep_send(uint8_t n, uint16_t tx_off, std::span<const uint8_t> data) {
+inline void ep_send(const uint8_t n, const uint16_t tx_off, std::span<const uint8_t> data) {
     pma_write(tx_off, data);
     pma(static_cast<uint16_t>(8u * n + 2)) = static_cast<uint16_t>(data.size());
     ep_set_status(n, kTxStatMask, USB_EP_TX_VALID);
@@ -160,7 +160,7 @@ inline void ep0_stall() {
 }
 
 // Data stage IN: the host asked for `wanted` bytes of `data`.
-inline void ep0_send_data(std::span<const uint8_t> data, uint16_t wanted) {
+inline void ep0_send_data(std::span<const uint8_t> data, const uint16_t wanted) {
     const auto len = std::min<std::size_t>(data.size(), wanted);
     g_ctl_data = data.first(len);
     g_zlp = len > 0 && len < wanted && len % lu::kControlPacketSize == 0;
@@ -175,14 +175,14 @@ inline void ep0_status_in() {
     ep_send(0, kEp0TxOff, {});
 }
 
-inline void ep0_expect_out(Stage stage) {
+inline void ep0_expect_out(const Stage stage) {
     g_stage = stage;
     ep_set_dtog(0, USB_EP_DTOG_RX, true);
     ep_set_status(0, kRxStatMask, USB_EP_RX_VALID);
 }
 
 template <std::size_t N>
-inline void ep0_stage_blob(const lu::Blob<N>& blob, uint16_t wanted) {
+inline void ep0_stage_blob(const lu::Blob<N>& blob, const uint16_t wanted) {
     static_assert(N <= 100, "control staging buffer too small");
     g_ctl_store = {};
     g_ctl_store.put_all(blob.view());
@@ -403,7 +403,7 @@ inline void on_reset() {
 
 // Bulk OUT: copy the packet into the RX ring (bytes beyond its free space are dropped), then re-arm.
 // Bulk IN completion only needs its CTR flag cleared; poll() queues the next chunk.
-inline void cdc_isr(uint16_t reg) {
+inline void cdc_isr(const uint16_t reg) {
     if ((reg & USB_EP_CTR_RX) != 0) {
         const auto count = static_cast<std::size_t>(pma(static_cast<uint16_t>(8u * kCdcEp + 6)) & 0x3FFu);
         const std::size_t n = std::min<std::size_t>(count, kCdcPacket);
@@ -467,7 +467,7 @@ inline void on_irq() {
 }
 
 /// Sends the gamepad report on the HID IN endpoint every kHidIntervalMs when the previous one has been taken.
-inline void poll_hid(lu::Millis now, std::span<const uint16_t, logic::kNumChannels> chs, const logic::Switches& sw) {
+inline void poll_hid(const lu::Millis now, std::span<const uint16_t, logic::kNumChannels> chs, const logic::Switches& sw) {
     if (!lu::has_hid(g_mode) || g_config == 0) {
         return;
     }
@@ -511,7 +511,7 @@ inline void cdc_reset_state() {
     g_reset = Reset::None;
 }
 
-inline void request_reset(Reset kind, lu::Millis now) {
+inline void request_reset(const Reset kind, const lu::Millis now) {
     g_reset = kind;
     g_reset_at = now;
 }
@@ -524,8 +524,8 @@ inline void request_reset(Reset kind, lu::Millis now) {
 }
 
 // Returns true when the CLI should print its prompt again.
-inline bool run_command(lu::Command cmd, lu::Millis now, std::span<const uint16_t, logic::kNumChannels> chs,
-                        uint16_t battery_mv) {
+inline bool run_command(const lu::Command cmd, const lu::Millis now,
+                        std::span<const uint16_t, logic::kNumChannels> chs, const uint16_t battery_mv) {
     std::array<char, kTelemBufSize> buf{};
     const auto push_buf = [&buf](std::size_t n) {
         g_tx.push_text(std::string_view(buf.data(), n));
@@ -572,8 +572,8 @@ inline bool run_command(lu::Command cmd, lu::Millis now, std::span<const uint16_
     return true;
 }
 
-inline void handle_rx_byte(uint8_t b, lu::Millis now, std::span<const uint16_t, logic::kNumChannels> chs,
-                           uint16_t battery_mv) {
+inline void handle_rx_byte(const uint8_t b, const lu::Millis now,
+                           std::span<const uint16_t, logic::kNumChannels> chs, const uint16_t battery_mv) {
     const auto action = g_line.feed(b);
     if (g_streaming) {
         // Any key ends streaming; the LF of a CRLF pair is not a keypress.
@@ -608,7 +608,7 @@ inline void handle_rx_byte(uint8_t b, lu::Millis now, std::span<const uint16_t, 
 }
 
 // CLI and telemetry streaming on the CDC pair, in main context. Shares no state with the ISR except the RX ring.
-inline void poll_cdc(lu::Millis now, std::span<const uint16_t, logic::kNumChannels> chs, uint16_t battery_mv) {
+inline void poll_cdc(const lu::Millis now, std::span<const uint16_t, logic::kNumChannels> chs, const uint16_t battery_mv) {
     if (!lu::has_cdc(g_mode) || g_config == 0) {
         cdc_reset_state();
         return;
@@ -639,8 +639,8 @@ inline void poll_cdc(lu::Millis now, std::span<const uint16_t, logic::kNumChanne
 }
 
 /// Per-loop service: HID report at its rate, CDC CLI and telemetry streaming.
-inline void poll(lu::Millis now, std::span<const uint16_t, logic::kNumChannels> chs, const logic::Switches& sw,
-                 uint16_t battery_mv) {
+inline void poll(const lu::Millis now, std::span<const uint16_t, logic::kNumChannels> chs, const logic::Switches& sw,
+                 const uint16_t battery_mv) {
     poll_hid(now, chs, sw);
     poll_cdc(now, chs, battery_mv);
 }
@@ -651,7 +651,7 @@ inline bool is_sim_mode() {
 }
 
 /// Starts the device stack in `mode` (pull-up on, interrupts enabled).
-inline void start(UsbMode mode) {
+inline void start(const UsbMode mode) {
     g_mode = mode;
 
     RCC->AHBENR |= RCC_AHBENR_GPIOAEN;
@@ -695,7 +695,7 @@ inline void stop() {
 }
 
 /// Re-inits the stack when the stored mode changes (Radio Setup row); no-op otherwise.
-inline void set_mode(UsbMode mode) {
+inline void set_mode(const UsbMode mode) {
     if (mode == g_mode) {
         return;
     }

@@ -87,7 +87,7 @@ struct Modal {
     friend constexpr bool operator==(const Modal&, const Modal&) = default;
 };
 
-constexpr void reset_counters(State& s, Seconds limit) {
+constexpr void reset_counters(State& s, const Seconds limit) {
     s.remaining = limit;
     s.elapsed = Seconds{};
     s.acc_ms = 0;
@@ -95,7 +95,7 @@ constexpr void reset_counters(State& s, Seconds limit) {
 }
 
 // Manual reset from the cancel hold also starts the confirmation toast and a cooldown.
-constexpr void manual_reset(State& s, Seconds limit) {
+constexpr void manual_reset(State& s, const Seconds limit) {
     reset_counters(s, limit);
     s.cancel_hold_ms = 0;
     s.cancel_waiting_release = true;
@@ -103,7 +103,7 @@ constexpr void manual_reset(State& s, Seconds limit) {
     s.cooldown_ms = kCooldownMs;
 }
 
-constexpr uint32_t sat_sub(uint32_t a, uint32_t b) {
+constexpr uint32_t sat_sub(const uint32_t a, const uint32_t b) {
     return a > b ? a - b : 0;
 }
 

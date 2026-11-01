@@ -75,7 +75,7 @@ struct RxId {
 };
 
 // Hopping table derived from the TX UID (LCG + band/separation rules).
-constexpr HoppingTable hopping_table(TxId tx) {
+constexpr HoppingTable hopping_table(const TxId tx) {
     HoppingTable table{};
     std::size_t idx = 0;
     uint32_t rnd = tx.value;
@@ -103,7 +103,7 @@ constexpr HoppingTable hopping_table(TxId tx) {
     return table;
 }
 
-constexpr uint16_t clamp_channel_us(uint16_t us) {
+constexpr uint16_t clamp_channel_us(const uint16_t us) {
     return us < kChannelMinUs ? kChannelMinUs : (us > kChannelMaxUs ? kChannelMaxUs : us);
 }
 
@@ -117,29 +117,29 @@ struct SbusOut {
     constexpr bool operator==(const SbusOut&) const = default;
 };
 
-constexpr RxSettings make_rx_settings(uint16_t rate_hz, PpmOut ppm_out, SbusOut sbus) {
+constexpr RxSettings make_rx_settings(const uint16_t rate_hz, const PpmOut ppm_out, const SbusOut sbus) {
     const uint16_t r = rate_hz < kRateMinHz ? kRateMinHz : (rate_hz > kRateMaxHz ? kRateMaxHz : rate_hz);
     return RxSettings{r, ppm_out.value, sbus.value};
 }
 
 // RF power index is cyclic in the UI; out-of-range values fall back to 0.
-constexpr uint8_t clamp_rf_power(uint8_t idx) { return idx > 3 ? 0 : idx; }
+constexpr uint8_t clamp_rf_power(const uint8_t idx) { return idx > 3 ? 0 : idx; }
 
 // A7105 raw RSSI register value -> percent (0..100).
-constexpr uint8_t rssi_from_raw(uint8_t raw) {
+constexpr uint8_t rssi_from_raw(const uint8_t raw) {
     const int32_t v = 256 - (static_cast<int32_t>(raw) * 8) / 5;
     return static_cast<uint8_t>(v < 0 ? 0 : (v > 100 ? 100 : v));
 }
 
 namespace detail {
 
-constexpr void put_u32_le(Packet& p, std::size_t off, uint32_t v) {
+constexpr void put_u32_le(Packet& p, const std::size_t off, const uint32_t v) {
     for (std::size_t i = 0; i < 4; ++i) {
         p[off + i] = static_cast<uint8_t>(v >> (8 * i));
     }
 }
 
-constexpr void put_header(Packet& p, uint8_t cmd, TxId tx, RxId rx) {
+constexpr void put_header(Packet& p, const uint8_t cmd, const TxId tx, const RxId rx) {
     p[0] = cmd;
     put_u32_le(p, 1, tx.value);
     put_u32_le(p, 5, rx.value);
@@ -149,7 +149,7 @@ constexpr void put_header(Packet& p, uint8_t cmd, TxId tx, RxId rx) {
 
 // 14 base channels as 12-bit LE values in slots 0..13, channels 15..18 split
 // across the upper nibbles of slots 0..11 (iBUS-style extension).
-constexpr Packet build_sticks(TxId tx, RxId rx,
+constexpr Packet build_sticks(const TxId tx, const RxId rx,
                               const std::array<uint16_t, kNumChannels>& ch) {
     Packet p{};
     detail::put_header(p, kPacketSticks, tx, rx);
@@ -168,7 +168,7 @@ constexpr Packet build_sticks(TxId tx, RxId rx,
     return p;
 }
 
-constexpr Packet build_settings(TxId tx, RxId rx, const RxSettings& s) {
+constexpr Packet build_settings(const TxId tx, const RxId rx, const RxSettings& s) {
     Packet p{};
     detail::put_header(p, kPacketSettings, tx, rx);
     p[9] = 0xFD;
@@ -187,7 +187,7 @@ constexpr Packet build_settings(TxId tx, RxId rx, const RxSettings& s) {
     return p;
 }
 
-constexpr Packet build_failsafe(TxId tx, RxId rx) {
+constexpr Packet build_failsafe(const TxId tx, const RxId rx) {
     Packet p{};
     detail::put_header(p, kPacketFailsafe, tx, rx);
     for (std::size_t ch = 0; ch < 14; ++ch) {
@@ -198,7 +198,7 @@ constexpr Packet build_failsafe(TxId tx, RxId rx) {
     return p;
 }
 
-constexpr Packet build_bind(TxId tx, RxId rx, BindStep step, const HoppingTable& hop) {
+constexpr Packet build_bind(const TxId tx, const RxId rx, const BindStep step, const HoppingTable& hop) {
     Packet p{};
     detail::put_u32_le(p, 1, tx.value);
     switch (step) {
@@ -232,7 +232,7 @@ constexpr Packet build_bind(TxId tx, RxId rx, BindStep step, const HoppingTable&
     return p;
 }
 
-constexpr uint32_t read_u32_le(const Frame& f, std::size_t off) {
+constexpr uint32_t read_u32_le(const Frame& f, const std::size_t off) {
     return static_cast<uint32_t>(f[off]) | (static_cast<uint32_t>(f[off + 1]) << 8) |
            (static_cast<uint32_t>(f[off + 2]) << 16) | (static_cast<uint32_t>(f[off + 3]) << 24);
 }
@@ -251,14 +251,14 @@ struct Link {
     uint8_t rf_power_idx = 0;
     Telemetry telemetry{};
 
-    constexpr explicit Link(TxId uid) : tx_id(uid) {}
+    constexpr explicit Link(const TxId uid) : tx_id(uid) {}
 
-    constexpr void set_rx_settings(uint16_t rate_hz, PpmOut ppm_out, SbusOut sbus) {
+    constexpr void set_rx_settings(const uint16_t rate_hz, const PpmOut ppm_out, const SbusOut sbus) {
         settings = make_rx_settings(rate_hz, ppm_out, sbus);
         next = PacketKind::Settings;
     }
 
-    constexpr void set_rf_power(uint8_t idx) { rf_power_idx = clamp_rf_power(idx); }
+    constexpr void set_rf_power(const uint8_t idx) { rf_power_idx = clamp_rf_power(idx); }
 
     // Receiver answer to a bind request: rx[9] == 0x01 carries the RX ID.
     constexpr bool on_bind_reply(const Frame& rx) {
@@ -270,7 +270,7 @@ struct Link {
         return true;
     }
 
-    constexpr RxEvent on_downlink(const Frame& rx, uint8_t raw_rssi, uint32_t now_ms) {
+    constexpr RxEvent on_downlink(const Frame& rx, const uint8_t raw_rssi, const uint32_t now_ms) {
         if (rx[0] != 0xAA && rx[0] != 0xAC) {
             return RxEvent::Ignored;
         }
@@ -307,7 +307,7 @@ struct Link {
     }
 
 private:
-    constexpr void parse_sensors(const Frame& rx, uint32_t now_ms) {
+    constexpr void parse_sensors(const Frame& rx, const uint32_t now_ms) {
         for (std::size_t off = 10; off + 4 <= kRxPacketSize; off += 4) {
             const uint8_t id = rx[off];
             const auto val = static_cast<uint16_t>(rx[off + 2] | (rx[off + 3] << 8));

@@ -11,7 +11,7 @@ namespace ferrox::logic::curve {
 using Points = std::array<uint8_t, 17>;
 
 /// Number of points for a stored mode (5, 7 or 9). Any other value is treated as 5.
-constexpr std::size_t point_count(uint8_t pts) {
+constexpr std::size_t point_count(const uint8_t pts) {
     return pts == 9 ? 9 : (pts == 7 ? 7 : 5);
 }
 
@@ -29,7 +29,7 @@ struct Fraction {
 };
 
 /// Catmull-Rom cubic between p1 and p2 at t (0..256 fixed point). Result clamped to 0..1000.
-constexpr int32_t catmull_rom(Knots k, Fraction frac) {
+constexpr int32_t catmull_rom(const Knots k, const Fraction frac) {
     const auto [p0, p1, p2, p3] = k;
     const int32_t t = frac.value;
     const int32_t t2 = (t * t) / 256;
@@ -44,7 +44,7 @@ constexpr int32_t catmull_rom(Knots k, Fraction frac) {
 }
 
 template <std::size_t N>
-constexpr uint16_t evaluate_n(int32_t x, bool smooth, const Points& c) {
+constexpr uint16_t evaluate_n(const int32_t x, const bool smooth, const Points& c) {
     std::array<int32_t, N> pts{};
     for (std::size_t i = 0; i < N; ++i) {
         pts[i] = c[i] * 10;
@@ -75,7 +75,7 @@ constexpr uint16_t evaluate_n(int32_t x, bool smooth, const Points& c) {
 }
 
 /// Maps the input 0..1000 through the curve. Output 0..1000.
-constexpr uint16_t evaluate(uint16_t input, uint8_t pts, bool smooth, const Points& c) {
+constexpr uint16_t evaluate(const uint16_t input, const uint8_t pts, const bool smooth, const Points& c) {
     const auto x = static_cast<int32_t>(std::min<uint16_t>(input, 1000));
     switch (point_count(pts)) {
         case 9: return evaluate_n<9>(x, smooth, c);
@@ -85,7 +85,7 @@ constexpr uint16_t evaluate(uint16_t input, uint8_t pts, bool smooth, const Poin
 }
 
 /// Curve output (0..1000) rounded to a percent value (0..100).
-constexpr uint8_t to_percent(uint16_t out) {
+constexpr uint8_t to_percent(const uint16_t out) {
     return static_cast<uint8_t>(std::min<uint16_t>((out + 5) / 10, 100));
 }
 

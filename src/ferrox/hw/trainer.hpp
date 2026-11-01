@@ -38,7 +38,7 @@ inline constinit bool g_out_enabled = false;
 // ISR-only state.
 inline constinit uint16_t g_last_capture = 0;
 
-inline void set_irq_priority(IRQn_Type irq) {
+inline void set_irq_priority(const IRQn_Type irq) {
     reinterpret_cast<volatile uint8_t*>(&NVIC->IP[0])[irq] = kIrqPriorityRaw;
 }
 
@@ -65,7 +65,7 @@ inline void init() {
 }
 
 /// Starts or stops PPM in and out. Stopping drives PF10 high (idle line).
-inline void set_enabled(bool in, bool out) {
+inline void set_enabled(const bool in, const bool out) {
     arch::CriticalSection cs;
     // Restart the counter only from a stopped timer, so a running output schedule is not shifted.
     if ((in || out) && (TIM15->CR1 & TIM_CR1_CEN) == 0) {
@@ -112,7 +112,7 @@ inline void publish_out(const std::array<uint16_t, N>& chs) {
 }
 
 /// Advances the student signal-loss timer by dt_ms.
-inline void tick(logic::trainer::DeltaMs dt) {
+inline void tick(const logic::trainer::DeltaMs dt) {
     arch::CriticalSection cs;
     g_decoder.tick(dt);
 }

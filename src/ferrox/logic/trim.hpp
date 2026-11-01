@@ -28,13 +28,13 @@ struct TrimValues {
 };
 
 /// Adds the linear trim offset to a pulse width and clamps it to the channel range.
-constexpr uint16_t apply(uint16_t base_us, int8_t trim) {
+constexpr uint16_t apply(const uint16_t base_us, const int8_t trim) {
     const int32_t offset = static_cast<int32_t>(trim) * kTrimStepUs;
     return static_cast<uint16_t>(std::clamp<int32_t>(base_us + offset, kChannelMinUs, kChannelMaxUs));
 }
 
 /// Throttle trim: mode 0 = locked, 1 = idle trim (tapers to 0 at full stick), 2 = linear.
-constexpr uint16_t apply_throttle(uint16_t base_us, int8_t trim, uint8_t mode) {
+constexpr uint16_t apply_throttle(const uint16_t base_us, const int8_t trim, const uint8_t mode) {
     switch (mode) {
         case 1: {
             const int32_t max_offset = static_cast<int32_t>(trim) * kTrimStepUs;
@@ -55,7 +55,7 @@ constexpr uint16_t apply_throttle(uint16_t base_us, int8_t trim, uint8_t mode) {
 enum class Axis : uint8_t { Roll, Pitch, Throttle, Yaw };
 
 /// Footer letter of an axis (Rust `format_trim`).
-constexpr char axis_letter(Axis axis) {
+constexpr char axis_letter(const Axis axis) {
     switch (axis) {
         case Axis::Roll: return 'A';
         case Axis::Pitch: return 'E';
@@ -65,7 +65,7 @@ constexpr char axis_letter(Axis axis) {
     return ' ';
 }
 
-constexpr int8_t value_of(const TrimValues& values, Axis axis) {
+constexpr int8_t value_of(const TrimValues& values, const Axis axis) {
     switch (axis) {
         case Axis::Roll: return values.roll;
         case Axis::Pitch: return values.pitch;
@@ -75,7 +75,7 @@ constexpr int8_t value_of(const TrimValues& values, Axis axis) {
     return 0;
 }
 
-constexpr int8_t& value_of(TrimValues& values, Axis axis) {
+constexpr int8_t& value_of(TrimValues& values, const Axis axis) {
     switch (axis) {
         case Axis::Roll: return values.roll;
         case Axis::Pitch: return values.pitch;
@@ -106,7 +106,7 @@ struct InstantSticks {
 enum class InstantResult : uint8_t { None, Adjusted, Reset };
 
 /// Trim steps for one stick deflection: 40 counts per step, rounded half away from zero (Rust `round_step`).
-constexpr int8_t instant_step(int16_t stick) {
+constexpr int8_t instant_step(const int16_t stick) {
     const int32_t v = stick;
     return static_cast<int8_t>(v >= 0 ? (v + 20) / 40 : (v - 20) / 40);
 }
@@ -132,7 +132,7 @@ constexpr bool instant_switch_down(const storage::RadioConfig& radio, const inpu
 struct InstantEdge {
     bool prev = false;
 
-    constexpr bool update(bool active) {
+    constexpr bool update(const bool active) {
         const bool rising = active && !prev;
         prev = active;
         return rising;
@@ -158,7 +158,7 @@ struct Controller {
     uint32_t repeat_ms = 0;
 
     /// Runs one update from the raw key matrix. Not called while a menu is open (as in Rust).
-    constexpr Event update(uint16_t keys, vario::Millis dt) {
+    constexpr Event update(const uint16_t keys, const vario::Millis dt) {
         if (active_ms > 0) {
             active_ms = active_ms > dt.value ? active_ms - dt.value : 0;
             if (active_ms == 0) {
@@ -205,13 +205,13 @@ struct Controller {
     }
 
     /// Steps the trim of one key: even bits add a step, odd bits subtract one.
-    constexpr Event step_key(uint8_t key) {
+    constexpr Event step_key(const uint8_t key) {
         const auto axis = static_cast<Axis>(key / 2);
         const int8_t delta = (key % 2 == 0) ? 1 : -1;
         return step(axis, delta);
     }
 
-    constexpr Event step(Axis axis, int8_t delta) {
+    constexpr Event step(const Axis axis, const int8_t delta) {
         if (axis == Axis::Throttle && !throttle_enabled) {
             return {Event::Kind::Limit, 0};
         }
@@ -257,7 +257,7 @@ struct Controller {
     }
 
 private:
-    static constexpr void add_clamped(int8_t& slot, int8_t delta) {
+    static constexpr void add_clamped(int8_t& slot, const int8_t delta) {
         slot = static_cast<int8_t>(std::clamp<int>(slot + delta, kTrimMin, kTrimMax));
     }
 
@@ -288,7 +288,7 @@ struct AutoSave {
 
     /// Runs one tick. Returns true when the caller should write the model now.
     /// `armed` is the arm state of the previous tick (Rust `pipeline.prev_armed`).
-    constexpr bool tick(const TrimValues& values, bool armed, vario::Millis dt) {
+    constexpr bool tick(const TrimValues& values, const bool armed, const vario::Millis dt) {
         cooldown_ms -= std::min(cooldown_ms, static_cast<uint32_t>(dt.value));
         if (values != last) {
             last = values;
@@ -299,7 +299,7 @@ struct AutoSave {
     }
 
     /// Records the result of a write started because `tick` returned true.
-    constexpr void saved(bool ok) {
+    constexpr void saved(const bool ok) {
         if (ok) {
             dirty = false;
         }

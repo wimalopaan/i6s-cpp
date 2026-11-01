@@ -29,7 +29,7 @@ struct PinField {
 namespace detail {
 
 /// Expands a 16-bit pin mask into a register mask with `field.bits` bits per pin, each set to `field.value`.
-constexpr uint32_t spread(uint32_t pin_mask, PinField field) {
+constexpr uint32_t spread(const uint32_t pin_mask, const PinField field) {
     uint32_t result = 0;
     for (uint32_t pin = 0; pin < 16; ++pin) {
         if ((pin_mask >> pin) & 1u) {
@@ -59,35 +59,35 @@ GPIO_TypeDef* port_regs() {
 }  // namespace detail
 
 template <Port P>
-void set_mode_mask(uint32_t pin_mask, Mode mode) {
+void set_mode_mask(const uint32_t pin_mask, const Mode mode) {
     GPIO_TypeDef* g = detail::port_regs<P>();
     g->MODER = (g->MODER & ~detail::spread(pin_mask, {3, 2})) |
                detail::spread(pin_mask, {static_cast<uint32_t>(mode), 2});
 }
 
 template <Port P>
-void set_pull_mask(uint32_t pin_mask, Pull pull) {
+void set_pull_mask(const uint32_t pin_mask, const Pull pull) {
     GPIO_TypeDef* g = detail::port_regs<P>();
     g->PUPDR = (g->PUPDR & ~detail::spread(pin_mask, {3, 2})) |
                detail::spread(pin_mask, {static_cast<uint32_t>(pull), 2});
 }
 
 template <Port P>
-void set_open_drain_mask(uint32_t pin_mask, bool open_drain) {
+void set_open_drain_mask(const uint32_t pin_mask, const bool open_drain) {
     GPIO_TypeDef* g = detail::port_regs<P>();
     const uint32_t bits = detail::spread(pin_mask, {1, 1});
     g->OTYPER = open_drain ? (g->OTYPER | bits) : (g->OTYPER & ~bits);
 }
 
 template <Port P>
-void set_high_speed_mask(uint32_t pin_mask) {
+void set_high_speed_mask(const uint32_t pin_mask) {
     GPIO_TypeDef* g = detail::port_regs<P>();
     g->OSPEEDR |= detail::spread(pin_mask, {3, 2});
 }
 
 /// Selects alternate function `af` (0..15) for a single pin.
 template <Port P>
-void set_alt_function(PinNumber pin, AlternateFunction af) {
+void set_alt_function(const PinNumber pin, const AlternateFunction af) {
     GPIO_TypeDef* g = detail::port_regs<P>();
     const uint32_t idx = pin.value / 8;
     const uint32_t shift = (pin.value % 8) * 4;
@@ -96,13 +96,13 @@ void set_alt_function(PinNumber pin, AlternateFunction af) {
 
 /// Drives the masked pins high (BSRR set bits).
 template <Port P>
-void set_pins(uint32_t pin_mask) {
+void set_pins(const uint32_t pin_mask) {
     detail::port_regs<P>()->BSRR = pin_mask;
 }
 
 /// Drives the masked pins low (BSRR reset bits).
 template <Port P>
-void clear_pins(uint32_t pin_mask) {
+void clear_pins(const uint32_t pin_mask) {
     detail::port_regs<P>()->BSRR = pin_mask << 16;
 }
 
@@ -116,12 +116,12 @@ template <Port P, uint32_t N>
 struct Pin {
     static constexpr uint32_t mask = 1u << N;
 
-    static void set_mode(Mode mode) { set_mode_mask<P>(mask, mode); }
-    static void set_pull(Pull pull) { set_pull_mask<P>(mask, pull); }
-    static void set_open_drain(bool open_drain) { set_open_drain_mask<P>(mask, open_drain); }
+    static void set_mode(const Mode mode) { set_mode_mask<P>(mask, mode); }
+    static void set_pull(const Pull pull) { set_pull_mask<P>(mask, pull); }
+    static void set_open_drain(const bool open_drain) { set_open_drain_mask<P>(mask, open_drain); }
     static void set_high_speed() { set_high_speed_mask<P>(mask); }
-    static void set_alt_function(AlternateFunction af) { hw::set_alt_function<P>(PinNumber{N}, af); }
-    static void write(bool high) { high ? set_pins<P>(mask) : clear_pins<P>(mask); }
+    static void set_alt_function(const AlternateFunction af) { hw::set_alt_function<P>(PinNumber{N}, af); }
+    static void write(const bool high) { high ? set_pins<P>(mask) : clear_pins<P>(mask); }
     static bool read() { return (read_pins<P>() & mask) != 0; }
 };
 

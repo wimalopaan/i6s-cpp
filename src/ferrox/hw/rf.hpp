@@ -37,7 +37,7 @@ inline constinit bool g_antenna_state = false;
 inline void gio2_irq_enable() { EXTI->IMR |= 1u << kGio2Line; }
 inline void gio2_irq_disable() { EXTI->IMR &= ~(1u << kGio2Line); }
 
-inline void set_irq_priority(IRQn_Type irq) {
+inline void set_irq_priority(const IRQn_Type irq) {
     reinterpret_cast<volatile uint8_t*>(&NVIC->IP[0])[irq] = kIrqPriorityRaw;
 }
 
@@ -58,7 +58,7 @@ inline void init_timer() {
 }
 
 /// Brings up SPI, the A7105 and the frame timer. Radio stays silenced until set_silenced(false).
-inline bool init(logic::afhds2a::TxId tx) {
+inline bool init(const logic::afhds2a::TxId tx) {
     g_radio.emplace(tx);
     a7105::init_bus();
     init_gio2_exti();
@@ -76,7 +76,7 @@ inline bool init(logic::afhds2a::TxId tx) {
     return true;
 }
 
-inline void set_silenced(bool silenced) {
+inline void set_silenced(const bool silenced) {
     if (silenced) {
         arch::CriticalSection cs;
         g_silenced = true;
@@ -104,26 +104,27 @@ inline void publish_channels(const std::array<uint16_t, logic::afhds2a::kNumChan
     g_published = true;
 }
 
-inline void set_bind_mode(bool on) {
+inline void set_bind_mode(const bool on) {
     arch::CriticalSection cs;
     if (auto power = g_radio->set_bind_mode(on)) {
         a7105::set_power(*power);
     }
 }
 
-inline void set_rf_power(uint8_t idx) {
+inline void set_rf_power(const uint8_t idx) {
     arch::CriticalSection cs;
     if (auto power = g_radio->set_rf_power(idx)) {
         a7105::set_power(*power);
     }
 }
 
-inline void set_rx_id(logic::afhds2a::RxId id) {
+inline void set_rx_id(const logic::afhds2a::RxId id) {
     arch::CriticalSection cs;
     g_radio->set_rx_id(id);
 }
 
-inline void set_rx_settings(uint16_t rate_hz, logic::afhds2a::PpmOut ppm_out, logic::afhds2a::SbusOut sbus) {
+inline void set_rx_settings(const uint16_t rate_hz, const logic::afhds2a::PpmOut ppm_out,
+                            const logic::afhds2a::SbusOut sbus) {
     arch::CriticalSection cs;
     g_radio->set_rx_settings(rate_hz, ppm_out, sbus);
 }

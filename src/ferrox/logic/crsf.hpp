@@ -66,7 +66,7 @@ constexpr uint8_t crc8(std::span<const uint8_t> data) {
 }
 
 /// Maps a pulse width in µs onto the 11-bit CRSF channel range (clamped).
-constexpr uint16_t us_to_crsf(uint16_t us) {
+constexpr uint16_t us_to_crsf(const uint16_t us) {
     int32_t clamped = us;
     if (clamped < kChannelMinUs) {
         clamped = kChannelMinUs;
@@ -100,8 +100,8 @@ struct ArmedState {
 /// With `arm_mode_switch` the 27-byte ExpressLRS variant with arm flag is produced.
 /// Returns the number of valid bytes in `out`.
 template <std::size_t N>
-constexpr std::size_t build_rc_frame(const std::array<uint16_t, N>& channels, ArmModeSwitch arm_mode_switch,
-                                     ArmedState armed, std::array<uint8_t, kRcExtFrameSize>& out) {
+constexpr std::size_t build_rc_frame(const std::array<uint16_t, N>& channels, const ArmModeSwitch arm_mode_switch,
+                                     const ArmedState armed, std::array<uint8_t, kRcExtFrameSize>& out) {
     static_assert(N >= 16, "CRSF RC frame needs 16 channels");
     out = {};
     out[0] = kSyncByte;
@@ -169,16 +169,16 @@ struct Telemetry {
     uint32_t last_link_ms = 0;
 };
 
-constexpr uint16_t be16(std::span<const uint8_t> p, std::size_t i) {
+constexpr uint16_t be16(std::span<const uint8_t> p, const std::size_t i) {
     return static_cast<uint16_t>((static_cast<uint16_t>(p[i]) << 8) | p[i + 1]);
 }
 
-constexpr int16_t be16s(std::span<const uint8_t> p, std::size_t i) {
+constexpr int16_t be16s(std::span<const uint8_t> p, const std::size_t i) {
     return static_cast<int16_t>(be16(p, i));
 }
 
 /// Decodes the 1-byte logarithmic vertical speed used in the 3-byte baro frame.
-constexpr int16_t decode_packed_vspeed(int8_t raw) {
+constexpr int16_t decode_packed_vspeed(const int8_t raw) {
     if (raw == 0) {
         return 0;
     }
@@ -194,14 +194,14 @@ constexpr int16_t decode_packed_vspeed(int8_t raw) {
     return static_cast<int16_t>(raw < 0 ? -cms : cms);
 }
 
-constexpr void mark_alive(Telemetry& t, uint32_t now_ms) {
+constexpr void mark_alive(Telemetry& t, const uint32_t now_ms) {
     t.connected = true;
     t.last_telemetry_ms = now_ms;
 }
 
 /// Decodes a validated telemetry frame. Returns true if the type was handled.
-constexpr bool parse_telemetry(uint8_t type, std::span<const uint8_t> p, Telemetry& t,
-                               uint32_t now_ms) {
+constexpr bool parse_telemetry(const uint8_t type, std::span<const uint8_t> p, Telemetry& t,
+                               const uint32_t now_ms) {
     switch (type) {
         case kTypeElrsStatus:
             mark_alive(t, now_ms);
@@ -417,15 +417,15 @@ struct ParamArg {
 };
 
 /// Extended parameter read/write frame with a single value or chunk byte. Returns 8 bytes.
-constexpr std::size_t build_param_ext(DeviceAddr target, FrameType type, ParamId param, ParamArg value,
-                                      std::array<uint8_t, 8>& out) {
+constexpr std::size_t build_param_ext(const DeviceAddr target, const FrameType type, const ParamId param,
+                                      const ParamArg value, std::array<uint8_t, 8>& out) {
     out = {kSyncByte, 6, type.value, target.value, kAddrRadioTransmitter, param.value, value.value, 0};
     out[7] = crc8(std::span<const uint8_t>(out.data() + 2, 5));
     return out.size();
 }
 
 /// Parameter write with an arbitrary payload. Returns the frame length.
-constexpr std::size_t build_param_write_multi(DeviceAddr target, ParamId param,
+constexpr std::size_t build_param_write_multi(const DeviceAddr target, const ParamId param,
                                               std::span<const uint8_t> payload,
                                               std::array<uint8_t, 16>& out) {
     out = {};
@@ -456,13 +456,13 @@ struct Framer {
     }
 
     /// A partially received frame that stalls for >= 3 ms is discarded.
-    constexpr void check_stall(uint32_t now_ms) {
+    constexpr void check_stall(const uint32_t now_ms) {
         if (len > 0 && static_cast<uint32_t>(now_ms - last_byte_ms) >= 3) {
             len = 0;
         }
     }
 
-    constexpr std::span<const uint8_t> push(uint8_t b, uint32_t now_ms) {
+    constexpr std::span<const uint8_t> push(const uint8_t b, const uint32_t now_ms) {
         last_byte_ms = now_ms;
         if (len == 0) {
             if (b == kSyncByte || b == kAddrRadioTransmitter || b == kAddrCrsfTransmitter ||

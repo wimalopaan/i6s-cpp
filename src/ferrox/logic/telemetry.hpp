@@ -52,7 +52,7 @@ struct SlotId {
 
 enum class Source : uint8_t { Afhds2a, Crsf };
 
-constexpr SensorStatus check_sensor_status(LastSeenMs last, NowMs now, bool connected) {
+constexpr SensorStatus check_sensor_status(const LastSeenMs last, const NowMs now, const bool connected) {
     if (last.value == 0) {
         return {};
     }
@@ -60,7 +60,7 @@ constexpr SensorStatus check_sensor_status(LastSeenMs last, NowMs now, bool conn
     return {.has_data = true, .stale = !connected || elapsed >= 2500u};
 }
 
-constexpr std::string_view rf_mode_name(uint8_t rf_mode) {
+constexpr std::string_view rf_mode_name(const uint8_t rf_mode) {
     constexpr std::string_view names[] = {
         "4Hz",  "25Hz", "50Hz", "100Hz", "100F", "150Hz", "200Hz",
         "250Hz", "333Hz", "500Hz", "D250", "D500", "F500", "F1000",
@@ -109,13 +109,13 @@ constexpr format::Text<12> mark_stale(format::Text<12> v) {
     return v;
 }
 
-constexpr format::Text<12> plain(int32_t value) {
+constexpr format::Text<12> plain(const int32_t value) {
     return to_text(format::format_fixed({.value = value}));
 }
 
 }  // namespace detail
 
-constexpr Tile sensor_tile(SlotId slot, NowMs now, const Sources& s) {
+constexpr Tile sensor_tile(const SlotId slot, const NowMs now, const Sources& s) {
     using detail::mark_stale;
     using detail::plain;
     using detail::to_text;
@@ -124,10 +124,10 @@ constexpr Tile sensor_tile(SlotId slot, NowMs now, const Sources& s) {
     const afhds2a::Telemetry& at = s.afhds;
 
     // Builds a tile whose value is shown with '*' when the status is stale.
-    const auto tile = [](std::string_view label, format::Text<12> value, SensorStatus st) {
+    const auto tile = [](std::string_view label, const format::Text<12> value, const SensorStatus st) {
         return Tile{.label = label, .value = st.stale ? mark_stale(value) : value, .stale = st.stale};
     };
-    const auto fixed = [](format::FixedFormat f) { return to_text(format::format_fixed(f)); };
+    const auto fixed = [](const format::FixedFormat f) { return to_text(format::format_fixed(f)); };
     constexpr auto force = format::SignMode::Force;
 
     switch (slot.value) {
@@ -340,17 +340,17 @@ constexpr bool is_custom_telem_layout(const std::array<uint8_t, kTelemSlotCount>
     return slots != kDefaultTelemSlots;
 }
 
-constexpr TileOrigin tile_origin(std::size_t slot) {
+constexpr TileOrigin tile_origin(const std::size_t slot) {
     constexpr std::array<TileOrigin, kTelemSlotCount> origins{{{4, 14}, {68, 14}, {4, 33}, {68, 33}}};
     return origins[slot];
 }
 
-constexpr std::string_view telem_sensor_name(uint8_t sensor) {
+constexpr std::string_view telem_sensor_name(const uint8_t sensor) {
     return sensor < kTelemSensorNames.size() ? kTelemSensorNames[sensor] : kTelemSensorNames[kTelemSensorOff];
 }
 
 // Cycles to the next sensor, wrapping after OFF, as Rust `TelemSetup` OK does.
-constexpr uint8_t next_telem_sensor(uint8_t sensor) {
+constexpr uint8_t next_telem_sensor(const uint8_t sensor) {
     return static_cast<uint8_t>((sensor + 1) % kTelemSensorNames.size());
 }
 
@@ -364,7 +364,7 @@ constexpr format::Text<12> with_prefix(std::string_view prefix, const format::Te
     return t;
 }
 
-constexpr format::Text<12> diag_stat(bool has_data, bool stale, const format::Text<12>& value,
+constexpr format::Text<12> diag_stat(const bool has_data, const bool stale, const format::Text<12>& value,
                                      std::string_view placeholder) {
     if (!has_data) {
         return to_text(placeholder);
@@ -374,12 +374,12 @@ constexpr format::Text<12> diag_stat(bool has_data, bool stale, const format::Te
 
 }  // namespace detail
 
-constexpr CrsfDiag crsf_diag(const crsf::Telemetry& ct, NowMs now) {
+constexpr CrsfDiag crsf_diag(const crsf::Telemetry& ct, const NowMs now) {
     using detail::diag_stat;
     using detail::to_text;
     using detail::with_prefix;
     constexpr auto force = format::SignMode::Force;
-    const auto fixed = [](format::FixedFormat f) { return to_text(format::format_fixed(f)); };
+    const auto fixed = [](const format::FixedFormat f) { return to_text(format::format_fixed(f)); };
 
     const SensorStatus link = check_sensor_status(LastSeenMs{ct.last_link_ms}, now, ct.connected);
     const SensorStatus vbat = check_sensor_status(LastSeenMs{ct.last_vbat_ms}, now, ct.connected);

@@ -62,7 +62,7 @@ public:
         temp_.fill(kCenterUs);
     }
 
-    constexpr void process_pulse(PulseUs pulse) {
+    constexpr void process_pulse(const PulseUs pulse) {
         if (pulse.value >= kSyncMinUs && pulse.value < kSyncMaxUs) {
             if (in_sync_ && current_ >= kMinChannelsForFrame) {
                 std::copy_n(temp_.begin(), current_, channels_.begin());
@@ -85,7 +85,7 @@ public:
         }
     }
 
-    constexpr void tick(DeltaMs dt) {
+    constexpr void tick(const DeltaMs dt) {
         if (timer_ms_ > 0) {
             timer_ms_ = dt.value >= timer_ms_ ? 0 : static_cast<uint16_t>(timer_ms_ - dt.value);
             if (timer_ms_ == 0) {
@@ -187,7 +187,7 @@ class Handover {
 public:
     // Output is the instructor frame, with the first 4 channels replaced by the student's when the student is active.
     template <std::size_t N>
-    constexpr std::array<uint16_t, N> process(bool trainer_switch_active,
+    constexpr std::array<uint16_t, N> process(const bool trainer_switch_active,
                                               const std::optional<InChannels>& student,
                                               const std::array<uint16_t, N>& instructor) {
         auto output = instructor;

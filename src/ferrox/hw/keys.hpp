@@ -20,7 +20,7 @@ inline constexpr uint32_t kBindPin = 2;         // PF2, active low
 inline constexpr uint32_t kDfuMagic = 0xDEAD'BEEF;
 inline constexpr uintptr_t kDfuFlagAddr = 0x2000'3FF0;
 
-inline void delay_cycles(uint32_t n) {
+inline void delay_cycles(const uint32_t n) {
     for (uint32_t i = 0; i < n; ++i) {
         __asm volatile("nop");
     }

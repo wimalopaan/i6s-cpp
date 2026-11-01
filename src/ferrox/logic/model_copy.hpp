@@ -41,17 +41,17 @@ struct Keys {
 
 enum class Outcome : uint8_t { Choosing, Cancelled, Copy };
 
-constexpr DstSlot next_target(DstSlot dst) { return DstSlot{(dst.value + 1) % storage::kNumModels}; }
+constexpr DstSlot next_target(const DstSlot dst) { return DstSlot{(dst.value + 1) % storage::kNumModels}; }
 
-constexpr DstSlot prev_target(DstSlot dst) {
+constexpr DstSlot prev_target(const DstSlot dst) {
     return DstSlot{(dst.value + storage::kNumModels - 1) % storage::kNumModels};
 }
 
 /// Opening the picker selects the slot after the source (Rust `(active_idx + 1) % NUM_MODELS`).
-constexpr Picker open(SrcSlot src) { return Picker{DstSlot{(src.value + 1) % storage::kNumModels}}; }
+constexpr Picker open(const SrcSlot src) { return Picker{DstSlot{(src.value + 1) % storage::kNumModels}}; }
 
 /// One tick of destination selection. Up and down wrap over all slots; OK confirms, ESC cancels.
-constexpr Outcome update(Picker& p, Keys k) {
+constexpr Outcome update(Picker& p, const Keys k) {
     if (k.up) {
         p.dst = next_target(p.dst);
     } else if (k.down) {
@@ -70,7 +70,7 @@ constexpr Outcome update(Picker& p, Keys k) {
 /// Only the active slot can be the source, since that is the only model held in memory.
 /// Returns false when `src` is not the active slot or the EEPROM write fails.
 template <storage::EepromDevice Dev>
-bool copy_model(const storage::RadioStorage& s, SrcSlot src, DstSlot dst) {
+bool copy_model(const storage::RadioStorage& s, const SrcSlot src, const DstSlot dst) {
     if (src != active_slot(s)) {
         return false;
     }
@@ -78,7 +78,7 @@ bool copy_model(const storage::RadioStorage& s, SrcSlot src, DstSlot dst) {
 }
 
 /// Row text while the destination is chosen, e.g. "Copy -> M01" (the slot is shown 1-based).
-constexpr format::Text<11> target_label(DstSlot dst) {
+constexpr format::Text<11> target_label(const DstSlot dst) {
     format::Text<11> t;
     for (const char c : std::string_view{"Copy -> M"}) {
         t.push(c);

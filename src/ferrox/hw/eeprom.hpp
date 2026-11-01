@@ -59,14 +59,14 @@ struct I2c2Eeprom {
         return false;
     }
 
-    static Status read(uint16_t addr, std::span<uint8_t> out) {
+    static Status read(const uint16_t addr, std::span<uint8_t> out) {
         if (out.empty()) {
             return Status::Ok;
         }
         return read_raw(addr, out);
     }
 
-    static Status write(uint16_t addr, std::span<const uint8_t> data) {
+    static Status write(const uint16_t addr, std::span<const uint8_t> data) {
         std::size_t offset = 0;
         while (offset < data.size()) {
             const uint16_t cur = static_cast<uint16_t>(addr + offset);
@@ -110,7 +110,7 @@ private:
     }
 
     /// Waits until `ready` is set in ISR. Returns false on error flags or timeout.
-    static bool wait_isr(uint32_t ready) {
+    static bool wait_isr(const uint32_t ready) {
         for (uint32_t spin = 0; spin < kSpinLimit; ++spin) {
             const uint32_t isr = I2C2->ISR;
             if ((isr & kErrorMask) != 0) {
@@ -138,7 +138,7 @@ private:
         return false;
     }
 
-    static Status read_raw(uint16_t addr, std::span<uint8_t> out) {
+    static Status read_raw(const uint16_t addr, std::span<uint8_t> out) {
         Status status = Status::Ok;
         if (!wait_idle()) {
             fail(status);
@@ -198,7 +198,7 @@ private:
     }
 
     /// Writes one chunk that does not cross a page boundary, then polls for the internal write cycle.
-    static Status write_page(uint16_t addr, std::span<const uint8_t> data) {
+    static Status write_page(const uint16_t addr, std::span<const uint8_t> data) {
         Status status = Status::Ok;
         if (!wait_idle()) {
             fail(status);

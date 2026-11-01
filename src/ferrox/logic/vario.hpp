@@ -44,7 +44,7 @@ struct DeadbandDmS {
 
 enum class SinkMode : uint8_t { Mute = 0, Pulse = 1, Continuous = 2 };
 
-constexpr SinkMode sink_mode_from_u8(uint8_t val) {
+constexpr SinkMode sink_mode_from_u8(const uint8_t val) {
     switch (val) {
         case 1:
             return SinkMode::Pulse;
@@ -172,7 +172,7 @@ struct State {
         return kSilent;
     }
 
-    static constexpr uint32_t elapsed_ms(Millis now, Millis since) {
+    static constexpr uint32_t elapsed_ms(const Millis now, const Millis since) {
         return now.value >= since.value ? now.value - since.value : 0;
     }
 };

@@ -42,25 +42,25 @@ struct Millis {
 };
 
 // Mode values outside the menu range fall back to Off, matching the storage validation.
-constexpr UsbMode mode_from_stored(uint8_t raw) {
+constexpr UsbMode mode_from_stored(const uint8_t raw) {
     return raw < kModeCount ? static_cast<UsbMode>(raw) : UsbMode::Off;
 }
 
-constexpr bool has_hid(UsbMode m) {
+constexpr bool has_hid(const UsbMode m) {
     return m == UsbMode::Joystick || m == UsbMode::Composite;
 }
 
-constexpr bool has_cdc(UsbMode m) {
+constexpr bool has_cdc(const UsbMode m) {
     return m == UsbMode::Serial || m == UsbMode::Composite;
 }
 
 // Rust `is_sim_mode`: sim mode is the joystick mode with a configured host. The main loop then mutes
 // the RF link, stops CRSF and PPM out (see main.cpp).
-constexpr bool is_sim_mode(UsbMode m, bool connected) {
+constexpr bool is_sim_mode(const UsbMode m, const bool connected) {
     return m == UsbMode::Joystick && connected;
 }
 
-constexpr bool interval_elapsed(Millis now, Millis since, Millis interval) {
+constexpr bool interval_elapsed(const Millis now, const Millis since, const Millis interval) {
     return now.value - since.value >= interval.value;
 }
 
@@ -70,11 +70,11 @@ struct Blob {
     std::array<uint8_t, N> bytes{};
     std::size_t size = 0;
 
-    constexpr void put(uint8_t v) {
+    constexpr void put(const uint8_t v) {
         bytes[size++] = v;
     }
 
-    constexpr void put16(uint16_t v) {
+    constexpr void put16(const uint16_t v) {
         put(static_cast<uint8_t>(v & 0xFF));
         put(static_cast<uint8_t>(v >> 8));
     }
@@ -97,7 +97,7 @@ struct DeviceIdentity {
     std::string_view serial{};
 };
 
-constexpr DeviceIdentity identity(UsbMode m) {
+constexpr DeviceIdentity identity(const UsbMode m) {
     switch (m) {
         case UsbMode::Serial:
             return {VendorId{0x0483}, ProductId{0x5740}, "FS-i6X Serial", "FS-I6X-VCP"};
@@ -118,7 +118,7 @@ struct Layout {
     uint8_t count = 0;
 };
 
-constexpr Layout layout(UsbMode m) {
+constexpr Layout layout(const UsbMode m) {
     switch (m) {
         case UsbMode::Joystick:
             return {0, 0, 0, 1};
@@ -153,7 +153,7 @@ inline constexpr auto kGamepadReportDescriptor = std::to_array<uint8_t>({
     0x75, 0x10, 0x95, 0x08, 0x81, 0x02, 0xC0, 0xC0,
 });
 
-constexpr Blob<18> device_descriptor(UsbMode m) {
+constexpr Blob<18> device_descriptor(const UsbMode m) {
     const DeviceIdentity id = identity(m);
     std::array<uint8_t, 3> cls{0x00, 0x00, 0x00};
     if (m == UsbMode::Serial) {
@@ -178,7 +178,7 @@ constexpr Blob<18> device_descriptor(UsbMode m) {
     return d;
 }
 
-constexpr Blob<100> config_descriptor(UsbMode m) {
+constexpr Blob<100> config_descriptor(const UsbMode m) {
     const Layout lay = layout(m);
     Blob<100> d{};
     d.put(9);
@@ -224,7 +224,7 @@ constexpr Blob<100> config_descriptor(UsbMode m) {
 }
 
 // String descriptors as UTF-16LE. Index 0 is the language list; unknown indices give an empty blob.
-constexpr Blob<64> string_descriptor(UsbMode m, uint8_t index) {
+constexpr Blob<64> string_descriptor(const UsbMode m, const uint8_t index) {
     Blob<64> d{};
     if (index == 0) {
         d.put_all(std::to_array<uint8_t>({4, 0x03, 0x09, 0x04}));
@@ -255,14 +255,14 @@ constexpr Blob<64> string_descriptor(UsbMode m, uint8_t index) {
 }
 
 // Rust `us_to_axis`: maps a channel pulse onto the 11-bit axis range with rounding.
-constexpr uint16_t us_to_axis(uint16_t us) {
+constexpr uint16_t us_to_axis(const uint16_t us) {
     const uint32_t clamped = us < kChannelMinUs ? kChannelMinUs : (us > kChannelMaxUs ? kChannelMaxUs : us);
     const uint32_t span = kChannelSpanUs;
     const uint32_t axis = ((clamped - kChannelMinUs) * kAxisMax + span / 2) / span;
     return static_cast<uint16_t>(axis > kAxisMax ? kAxisMax : axis);
 }
 
-constexpr bool is_at(SwitchPos actual, SwitchPos want) {
+constexpr bool is_at(const SwitchPos actual, const SwitchPos want) {
     return actual == want;
 }
 
@@ -309,7 +309,7 @@ enum class Command : uint8_t {
     Unknown,
 };
 
-constexpr bool is_space(char c) {
+constexpr bool is_space(const char c) {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
 }
 
@@ -319,7 +319,7 @@ constexpr std::string_view trim(std::string_view s) {
     return s;
 }
 
-constexpr char to_lower(char c) {
+constexpr char to_lower(const char c) {
     return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
 }
 
@@ -391,7 +391,7 @@ constexpr std::size_t format_channels_json(std::span<const uint16_t> chs, std::s
 }
 
 // Same JSON shape as `format_channels_json`, prefixed with the battery voltage (two decimals).
-constexpr std::size_t format_telemetry_json(uint16_t battery_mv, std::span<const uint16_t> chs, std::span<char> out) {
+constexpr std::size_t format_telemetry_json(const uint16_t battery_mv, std::span<const uint16_t> chs, std::span<char> out) {
     TextWriter w{out};
     const uint32_t centivolts = (static_cast<uint32_t>(battery_mv) + 5) / 10;
     w.put("{\"vbat\":");
@@ -438,7 +438,7 @@ struct ByteRing {
         count = 0;
     }
 
-    constexpr bool push(uint8_t v) {
+    constexpr bool push(const uint8_t v) {
         if (count == N) return false;
         buf[(head + count) % N] = v;
         ++count;
@@ -481,7 +481,7 @@ struct LineEditor {
     std::size_t len = 0;
     bool last_cr = false;
 
-    constexpr Action feed(uint8_t b) {
+    constexpr Action feed(const uint8_t b) {
         if (b == '\r' || b == '\n') {
             const bool second_of_pair = b == '\n' && last_cr;
             last_cr = b == '\r';

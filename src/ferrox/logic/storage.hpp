@@ -289,7 +289,7 @@ constexpr SlotHeader header_from_bytes(const std::array<uint8_t, kHeaderSize>& b
 }
 
 /// Validates a header against the expected payload length (no CRC check).
-constexpr Status validate_header(const SlotHeader& h, std::size_t expected_len) {
+constexpr Status validate_header(const SlotHeader& h, const std::size_t expected_len) {
     if (h.magic != kSlotMagic) {
         return Status::EmptySlot;
     }
@@ -305,7 +305,7 @@ constexpr Status validate_header(const SlotHeader& h, std::size_t expected_len) 
     return Status::Ok;
 }
 
-constexpr std::optional<uint16_t> model_slot_addr(std::size_t index) {
+constexpr std::optional<uint16_t> model_slot_addr(const std::size_t index) {
     if (index >= kNumModels) {
         return std::nullopt;
     }
@@ -334,7 +334,7 @@ constexpr MixLine disabled_mix() {
     };
 }
 
-constexpr std::array<uint8_t, 10> default_name(std::size_t index) {
+constexpr std::array<uint8_t, 10> default_name(const std::size_t index) {
     const auto num = static_cast<uint8_t>(index + 1);
     return {'M', 'O', 'D', 'E', 'L', ' ', static_cast<uint8_t>('0' + num / 10),
             static_cast<uint8_t>('0' + num % 10), ' ', ' '};
@@ -379,7 +379,7 @@ constexpr RadioConfig default_radio_config() {
 inline constexpr std::array<uint8_t, 17> kDefaultThrCurve{0, 25, 50, 75, 100, 0, 0, 0, 0,
                                                           0, 0,  0,  0,  0,   0, 0, 0};
 
-constexpr ModelConfig default_model_config(std::size_t index) {
+constexpr ModelConfig default_model_config(const std::size_t index) {
     return ModelConfig{
         .name = default_name(index),
         .model_type = 0,
@@ -492,7 +492,7 @@ constexpr void sanitize_calib(Calib& c) {
     }
 }
 
-constexpr void sanitize_model(ModelConfig& m, uint8_t active_model) {
+constexpr void sanitize_model(ModelConfig& m, const uint8_t active_model) {
     if (m.model_type > 4) {
         m.model_type = 0;
     }
@@ -698,7 +698,7 @@ concept EepromDevice = requires(uint16_t addr, std::span<uint8_t> out, std::span
 };
 
 template <EepromDevice Dev, typename T>
-Status save_slot(uint16_t addr, const T& src) {
+Status save_slot(const uint16_t addr, const T& src) {
     static_assert(std::is_same_v<T, RadioConfig> || std::is_same_v<T, ModelConfig>);
     const auto payload = to_bytes(src);
     const SlotHeader hdr{
@@ -717,7 +717,7 @@ Status save_slot(uint16_t addr, const T& src) {
 
 /// Loads a Radio/Model slot. Legacy ModelConfig slots are converted and re-saved in place.
 template <EepromDevice Dev, typename T>
-Status load_slot(uint16_t addr, T& dst) {
+Status load_slot(const uint16_t addr, T& dst) {
     static_assert(std::is_same_v<T, RadioConfig> || std::is_same_v<T, ModelConfig>);
     std::array<uint8_t, kHeaderSize> hdr_bytes{};
     if (const Status s = Dev::read(addr, hdr_bytes); s != Status::Ok) {
@@ -817,7 +817,7 @@ bool load_active_model(RadioStorage& s) {
 }
 
 template <EepromDevice Dev>
-bool save_model_to_slot(std::size_t index, const ModelConfig& model) {
+bool save_model_to_slot(const std::size_t index, const ModelConfig& model) {
     const auto addr = model_slot_addr(index);
     return addr && save_slot<Dev>(*addr, model) == Status::Ok;
 }

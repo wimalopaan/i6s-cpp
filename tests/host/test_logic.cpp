@@ -46,7 +46,7 @@ struct FakeEeprom {
     static inline std::array<uint8_t, 16384> mem{};
     static inline bool fail_writes = false;
 
-    static logic::storage::Status read(uint16_t addr, std::span<uint8_t> out) {
+    static logic::storage::Status read(const uint16_t addr, std::span<uint8_t> out) {
         if (addr + out.size() > mem.size()) {
             return logic::storage::Status::I2cError;
         }
@@ -56,7 +56,7 @@ struct FakeEeprom {
         return logic::storage::Status::Ok;
     }
 
-    static logic::storage::Status write(uint16_t addr, std::span<const uint8_t> data) {
+    static logic::storage::Status write(const uint16_t addr, std::span<const uint8_t> data) {
         if (fail_writes || addr + data.size() > mem.size()) {
             return logic::storage::Status::I2cError;
         }
@@ -68,7 +68,8 @@ struct FakeEeprom {
 };
 
 /// Writes a slot header followed by a raw payload, as earlier firmware versions did.
-inline void write_slot_raw(uint16_t addr, uint8_t version, std::size_t len, std::span<const uint8_t> payload) {
+inline void write_slot_raw(const uint16_t addr, const uint8_t version, const std::size_t len,
+                           std::span<const uint8_t> payload) {
     const logic::storage::SlotHeader hdr{
         .magic = logic::storage::kSlotMagic,
         .version = version,
@@ -80,7 +81,7 @@ inline void write_slot_raw(uint16_t addr, uint8_t version, std::size_t len, std:
     (void)FakeEeprom::write(static_cast<uint16_t>(addr + logic::storage::kHeaderSize), payload.first(len));
 }
 
-inline logic::storage::SlotHeader read_header(uint16_t addr) {
+inline logic::storage::SlotHeader read_header(const uint16_t addr) {
     std::array<uint8_t, logic::storage::kHeaderSize> bytes{};
     (void)FakeEeprom::read(addr, bytes);
     return logic::storage::header_from_bytes(bytes);
@@ -115,7 +116,7 @@ namespace {
 
 int failures = 0;
 
-void check(bool cond, const char* what) {
+void check(const bool cond, const char* const what) {
     if (!cond) {
         ++failures;
         std::fputs(what, stderr);
@@ -358,8 +359,8 @@ void mixer_test() {
     const std::array<int16_t, 2> pots0{0, 0};
     const Switches sw_default{};
 
-    auto run = [&](int16_t roll, int16_t pitch, uint16_t thr, int16_t yaw, std::span<const int16_t> pots,
-                   const Switches& sw, const ModelConfig& m) {
+    auto run = [&](const int16_t roll, const int16_t pitch, const uint16_t thr, const int16_t yaw,
+                   std::span<const int16_t> pots, const Switches& sw, const ModelConfig& m) {
         return mx::compute_channels({roll, pitch, thr, yaw}, pots, sw, m, no_trim, 0);
     };
 
@@ -911,16 +912,16 @@ void menu_test() {
     st.active_model.timer_secs = 0;
 
     mn::State s{};
-    auto tick = [&](uint16_t pressed, uint16_t held, uint32_t now) {
+    auto tick = [&](const uint16_t pressed, const uint16_t held, const uint32_t now) {
         return mn::update(s, mn::Input{pressed, held, now}, st);
     };
-    auto press = [&](uint16_t key, uint32_t now) {
+    auto press = [&](const uint16_t key, const uint32_t now) {
         const Event e = tick(key, key, now);
         tick(0, 0, now + 1);
         return e;
     };
 
-    auto press_in = [&](mn::State& state, uint16_t key, uint32_t now) {
+    auto press_in = [&](mn::State& state, const uint16_t key, const uint32_t now) {
         const Event e = mn::update(state, mn::Input{key, key, now}, st);
         mn::update(state, mn::Input{0, 0, now + 1}, st);
         return e;
@@ -1218,8 +1219,8 @@ void calib_test() {
     using calib::Wizard;
     using calib::Step;
 
-    const auto frame = [](Wizard& w, storage::RadioConfig& radio, const input::Raw& raw, uint16_t pressed,
-                          uint16_t held, uint16_t dt) {
+    const auto frame = [](Wizard& w, storage::RadioConfig& radio, const input::Raw& raw, const uint16_t pressed,
+                          const uint16_t held, const uint16_t dt) {
         return calib::update(w, Input{pressed, held, raw, dt}, radio);
     };
 
@@ -1344,7 +1345,7 @@ void dual_rate_test() {
     mn::open(ms);
     ms.main.selected = mn::kItemDualRate;
     mn::update(ms, mn::Input{0, 0, 0}, st);
-    auto tap = [&](uint16_t key, uint32_t now) {
+    auto tap = [&](const uint16_t key, const uint32_t now) {
         const Event e = mn::update(ms, mn::Input{key, key, now}, st);
         mn::update(ms, mn::Input{0, 0, now + 1}, st);
         return e;
@@ -1453,7 +1454,7 @@ void throttle_curve_test() {
     mn::open(ms);
     ms.main.selected = mn::kItemThrottleCurve;
     mn::update(ms, mn::Input{0, 0, 0}, st);
-    auto tap = [&](uint16_t key, uint32_t now) {
+    auto tap = [&](const uint16_t key, const uint32_t now) {
         const Event e = mn::update(ms, mn::Input{key, key, now}, st);
         mn::update(ms, mn::Input{0, 0, now + 1}, st);
         return e;
@@ -1619,7 +1620,7 @@ void value_cues_test() {
     mn::update(ms, mn::Input{0, 0, 0}, st);
     uint32_t now = 0;
     // One key press: returns the cue raised on the press tick, then releases the key.
-    auto press = [&](uint16_t key, logic::auto_select::Changes changes = {}) {
+    auto press = [&](const uint16_t key, const logic::auto_select::Changes changes = {}) {
         now += 10;
         mn::update(ms, mn::Input{key, key, now, changes}, st);
         const Cue cue = ms.cue;
@@ -1704,7 +1705,7 @@ void cancel_click_test() {
     logic::storage::RadioStorage st = logic::storage::default_storage();
     uint32_t now = 0;
     // Cancel from a fresh menu state on `from`: returns the screen and cue of the cancel tick.
-    auto cancel = [&](Screen from, bool editing, Cue& cue) {
+    auto cancel = [&](const Screen from, const bool editing, Cue& cue) {
         mn::State ms{};
         ms.screen = from;
         ms.editing = editing;
@@ -1715,7 +1716,7 @@ void cancel_click_test() {
         check(ms.cue == Cue::None, "cancel click: tone clears on the next tick");
         return ms.screen;
     };
-    auto leaves_with_click = [&](Screen from, Screen to, const char* what) {
+    auto leaves_with_click = [&](const Screen from, const Screen to, const char* const what) {
         Cue cue{Cue::None};
         check(cancel(from, false, cue) == to && cue == Cue::Click, what);
     };
@@ -1758,7 +1759,7 @@ void aux_menu_test() {
     mn::State ms{};
     mn::open(ms);
     uint32_t now = 0;
-    auto tap = [&](uint16_t key) {
+    auto tap = [&](const uint16_t key) {
         now += 10;
         const Event e = mn::update(ms, mn::Input{key, key, now}, st);
         mn::update(ms, mn::Input{0, 0, now + 1}, st);
@@ -1803,7 +1804,7 @@ void radio_setup_test() {
     mn::State ms{};
     mn::open(ms);
     uint32_t now = 0;
-    auto tap = [&](uint16_t key) {
+    auto tap = [&](const uint16_t key) {
         now += 10;
         const Event e = mn::update(ms, mn::Input{key, key, now}, st);
         mn::update(ms, mn::Input{0, 0, now + 1}, st);
@@ -2534,7 +2535,7 @@ void telemetry_test() {
                                 .tx_battery = {.value = 3700},
                                 .packets_sent = {.value = 123},
                                 .timer = "12:34"};
-    const auto tile_at = [](uint8_t slot, uint32_t now, const tm::Sources& s) {
+    const auto tile_at = [](const uint8_t slot, const uint32_t now, const tm::Sources& s) {
         return tm::sensor_tile({.value = slot}, {.value = now}, s);
     };
     const auto is = [](const tm::Tile& t, std::string_view label, std::string_view value) {
@@ -2960,7 +2961,7 @@ void trim_autosave_test() {
 
     const Millis tick_ms{20};
     // Ticks until the trigger fires, counting the firing tick. Returns 0 if it does not fire within 1000 ticks.
-    const auto ticks_until_save = [&](AutoSave& s, const TrimValues& v, bool armed) {
+    const auto ticks_until_save = [&](AutoSave& s, const TrimValues& v, const bool armed) {
         for (int i = 1; i <= 1000; ++i) {
             if (s.tick(v, armed, tick_ms)) {
                 return i;
@@ -3133,7 +3134,7 @@ void flight_timer_test() {
     static_assert(logic::format::format_timer(6000, false).view() == "99:00");
     check(logic::format::format_timer(0, false).view() == "00:00", "timer format: zero");
 
-    auto make = [](uint16_t limit, uint8_t source, uint8_t arm, uint32_t dt_ms) {
+    auto make = [](const uint16_t limit, const uint8_t source, const uint8_t arm, const uint32_t dt_ms) {
         Input in{};
         in.model = {0};
         in.config = Config{.limit = {limit}, .source = {source}, .arm = {arm}};
@@ -3142,7 +3143,7 @@ void flight_timer_test() {
     };
     // Always-running source (3), no arm switch, so the tick logic is isolated.
     const Config always{.limit = {3}, .source = {3}, .arm = {0}};
-    auto tick = [](State& s, Input in) { return logic::flight_timer::update(s, in); };
+    auto tick = [](State& s, const Input in) { return logic::flight_timer::update(s, in); };
 
     {
         State s{};
@@ -3302,7 +3303,8 @@ void bind_test() {
     static_assert(!logic::bind::binding_shown({false, true}));
     static_assert(!logic::bind::binding_shown(kLinked));
 
-    auto make = [](Link link, uint16_t keys, uint16_t pressed, uint32_t dt_ms, bool menu = false) {
+    auto make = [](const Link link, const uint16_t keys, const uint16_t pressed, const uint32_t dt_ms,
+                   const bool menu = false) {
         Input in{};
         in.link = link;
         in.menu_active = menu;
@@ -3415,7 +3417,7 @@ void model_copy_test() {
     // Menu flow: Copy row is reached by wrapping up from Name, OK opens the picker, OK confirms.
     mn::State s{};
     s.screen = mn::Screen::ModelSetup;
-    auto press = [&](uint16_t key, uint32_t now) {
+    auto press = [&](const uint16_t key, const uint32_t now) {
         const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
         mn::update(s, mn::Input{0, 0, now + 1}, rs);
         return e;
@@ -3474,7 +3476,7 @@ void protocol_reset_test() {
     s.screen = mn::Screen::ModelSetup;
     s.setup.selected = 7;
     s.setup.scroll = 4;
-    auto press = [&](uint16_t key, uint32_t now) {
+    auto press = [&](const uint16_t key, const uint32_t now) {
         const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
         mn::update(s, mn::Input{0, 0, now + 1}, rs);
         return e;
@@ -3559,7 +3561,7 @@ void vario_setup_test() {
     s.screen = mn::Screen::ModelSetup;
     s.setup.selected = 5;
     s.setup.scroll = 2;
-    auto press = [&](uint16_t key, uint32_t now) {
+    auto press = [&](const uint16_t key, const uint32_t now) {
         const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
         mn::update(s, mn::Input{0, 0, now + 1}, rs);
         return e;
@@ -3850,7 +3852,7 @@ void telem_slots_test() {
         ps.page = 4;
         logic::display::Framebuffer fb{};
         logic::dashboard::render(fb, ps, v);
-        auto lit = [&](int x, int y) {
+        auto lit = [&](const int x, const int y) {
             return (fb.data()[static_cast<std::size_t>((y / 8) * 128 + x)] >> (y % 8)) & 1u;
         };
         check(lit(64, 20) == 1 && lit(64, 45) == 1, "custom telem page: vertical divider drawn");
@@ -3875,7 +3877,7 @@ void telem_slots_test() {
     s.screen = mn::Screen::ModelSetup;
     s.setup.selected = mn::kItemTelemRow;
     s.setup.scroll = 3;
-    auto press = [&](uint16_t key, uint32_t now) {
+    auto press = [&](const uint16_t key, const uint32_t now) {
         const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
         mn::update(s, mn::Input{0, 0, now + 1}, rs);
         return e;
@@ -3960,7 +3962,7 @@ void wiring_cues_test() {
 void usb_logic_test() {
     namespace u = ferrox::logic::usb;
     using M = u::UsbMode;
-    const auto le16 = [](std::span<const uint8_t> d, std::size_t i) {
+    const auto le16 = [](std::span<const uint8_t> d, const std::size_t i) {
         return static_cast<unsigned>(d[i] | (d[i + 1] << 8));
     };
     const auto contains = [](std::span<const uint8_t> hay, std::span<const uint8_t> needle) {

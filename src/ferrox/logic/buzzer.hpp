@@ -70,7 +70,7 @@ struct SwitchIndex {
 
 enum class ToneStyle : uint8_t { Simple = 0, Rich = 1 };
 
-constexpr ToneStyle tone_style_from_u8(uint8_t val) { return val == 0 ? ToneStyle::Simple : ToneStyle::Rich; }
+constexpr ToneStyle tone_style_from_u8(const uint8_t val) { return val == 0 ? ToneStyle::Simple : ToneStyle::Rich; }
 
 struct Note {
     FreqHz freq{};
@@ -205,7 +205,7 @@ inline constexpr std::array<Note, 1> kValueSelect{{{FreqHz{2400}, DurationMs{40}
 constexpr Pattern single(std::span<const Note> notes) { return Pattern{notes, Repeats{0}}; }
 
 // Simple style replaces the melody with a tone pattern, Rich plays the melody.
-constexpr Pattern pattern_for(Cue cue, ToneStyle style) {
+constexpr Pattern pattern_for(const Cue cue, const ToneStyle style) {
     const bool rich = style == ToneStyle::Rich;
     switch (cue) {
         case Cue::None: return {};
@@ -244,7 +244,7 @@ constexpr Pattern pattern_for(Cue cue, ToneStyle style) {
 }
 
 // Trim feedback: pitch rises 20 Hz per step around 2000 Hz, clamped to 1500..=2500 Hz.
-constexpr Note trim_note(TrimStep step) {
+constexpr Note trim_note(const TrimStep step) {
     const int32_t raw = 2000 + static_cast<int32_t>(step.value) * 20;
     const auto clamped = static_cast<uint16_t>(raw < 1500 ? 1500 : (raw > 2500 ? 2500 : raw));
     return Note{FreqHz{clamped}, DurationMs{25}, PauseMs{0}};
@@ -263,7 +263,7 @@ struct PwmTiming {
 
 inline constexpr uint32_t kTimerTickHz = 1'000'000;
 
-constexpr PwmTiming pwm_timing(FreqHz freq) {
+constexpr PwmTiming pwm_timing(const FreqHz freq) {
     constexpr uint32_t kMaxPeriod = 65535;
     constexpr uint32_t kMinPeriod = 10;
     const uint32_t period = freq.value == 0 ? kMaxPeriod : std::clamp(kTimerTickHz / freq.value, kMinPeriod, kMaxPeriod);
@@ -274,7 +274,7 @@ constexpr PwmTiming pwm_timing(FreqHz freq) {
 // a pure function of the state, so the hardware layer only needs to apply it.
 class Player {
 public:
-    constexpr void set_enabled(bool enabled) {
+    constexpr void set_enabled(const bool enabled) {
         enabled_ = enabled;
         if (!enabled_) {
             stop();
@@ -283,7 +283,7 @@ public:
 
     constexpr bool enabled() const { return enabled_; }
 
-    constexpr void play(Pattern pattern) {
+    constexpr void play(const Pattern pattern) {
         if (!enabled_ || pattern.notes.empty()) {
             return;
         }
@@ -292,9 +292,9 @@ public:
         start(pattern.repeats);
     }
 
-    constexpr void play_cue(Cue cue, ToneStyle style) { play(pattern_for(cue, style)); }
+    constexpr void play_cue(const Cue cue, const ToneStyle style) { play(pattern_for(cue, style)); }
 
-    constexpr void play_trim(TrimStep step) {
+    constexpr void play_trim(const TrimStep step) {
         if (!enabled_) {
             return;
         }
@@ -314,7 +314,7 @@ public:
     }
 
     // Background vario tone. Changing the parameters restarts the pulse, as in the Rust code.
-    constexpr void set_vario(Tone tone) {
+    constexpr void set_vario(const Tone tone) {
         if (tone.is_silent()) {
             vario_ = vario::kSilent;
             vario_pause_ = false;
@@ -328,7 +328,7 @@ public:
         }
     }
 
-    constexpr void tick(Millis dt) {
+    constexpr void tick(const Millis dt) {
         uint32_t left = dt.value;
         while (playing_ && left >= remaining_.value) {
             left -= remaining_.value;
@@ -367,9 +367,9 @@ public:
     constexpr bool is_vario_active() const { return !vario_.is_silent(); }
 
 private:
-    static constexpr FreqHz audible(FreqHz f) { return f.value >= kMinAudibleHz ? f : FreqHz{}; }
+    static constexpr FreqHz audible(const FreqHz f) { return f.value >= kMinAudibleHz ? f : FreqHz{}; }
 
-    constexpr void start(Repeats repeats) {
+    constexpr void start(const Repeats repeats) {
         index_ = 0;
         repeats_left_ = repeats.value;
         in_pause_ = false;
@@ -379,7 +379,7 @@ private:
 
     constexpr std::size_t note_count() const { return use_trim_ ? 1 : notes_.size(); }
 
-    constexpr const Note& note_at(std::size_t i) const { return use_trim_ ? trim_ : notes_[i]; }
+    constexpr const Note& note_at(const std::size_t i) const { return use_trim_ ? trim_ : notes_[i]; }
 
     constexpr void end_tone() {
         const bool more = index_ + 1 < note_count() || repeats_left_ > 0;
@@ -448,14 +448,14 @@ private:
 inline constexpr uint32_t kBatteryRearmMs = 7000;
 inline constexpr uint32_t kBatteryPeriodMs = 8000;
 
-constexpr bool battery_low(BatteryMv mv, WarnDeci warn) {
+constexpr bool battery_low(const BatteryMv mv, const WarnDeci warn) {
     return mv.value < static_cast<uint16_t>(warn.value * 100);
 }
 
 struct BatteryWarnTimer {
     ElapsedMs elapsed{};
 
-    constexpr bool step(bool low, Millis dt) {
+    constexpr bool step(const bool low, const Millis dt) {
         if (!low) {
             elapsed = ElapsedMs{kBatteryRearmMs};
             return false;
@@ -471,7 +471,7 @@ struct BatteryWarnTimer {
 
 enum class RssiAlarm : uint8_t { None, Low, Critical };
 
-constexpr RssiAlarm rssi_alarm(Rssi rssi, bool telemetry_connected) {
+constexpr RssiAlarm rssi_alarm(const Rssi rssi, const bool telemetry_connected) {
     if (!telemetry_connected || rssi.value >= 40) {
         return RssiAlarm::None;
     }
@@ -481,7 +481,7 @@ constexpr RssiAlarm rssi_alarm(Rssi rssi, bool telemetry_connected) {
 struct RssiWarnTimer {
     ElapsedMs elapsed{};
 
-    constexpr bool step(RssiAlarm level, Millis dt) {
+    constexpr bool step(const RssiAlarm level, const Millis dt) {
         if (level == RssiAlarm::None) {
             elapsed = ElapsedMs{};
             return false;
@@ -504,7 +504,7 @@ struct InactivityTimer {
     ElapsedMs idle{};
     ElapsedMs since_beep{};
 
-    constexpr bool step(bool user_active, Millis dt) {
+    constexpr bool step(const bool user_active, const Millis dt) {
         if (user_active) {
             idle = ElapsedMs{};
             since_beep = ElapsedMs{};
@@ -530,7 +530,7 @@ inline constexpr uint32_t kPreflightPeriodMs = 800;
 struct PreflightTimer {
     Millis last{};
 
-    constexpr bool step(Millis now) {
+    constexpr bool step(const Millis now) {
         if (now.value - last.value < kPreflightPeriodMs) {
             return false;
         }
@@ -555,7 +555,7 @@ struct ArmEdge {
 };
 
 // The arm chime fires on a real arm-state change, and not while a menu is open.
-constexpr Cue arm_cue(ArmEdge edge) {
+constexpr Cue arm_cue(const ArmEdge edge) {
     const bool armable = edge.arm_switch.value >= 1 && edge.arm_switch.value <= 22;
     if (!armable || edge.menu_active || edge.is_armed == edge.was_armed) {
         return Cue::None;

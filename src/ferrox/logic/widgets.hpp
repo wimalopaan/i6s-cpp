@@ -119,7 +119,7 @@ constexpr void draw_footer_three(Framebuffer& fb, std::string_view left, std::st
 }
 
 // Framed bar for a value in -1000..+1000, with a trim tick at the trim position (-250..+250 maps to the bar).
-constexpr void draw_progress_bar(Framebuffer& fb, Rect r, Deflection deflection, Trim trim_setting) {
+constexpr void draw_progress_bar(Framebuffer& fb, const Rect r, const Deflection deflection, const Trim trim_setting) {
     const auto [x, y] = r.pos;
     const auto [width, height] = r.size;
     fb.draw_rect(r, true);
@@ -142,7 +142,7 @@ constexpr void draw_progress_bar(Framebuffer& fb, Rect r, Deflection deflection,
     }
 }
 
-constexpr void draw_bar_gauge(Framebuffer& fb, Rect r, int fill_width) {
+constexpr void draw_bar_gauge(Framebuffer& fb, const Rect r, const int fill_width) {
     const auto [x, y] = r.pos;
     fb.draw_rect(r, true);
     if (fill_width > 0) {
@@ -151,7 +151,7 @@ constexpr void draw_bar_gauge(Framebuffer& fb, Rect r, int fill_width) {
 }
 
 // Zero-padded 4-digit decimal, clamped to 9999 (the display field is four characters wide).
-constexpr std::array<char, 4> format_u16_4(uint16_t value) {
+constexpr std::array<char, 4> format_u16_4(const uint16_t value) {
     unsigned v = std::min<unsigned>(value, 9999u);
     std::array<char, 4> out{'0', '0', '0', '0'};
     for (int i = 3; i >= 0; --i) {
@@ -162,7 +162,7 @@ constexpr std::array<char, 4> format_u16_4(uint16_t value) {
 }
 
 // Label at (2, y), framed bar at (44, y + 1) 40x5, value at (90, y).
-constexpr void draw_gauge_row(Framebuffer& fb, RowY row, std::string_view label, Width fill_width, uint16_t val) {
+constexpr void draw_gauge_row(Framebuffer& fb, const RowY row, std::string_view label, const Width fill_width, const uint16_t val) {
     const int y = row.value;
     fb.draw_str_4x6({2, y}, label, false);
     draw_bar_gauge(fb, {{44, y + 1}, {40, 5}}, fill_width.value);
@@ -172,8 +172,8 @@ constexpr void draw_gauge_row(Framebuffer& fb, RowY row, std::string_view label,
 
 // List row in a 4-slot view: highlighted 124x9 bar at y = 14 + slot * 9 when selected.
 // An empty value draws no value; value_x <= 0 right-aligns the value to x = 124.
-constexpr void draw_list_row(Framebuffer& fb, Slot slot, bool selected, std::string_view label,
-                             std::string_view value, ValueX value_x) {
+constexpr void draw_list_row(Framebuffer& fb, const Slot slot, const bool selected, std::string_view label,
+                             std::string_view value, const ValueX value_x) {
     const int y = 14 + slot.value * 9;
     if (selected) {
         fb.fill_rect({{2, y}, {124, 9}}, true);
@@ -187,7 +187,7 @@ constexpr void draw_list_row(Framebuffer& fb, Slot slot, bool selected, std::str
 }
 
 // Vertical scrollbar at x = 125..127 with the thumb proportional to the visible share.
-constexpr void draw_scrollbar(Framebuffer& fb, Index selected, Count count, Span span) {
+constexpr void draw_scrollbar(Framebuffer& fb, const Index selected, const Count count, const Span span) {
     const auto [top_y, height] = span;
     if (count.value <= 1) {
         return;
@@ -202,12 +202,12 @@ constexpr void draw_scrollbar(Framebuffer& fb, Index selected, Count count, Span
 }
 
 // Maps -1000..+1000 onto a cursor position in [min_pos, max_pos].
-constexpr int cursor_position(int val, Track track) {
+constexpr int cursor_position(const int val, const Track track) {
     return track.min_pos + ((val + 1000) * track.travel + 1000) / 2000;
 }
 
 // Channel monitor gauge with centre ticks, trim tick and cursor.
-constexpr void draw_channel_gauge(Framebuffer& fb, Rect r, Deflection deflection, Trim trim_setting) {
+constexpr void draw_channel_gauge(Framebuffer& fb, const Rect r, const Deflection deflection, const Trim trim_setting) {
     const auto [x, y] = r.pos;
     const auto [width, height] = r.size;
     fb.draw_rect(r, true);
@@ -232,7 +232,7 @@ constexpr void draw_channel_gauge(Framebuffer& fb, Rect r, Deflection deflection
 }
 
 // Two-lane pot bar (width x 7) with separate cursors for VR1 and VR2.
-constexpr void draw_split_pot_bar(Framebuffer& fb, Point p, int width, PotPosition vr1, PotPosition vr2) {
+constexpr void draw_split_pot_bar(Framebuffer& fb, const Point p, const int width, const PotPosition vr1, const PotPosition vr2) {
     const auto [x, y] = p;
     if (width < 8) {
         return;
@@ -259,7 +259,7 @@ constexpr void draw_split_pot_bar(Framebuffer& fb, Point p, int width, PotPositi
 }
 
 // Single pot bar (width x 7) with centre tick and cursor.
-constexpr void draw_single_pot_bar(Framebuffer& fb, Point p, Width width, PotPosition val) {
+constexpr void draw_single_pot_bar(Framebuffer& fb, const Point p, const Width width, const PotPosition val) {
     const auto [x, y] = p;
     const int w = width.value;
     if (w < 8) {
@@ -275,7 +275,7 @@ constexpr void draw_single_pot_bar(Framebuffer& fb, Point p, Width width, PotPos
 }
 
 // Borderless pot lane (3 px high) with a baseline and a 2 px cursor.
-constexpr void draw_pot_track(Framebuffer& fb, Point p, Width width, PotPosition val) {
+constexpr void draw_pot_track(Framebuffer& fb, const Point p, const Width width, const PotPosition val) {
     const auto [x, y] = p;
     const int w = width.value;
     if (w < 6) {
@@ -290,7 +290,7 @@ constexpr void draw_pot_track(Framebuffer& fb, Point p, Width width, PotPosition
 }
 
 // Cluster of pot tracks: 3 pots in one column, 4-6 in two columns, 7+ in three columns.
-constexpr void draw_multi_pot_bar(Framebuffer& fb, Point p, int width, std::span<const int16_t> pots) {
+constexpr void draw_multi_pot_bar(Framebuffer& fb, const Point p, const int width, std::span<const int16_t> pots) {
     const auto [x, y] = p;
     const int count = static_cast<int>(pots.size());
     if (count == 0 || width < 12) {

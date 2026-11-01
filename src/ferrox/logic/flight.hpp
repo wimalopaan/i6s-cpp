@@ -25,7 +25,7 @@ struct FlightControls {
 };
 
 /// Assigns the physical gimbals to roll, pitch, throttle and yaw for the stick mode.
-constexpr FlightControls flight_controls(const input::Gimbals& g, safety::StickMode m) {
+constexpr FlightControls flight_controls(const input::Gimbals& g, const safety::StickMode m) {
     using safety::StickMode;
     switch (m) {
         case StickMode::Mode1: return {g.rh, g.lv, g.rv, g.lh};
@@ -37,17 +37,17 @@ constexpr FlightControls flight_controls(const input::Gimbals& g, safety::StickM
 }
 
 /// Armed when no arm switch is configured or the configured switch is active (same rule as compute_channels).
-constexpr bool is_armed(uint8_t arm_switch, const Switches& sw) {
+constexpr bool is_armed(const uint8_t arm_switch, const Switches& sw) {
     return arm_switch == 0 || arm_switch > 22 || mixer::eval_arm_switch(arm_switch, sw);
 }
 
 /// Mixer output for one model: 18 channels in µs, ready for the RF output.
 /// Trims are passed in by the caller; the trim key state machine lives in logic/trim.hpp.
 constexpr std::array<uint16_t, kNumChannels> rf_channels(const input::InputState& in,
-                                                         safety::StickMode sm,
+                                                         const safety::StickMode sm,
                                                          const storage::ModelConfig& model,
                                                          const trim::TrimValues& trims,
-                                                         uint8_t throttle_trim_mode) {
+                                                         const uint8_t throttle_trim_mode) {
     const FlightControls c = flight_controls(in.gimbals, sm);
     const auto thr_in = static_cast<uint16_t>(std::clamp<int32_t>((c.throttle + kMixerMax) / 2, 0, kMixerMax));
     const uint16_t thr = curve::evaluate(thr_in, model.thr_curve_pts, model.thr_curve_smooth != 0, model.thr_curve);

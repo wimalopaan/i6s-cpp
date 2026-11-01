@@ -18,7 +18,7 @@ template <std::size_t N>
 class SpscRing {
 public:
     /// Returns false (and drops the byte) when full.
-    bool push(uint8_t byte) {
+    bool push(const uint8_t byte) {
         const std::size_t head = head_;
         const std::size_t next = (head + 1) & (N - 1);
         if (next == tail_) {

@@ -60,7 +60,7 @@ constexpr std::optional<uint8_t> dr_switch_change(const Switches& now, const Swi
     return std::nullopt;
 }
 
-constexpr bool pot_moved(int16_t now, int16_t prev) {
+constexpr bool pot_moved(const int16_t now, const int16_t prev) {
     const int delta = int{now} - int{prev};
     return delta >= kPotMoveCounts || delta <= -kPotMoveCounts;
 }

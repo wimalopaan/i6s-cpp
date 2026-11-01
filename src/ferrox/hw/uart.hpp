@@ -52,7 +52,7 @@ inline void apply_power_pin() {
 }
 
 /// Enables the PC13 output (initially OFF according to polarity).
-inline void init_power_switch(bool active_high) {
+inline void init_power_switch(const bool active_high) {
     g_active_high = active_high;
     g_power_on = false;
 
@@ -61,12 +61,12 @@ inline void init_power_switch(bool active_high) {
     apply_power_pin();
 }
 
-inline void set_power_polarity(bool active_high) {
+inline void set_power_polarity(const bool active_high) {
     g_active_high = active_high;
     apply_power_pin();
 }
 
-inline void set_module_power(bool power_on) {
+inline void set_module_power(const bool power_on) {
     g_power_on = power_on;
     apply_power_pin();
 }
@@ -78,7 +78,7 @@ inline bool is_half_duplex() {
 enum class Duplex : uint8_t { Full, Half };
 
 /// Configures USART2 for CRSF (full-duplex) or single-wire half-duplex on PD5.
-inline void set_uart_enabled(bool enabled, uint8_t baud_index, Duplex duplex) {
+inline void set_uart_enabled(const bool enabled, const uint8_t baud_index, const Duplex duplex) {
     g_half_duplex = duplex == Duplex::Half;
 
     if (enabled) {

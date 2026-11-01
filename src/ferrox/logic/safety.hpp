@@ -16,12 +16,12 @@ namespace ferrox::logic::safety {
 enum class StickMode : uint8_t { Mode1 = 0, Mode2 = 1, Mode3 = 2, Mode4 = 3 };
 
 /// Unknown values fall back to Mode 2, as in the Rust firmware.
-constexpr StickMode stick_mode_from(uint8_t val) {
+constexpr StickMode stick_mode_from(const uint8_t val) {
     return val <= 3 ? static_cast<StickMode>(val) : StickMode::Mode2;
 }
 
 /// Raw ADC index of the throttle stick: RightVertical (1) in Mode 1/3, LeftVertical (2) in Mode 2/4.
-constexpr std::size_t throttle_raw_index(StickMode m) {
+constexpr std::size_t throttle_raw_index(const StickMode m) {
     return (m == StickMode::Mode1 || m == StickMode::Mode3) ? 1 : 2;
 }
 
@@ -43,7 +43,7 @@ struct ChannelCalibration {
     }
 
     /// Signed permille (-1000..1000) around the center.
-    constexpr int16_t normalize_bipolar(uint16_t raw) const {
+    constexpr int16_t normalize_bipolar(const uint16_t raw) const {
         const int32_t r = std::clamp<int32_t>(raw, min, max);
         if (r >= center) {
             const int32_t span = std::max<int32_t>(max - center, 1);
@@ -54,7 +54,7 @@ struct ChannelCalibration {
     }
 
     /// Unipolar permille (0..1000) from min to max.
-    constexpr uint16_t normalize_unipolar(uint16_t raw) const {
+    constexpr uint16_t normalize_unipolar(const uint16_t raw) const {
         const int32_t r = std::clamp<int32_t>(raw, min, max);
         const int32_t span = std::max<int32_t>(max - min, 1);
         return static_cast<uint16_t>(std::min<int32_t>(((r - min) * 1000) / span, 1000));
@@ -65,8 +65,8 @@ enum class Preflight : uint8_t { Ok, ThrottleHigh, ThrottleNotCentered, Throttle
 
 /// Throttle rule at startup. Heli needs the throttle hold (SA Down) instead of a position check.
 constexpr Preflight check_preflight_throttle(const std::array<uint16_t, 4>& raw,
-                                            const std::array<ChannelCalibration, 4>& cal, StickMode sm,
-                                            mixer::ModelType mt, bool throttle_hold) {
+                                            const std::array<ChannelCalibration, 4>& cal, const StickMode sm,
+                                            const mixer::ModelType mt, const bool throttle_hold) {
     const std::size_t idx = throttle_raw_index(sm);
     switch (mt) {
         case mixer::ModelType::Airplane:
@@ -91,7 +91,7 @@ constexpr Preflight check_preflight_throttle(const std::array<uint16_t, 4>& raw,
 }
 
 /// Startup switch rule: all switches up, except SA which is Down for heli (throttle hold).
-constexpr bool switches_safe(const Switches& sw, mixer::ModelType mt) {
+constexpr bool switches_safe(const Switches& sw, const mixer::ModelType mt) {
     const bool sa_ok = mt == mixer::ModelType::Heli ? sw.sa == SwitchPos::Down : sw.sa == SwitchPos::Up;
     return sa_ok && sw.sb == SwitchPos::Up && sw.sc == SwitchPos::Up && sw.sd == SwitchPos::Up;
 }

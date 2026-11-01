@@ -54,7 +54,7 @@ struct Text {
 };
 
 /// Index of the first NUL at or after start, or chunk.size() if none.
-constexpr std::size_t find_nul(std::span<const uint8_t> c, std::size_t start) {
+constexpr std::size_t find_nul(std::span<const uint8_t> c, const std::size_t start) {
     std::size_t end = start;
     while (end < c.size() && c[end] != 0) {
         ++end;
@@ -64,7 +64,7 @@ constexpr std::size_t find_nul(std::span<const uint8_t> c, std::size_t start) {
 
 /// Copies the NUL-terminated string at start (truncated to N) and returns the index of its NUL.
 template <std::size_t N>
-constexpr std::size_t copy_text(std::span<const uint8_t> c, std::size_t start, Text<N>& out) {
+constexpr std::size_t copy_text(std::span<const uint8_t> c, const std::size_t start, Text<N>& out) {
     const std::size_t end = find_nul(c, start);
     const std::size_t n = std::min(end - start, N);
     for (std::size_t i = 0; i < n; ++i) {
@@ -141,7 +141,7 @@ constexpr std::optional<Entry> parse_entry(std::span<const uint8_t> c) {
         case Type::Uint16:
         case Type::Int16:
             if (rest + 6 <= c.size()) {
-                const auto be16 = [&](std::size_t i) {
+                const auto be16 = [&](const std::size_t i) {
                     return static_cast<uint16_t>((c[i] << 8) | c[i + 1]);
                 };
                 if (e.type == Type::Uint16) {
@@ -182,7 +182,7 @@ constexpr std::optional<Entry> parse_entry(std::span<const uint8_t> c) {
 }
 
 /// Clamps a value to the entry's [min, max] range. Non-numeric types return the input unchanged.
-constexpr int32_t clamp_value(const Entry& e, int32_t v) {
+constexpr int32_t clamp_value(const Entry& e, const int32_t v) {
     return std::clamp(v, e.min, e.max);
 }
 
@@ -195,7 +195,7 @@ constexpr int32_t cycled_value(const Entry& e) {
 }
 
 /// Encodes a value for PARAM_WRITE. Returns the number of payload bytes (0 if the type is not writable).
-constexpr std::size_t encode_value(const Entry& e, int32_t v, std::array<uint8_t, 2>& out) {
+constexpr std::size_t encode_value(const Entry& e, const int32_t v, std::array<uint8_t, 2>& out) {
     const int32_t x = clamp_value(e, v);
     switch (e.type) {
         case Type::Select:
@@ -261,7 +261,7 @@ struct Reassembler {
 
     constexpr std::span<const uint8_t> bytes() const { return {buf.data(), len}; }
 
-    constexpr Result feed(ParamId param_id, ChunksRemain chunks_remain, std::span<const uint8_t> data) {
+    constexpr Result feed(const ParamId param_id, const ChunksRemain chunks_remain, std::span<const uint8_t> data) {
         if (current_chunk > 0 && chunks_remain.value != expect_remain) {
             return Result::Ignored;
         }
@@ -283,8 +283,8 @@ struct Reassembler {
 
 /// Next parameter id after current_id that belongs to target_folder. Legacy devices without
 /// a root folder (no parent info) return every unmapped parameter.
-constexpr std::optional<uint8_t> next_param_for_folder(ParamId current_id, FolderId target_folder,
-                                                       ParamCount param_count,
+constexpr std::optional<uint8_t> next_param_for_folder(const ParamId current_id, const FolderId target_folder,
+                                                       const ParamCount param_count,
                                                        const std::array<uint8_t, kMaxParamMap>& parent_map,
                                                        bool has_root_folder) {
     for (uint16_t id = static_cast<uint16_t>(current_id.value) + 1; id <= param_count.value; ++id) {
@@ -297,7 +297,7 @@ constexpr std::optional<uint8_t> next_param_for_folder(ParamId current_id, Folde
 }
 
 /// True if now has reached or passed deadline (wrap-safe for 32-bit millisecond counters).
-constexpr bool due(Now now, Deadline deadline) {
+constexpr bool due(const Now now, const Deadline deadline) {
     return static_cast<int32_t>(now.value - deadline.value) >= 0;
 }
 
@@ -331,7 +331,7 @@ struct Loader {
 
     constexpr uint32_t timeout() const { return device == kAddrCrsfReceiver ? 1000 : 500; }
 
-    constexpr Action start(DeviceAddr dev, ParamCount count, uint32_t now) {
+    constexpr Action start(const DeviceAddr dev, const ParamCount count, const uint32_t now) {
         device = dev.value;
         param_count = count.value;
         folder = 0;
@@ -352,8 +352,8 @@ struct Loader {
     }
 
     /// Handles a PARAM_ENTRY frame. origin is the sender address, data is the chunk payload.
-    constexpr Action on_entry(DeviceAddr origin, ParamId param_id, ChunksRemain chunks_remain,
-                              std::span<const uint8_t> data, uint32_t now) {
+    constexpr Action on_entry(const DeviceAddr origin, const ParamId param_id, const ChunksRemain chunks_remain,
+                              std::span<const uint8_t> data, const uint32_t now) {
         completed.reset();
         if (origin.value != device) {
             return {};
@@ -403,7 +403,7 @@ struct Loader {
     }
 
     /// Retry and timeout handling. Call periodically with the current millisecond time.
-    constexpr Action tick(uint32_t now) {
+    constexpr Action tick(const uint32_t now) {
         if (state != State::Loading || !due(Now{now}, Deadline{next_req_ms})) {
             return {};
         }
@@ -432,7 +432,7 @@ struct Loader {
     }
 
     /// Continues with the next parameter in the current folder, or finishes.
-    constexpr Action advance(uint32_t now, uint8_t after_id) {
+    constexpr Action advance(const uint32_t now, const uint8_t after_id) {
         const auto next = next_param_for_folder(ParamId{after_id}, FolderId{folder}, ParamCount{param_count},
                                                 parent_map, has_root_folder);
         if (!next) {
@@ -447,7 +447,7 @@ struct Loader {
     }
 
     /// Enters a folder and reloads its children. Returns nothing if the folder is not known.
-    constexpr Action enter_folder(uint8_t folder_id, uint32_t now) {
+    constexpr Action enter_folder(const uint8_t folder_id, const uint32_t now) {
         if (state != State::Ready) {
             return {};
         }
@@ -477,14 +477,14 @@ struct Command {
     uint32_t poll_at_ms = 0;
     uint32_t poll_interval_ms = kCmdDefaultPollMs;
 
-    constexpr Action start(uint8_t id, uint32_t now) {
+    constexpr Action start(const uint8_t id, const uint32_t now) {
         param = id;
         kind = Kind::Starting;
         deadline_ms = now + kCmdStartTimeoutMs;
         return {Action::Kind::Write, id, static_cast<uint8_t>(CmdStatus::Start)};
     }
 
-    constexpr Action confirm(uint32_t now) {
+    constexpr Action confirm(const uint32_t now) {
         if (kind != Kind::WaitingConfirm) {
             return {};
         }
@@ -503,7 +503,7 @@ struct Command {
     }
 
     /// Applies a status frame for the given command parameter.
-    constexpr void on_status(ParamId id, CmdStatus status, TimeoutByte timeout_byte, uint32_t now) {
+    constexpr void on_status(const ParamId id, const CmdStatus status, const TimeoutByte timeout_byte, const uint32_t now) {
         if (id.value != param || (kind != Kind::Starting && kind != Kind::Running)) {
             return;
         }
@@ -527,7 +527,7 @@ struct Command {
     }
 
     /// Timeouts and periodic polling while the command runs.
-    constexpr Action tick(uint32_t now) {
+    constexpr Action tick(const uint32_t now) {
         switch (kind) {
             case Kind::Starting:
                 if (due(Now{now}, Deadline{deadline_ms})) {

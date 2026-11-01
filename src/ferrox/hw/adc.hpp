@@ -24,11 +24,11 @@ inline constexpr uint32_t kChselrP7 = 0xF7FF;   // CH0..CH10 + CH12..CH15
 // DMA CCR: MINC | PSIZE=16 bit | MSIZE=16 bit | PL=High | EN
 inline constexpr uint32_t kDmaCcr = (1u << 7) | (1u << 8) | (1u << 10) | (2u << 12) | 1u;
 
-constexpr std::size_t count_for(bool p7) {
+constexpr std::size_t count_for(const bool p7) {
     return p7 ? kChannels : kStdChannels;
 }
 
-constexpr uint32_t chselr_for(bool p7) {
+constexpr uint32_t chselr_for(const bool p7) {
     return p7 ? kChselrP7 : kChselrStd;
 }
 
@@ -66,7 +66,7 @@ inline void rearm() {
 
 /// Configures PA0..PA7, PB0..PB1, PC0 and PC2..PC5 as analog inputs, ADC1 and DMA1 channel 1
 /// for a continuous scan (11 channels, or 15 with the P7 header).
-inline void init(bool p7_enabled) {
+inline void init(const bool p7_enabled) {
     detail::g_scan_count = detail::count_for(p7_enabled);
 
     RCC->AHBENR |= RCC_AHBENR_DMAEN | RCC_AHBENR_GPIOAEN | RCC_AHBENR_GPIOBEN | RCC_AHBENR_GPIOCEN;
@@ -100,7 +100,7 @@ inline void init(bool p7_enabled) {
 }
 
 /// Switches between 11 and 15 scanned channels at runtime.
-inline void set_p7_enabled(bool enabled) {
+inline void set_p7_enabled(const bool enabled) {
     detail::g_scan_count = detail::count_for(enabled);
 
     DMA1_Channel1->CCR = 0;

@@ -48,7 +48,7 @@ constexpr void prev_page(PageState& s) {
 }
 
 // Takes newly pressed keys (edge-detected). Up has priority over Down, as in the Rust firmware.
-constexpr void handle_keys(PageState& s, uint16_t newly_pressed) {
+constexpr void handle_keys(PageState& s, const uint16_t newly_pressed) {
     if ((newly_pressed & kKeyPageUp) != 0) {
         prev_page(s);
     } else if ((newly_pressed & kKeyPageDown) != 0) {
@@ -169,13 +169,13 @@ constexpr std::string_view afhds_link_line(const View& v) {
 }
 
 // Telemetry older than 2.5 s counts as stale, as in Rust `check_sensor_status`.
-constexpr bool sensor_fresh(const View& v, uint32_t last_ms) {
+constexpr bool sensor_fresh(const View& v, const uint32_t last_ms) {
     const auto st = telemetry::check_sensor_status({.value = last_ms}, {.value = v.now_ms}, v.telem.connected);
     return st.has_data && !st.stale;
 }
 
-constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st, uint16_t battery_mv, const View& v,
-                               uint8_t blink_phase) {
+constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st, const uint16_t battery_mv, const View& v,
+                               const uint8_t blink_phase) {
     const auto name = model_name(st.active_model);
     const auto trimmed = format::trim_spaces(name.view());
     if (trimmed.empty()) {
@@ -211,8 +211,8 @@ constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st,
     fb.draw_hline({0, 11}, kWidth, true);
 }
 
-constexpr void draw_stick_row(Framebuffer& fb, int y, std::string_view label, Rect gauge, widgets::Deflection val,
-                              widgets::Trim trim) {
+constexpr void draw_stick_row(Framebuffer& fb, const int y, std::string_view label, const Rect gauge,
+                              const widgets::Deflection val, const widgets::Trim trim) {
     fb.draw_str_6x10({2, y}, label, false);
     widgets::draw_channel_gauge(fb, gauge, val, trim);
     const auto pct = format::format_percent(static_cast<int16_t>(val.value));
@@ -246,8 +246,8 @@ constexpr void draw_primary_sticks(Framebuffer& fb, const View& v) {
     draw_stick_row(fb, 36, "R", {{12, 37}, {76, 7}}, {controls.rudder}, {t.yaw});
 }
 
-constexpr void draw_fixed_switch_slot(Framebuffer& fb, Point label_pos, Point val_pos, std::string_view label,
-                                      SwitchPos pos) {
+constexpr void draw_fixed_switch_slot(Framebuffer& fb, const Point label_pos, const Point val_pos,
+                                      std::string_view label, const SwitchPos pos) {
     fb.draw_str_4x6(label_pos, label, false);
     glyphs::draw_switch_arrow(fb, val_pos, pos);
 }
@@ -293,14 +293,14 @@ constexpr void push_switch(AdaptiveLayout& l, const SwitchSlot& s) {
     }
 }
 
-constexpr void push_pot(AdaptiveLayout& l, int16_t v) {
+constexpr void push_pot(AdaptiveLayout& l, const int16_t v) {
     if (l.pot_count < l.pots.size()) {
         l.pots[l.pot_count++] = v;
     }
 }
 
 // Switch position of a two/three-position channel. Channels 4 and 5 are analog pots read as three-position.
-constexpr SwitchPos switch_for_channel(const input::InputState& in, std::size_t ch) {
+constexpr SwitchPos switch_for_channel(const input::InputState& in, const std::size_t ch) {
     const auto& s = in.switches;
     switch (ch) {
         case 0: return s.sa;
@@ -369,7 +369,7 @@ struct PotCount {
     friend constexpr bool operator==(const PotCount&, const PotCount&) = default;
 };
 
-constexpr RowMetrics adaptive_metrics(SwitchCount sw_count_arg, PotCount pot_count_arg) {
+constexpr RowMetrics adaptive_metrics(const SwitchCount sw_count_arg, const PotCount pot_count_arg) {
     const std::size_t sw_count = sw_count_arg.value;
     const std::size_t pot_count = pot_count_arg.value;
     const int sw = static_cast<int>(sw_count);
@@ -395,7 +395,7 @@ constexpr RowMetrics adaptive_metrics(SwitchCount sw_count_arg, PotCount pot_cou
     return {spacing, compact, pot_start_x, pot_w};
 }
 
-constexpr void draw_adaptive_slot(Framebuffer& fb, int x, bool compact, const SwitchSlot& s) {
+constexpr void draw_adaptive_slot(Framebuffer& fb, const int x, const bool compact, const SwitchSlot& s) {
     fb.draw_str_4x6({x + 1, 48}, s.name, false);
     const int glyph_x = x + 5;
     if (s.six_pos) {
@@ -449,7 +449,7 @@ constexpr void draw_page_footer(Framebuffer& fb, const View& v, std::string_view
     }
 }
 
-constexpr void draw_gimbal_page(Framebuffer& fb, const View& v, uint8_t blink_phase) {
+constexpr void draw_gimbal_page(Framebuffer& fb, const View& v, const uint8_t blink_phase) {
     draw_primary_sticks(fb, v);
 
     const auto& st = v.storage;
@@ -479,7 +479,7 @@ constexpr void draw_gimbal_page(Framebuffer& fb, const View& v, uint8_t blink_ph
     }
 }
 
-constexpr void draw_channel_page(Framebuffer& fb, const View& v, bool second_part) {
+constexpr void draw_channel_page(Framebuffer& fb, const View& v, const bool second_part) {
     const auto& chs = v.rf_chs;
     const int base_ch = second_part ? 10 : 0;
     const int rows_per_col = second_part ? 4 : 5;
@@ -565,7 +565,7 @@ constexpr void draw_crsf_telemetry_page(Framebuffer& fb, const View& v) {
 }
 
 // Sensor tile of the custom page, same layout as Rust `render_tile`: label, '*' when stale, value below.
-constexpr void draw_sensor_tile(Framebuffer& fb, telemetry::TileOrigin o, const telemetry::Tile& t) {
+constexpr void draw_sensor_tile(Framebuffer& fb, const telemetry::TileOrigin o, const telemetry::Tile& t) {
     if (t.slot_off) {
         fb.draw_str_4x6({o.x, o.y}, "SLOT OFF", false);
         return;

@@ -41,26 +41,26 @@ using Backlight = Pin<Port::F, 3>;
 inline constexpr uint32_t kDataMask = 0xFFu;
 inline constexpr uint32_t kBacklightPwmMax = 999;
 
-inline void delay_cycles(uint32_t n) {
+inline void delay_cycles(const uint32_t n) {
     for (uint32_t i = 0; i < n; ++i) {
         __asm volatile("nop");
     }
 }
 
 // Low byte of GPIOE->ODR is the 8-bit data bus (little-endian).
-inline void put_byte(uint8_t byte) {
+inline void put_byte(const uint8_t byte) {
     *reinterpret_cast<volatile uint8_t*>(&GPIOE->ODR) = byte;
     RD::write(true);
     __asm volatile("nop");
     RD::write(false);
 }
 
-inline void write_byte(uint8_t byte, bool is_data) {
+inline void write_byte(const uint8_t byte, const bool is_data) {
     RS::write(is_data);
     put_byte(byte);
 }
 
-inline void write_cmd(uint8_t c) { write_byte(c, false); }
+inline void write_cmd(const uint8_t c) { write_byte(c, false); }
 
 }  // namespace detail
 
@@ -98,7 +98,7 @@ inline void init_backlight_pwm() {
 }
 
 // Backlight: stock on/off on PF3 plus PWM duty on PC9 (0 = off, 1..100 = brightness).
-inline void set_backlight_level(uint8_t pct) {
+inline void set_backlight_level(const uint8_t pct) {
     if (pct == 0) {
         detail::Backlight::write(false);
         TIM3->CCR4 = 0;
@@ -108,7 +108,7 @@ inline void set_backlight_level(uint8_t pct) {
     }
 }
 
-inline void set_contrast(uint8_t ev) {
+inline void set_contrast(const uint8_t ev) {
     detail::write_cmd(cmd::kElectronicVolume);
     detail::write_cmd(std::min<uint8_t>(ev, 63));
 }

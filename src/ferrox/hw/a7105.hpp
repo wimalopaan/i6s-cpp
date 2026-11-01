@@ -31,7 +31,7 @@ inline constexpr uint32_t kSpiTimeout = 10000;
 inline void csn_low() { clear_pins<Port::E>(1u << kCsnPin); }
 inline void csn_high() { set_pins<Port::E>(1u << kCsnPin); }
 
-inline bool wait_flag(uint32_t mask, bool want_set) {
+inline bool wait_flag(const uint32_t mask, const bool want_set) {
     for (uint32_t i = 0; i < kSpiTimeout; ++i) {
         const bool set = (SPI1->SR & mask) != 0;
         if (set == want_set) {
@@ -43,7 +43,7 @@ inline bool wait_flag(uint32_t mask, bool want_set) {
 
 // 8-bit transfer. The DR byte view avoids a 16-bit access that would
 // pack two frames into one transfer.
-inline uint8_t transfer(uint8_t out) {
+inline uint8_t transfer(const uint8_t out) {
     volatile uint8_t* dr = reinterpret_cast<volatile uint8_t*>(&SPI1->DR);
     wait_flag(SPI_SR_BSY, false);
     wait_flag(SPI_SR_TXE, true);
@@ -80,13 +80,13 @@ inline void init_bus() {
     set_pull_mask<Port::B>(1u << kGio2Pin, Pull::Up);
 }
 
-inline void strobe(uint8_t cmd) {
+inline void strobe(const uint8_t cmd) {
     csn_low();
     transfer(cmd);
     csn_high();
 }
 
-inline uint8_t read_reg(uint8_t addr) {
+inline uint8_t read_reg(const uint8_t addr) {
     csn_low();
     transfer(logic::a7105::cmd_read(addr));
     const uint8_t v = transfer(0x00);
@@ -104,14 +104,14 @@ struct RegValue {
     friend constexpr bool operator==(const RegValue&, const RegValue&) = default;
 };
 
-inline void write_reg(RegAddr addr, RegValue val) {
+inline void write_reg(const RegAddr addr, const RegValue val) {
     csn_low();
     transfer(logic::a7105::cmd_write(addr.value));
     transfer(val.value);
     csn_high();
 }
 
-inline void write_id(uint32_t id) {
+inline void write_id(const uint32_t id) {
     csn_low();
     transfer(logic::a7105::cmd_write(logic::a7105::kRegIdData));
     transfer(static_cast<uint8_t>(id >> 24));
@@ -121,7 +121,7 @@ inline void write_id(uint32_t id) {
     csn_high();
 }
 
-inline void write_fifo(std::span<const uint8_t> data, uint8_t channel) {
+inline void write_fifo(std::span<const uint8_t> data, const uint8_t channel) {
     strobe(logic::a7105::kStrobeStandby);
     strobe(logic::a7105::kStrobeRstWrPtr);
     csn_low();
@@ -152,12 +152,12 @@ inline uint8_t read_raw_rssi() {
     return read_reg(logic::a7105::kRegRssi);
 }
 
-inline void set_power(uint8_t tx_test) {
+inline void set_power(const uint8_t tx_test) {
     write_reg({logic::a7105::kRegTxTest}, {tx_test});
 }
 
 /// Front-end switch. Off puts both RX_EN and TX_EN in the disabled state.
-inline void set_front_end(logic::afhds2a::FrontEnd mode) {
+inline void set_front_end(const logic::afhds2a::FrontEnd mode) {
     using logic::afhds2a::FrontEnd;
     switch (mode) {
         case FrontEnd::RxEn:
@@ -234,7 +234,7 @@ inline void init_regs() {
     strobe(kStrobeStandby);
 }
 
-inline void switch_antenna(bool state) {
+inline void switch_antenna(const bool state) {
     if (state) {
         clear_pins<Port::E>(1u << kAntennaA);
         set_pins<Port::E>(1u << kAntennaB);

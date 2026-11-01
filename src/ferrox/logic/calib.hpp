@@ -71,9 +71,9 @@ struct Pots {
 
 constexpr bool active(const Wizard& w) { return w.step != Step::Inactive; }
 
-constexpr uint16_t sat_sub(uint16_t a, uint16_t b) { return a > b ? static_cast<uint16_t>(a - b) : uint16_t{0}; }
+constexpr uint16_t sat_sub(const uint16_t a, const uint16_t b) { return a > b ? static_cast<uint16_t>(a - b) : uint16_t{0}; }
 
-constexpr uint16_t aux_raw(const input::Raw& raw, std::size_t ch) { return raw[input::aux_index_to_raw(ch)]; }
+constexpr uint16_t aux_raw(const input::Raw& raw, const std::size_t ch) { return raw[input::aux_index_to_raw(ch)]; }
 
 // Aux channels configured as potentiometers (continuous or detented). External ADC adds 4 more.
 constexpr Pots configured_pots(const storage::RadioConfig& radio) {
@@ -116,7 +116,7 @@ constexpr void start(Wizard& w) {
 }
 
 // 63/64 margin on each side of the travel, as in the OpenTX calibration.
-constexpr uint16_t with_margin(uint16_t span) { return static_cast<uint16_t>((uint32_t{span} * 63) / 64); }
+constexpr uint16_t with_margin(const uint16_t span) { return static_cast<uint16_t>((uint32_t{span} * 63) / 64); }
 
 constexpr void save_endpoints(storage::RadioConfig& radio, const Wizard& w, const Pots& pots) {
     for (std::size_t i = 0; i < kSticks; ++i) {
@@ -193,7 +193,7 @@ constexpr bool update(Wizard& w, const Input& in, storage::RadioConfig& radio) {
                 w.pot_max[ch] = std::max(w.pot_max[ch], v);
             }
             const auto ready = stick_ready(w, radio);
-            const bool all_ready = std::all_of(ready.begin(), ready.end(), [](bool r) { return r; });
+            const bool all_ready = std::all_of(ready.begin(), ready.end(), [](const bool r) { return r; });
             if (ok && all_ready) {
                 save_endpoints(radio, w, pots);
                 w.step = Step::Complete;
@@ -219,7 +219,7 @@ constexpr bool update(Wizard& w, const Input& in, storage::RadioConfig& radio) {
 }
 
 // Mirrors the Rust gauge: a centre bar, travel fill on each side, and a live cursor.
-constexpr void draw_gauge(Framebuffer& fb, Rect r, Center center, widgets::Range range, Cursor cur, uint32_t target) {
+constexpr void draw_gauge(Framebuffer& fb, const Rect r, const Center center, const widgets::Range range, const Cursor cur, const uint32_t target) {
     const auto [x, y] = r.pos;
     const auto [w, h] = r.size;
     const auto [lo, hi] = range;
@@ -235,7 +235,7 @@ constexpr void draw_gauge(Framebuffer& fb, Rect r, Center center, widgets::Range
         return;
     }
     const int mid = y + h / 2;
-    const auto scaled = [&](uint32_t span) {
+    const auto scaled = [&](const uint32_t span) {
         return static_cast<int>(std::min<uint32_t>((span * static_cast<uint32_t>(half)) / target,
                                                    static_cast<uint32_t>(half)));
     };
@@ -259,7 +259,7 @@ constexpr void draw_gauge(Framebuffer& fb, Rect r, Center center, widgets::Range
 }
 
 constexpr void draw_sticks(Framebuffer& fb, const Wizard& w, const input::Raw& raw, const storage::RadioConfig& radio,
-                           bool general) {
+                           const bool general) {
     const std::array<std::string_view, kSticks> labels = general ? std::array<std::string_view, kSticks>{"1", "2", "3", "4"}
                                                                  : std::array<std::string_view, kSticks>{"A", "E", "T", "R"};
     const auto ready = stick_ready(w, radio);
@@ -311,7 +311,7 @@ constexpr void draw_pots(Framebuffer& fb, const Wizard& w, const Pots& pots, con
 }
 
 constexpr void render(Framebuffer& fb, const Wizard& w, const input::Raw& raw, const storage::RadioConfig& radio,
-                      uint8_t model_type) {
+                      const uint8_t model_type) {
     switch (w.step) {
         case Step::Inactive: break;
 

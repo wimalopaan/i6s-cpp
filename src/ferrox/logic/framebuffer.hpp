@@ -37,7 +37,7 @@ public:
 
     constexpr const std::array<uint8_t, kBufferSize>& data() const { return px_; }
 
-    constexpr void set_pixel(Point p, bool on) {
+    constexpr void set_pixel(const Point p, const bool on) {
         if (p.x < 0 || p.x >= kWidth || p.y < 0 || p.y >= kHeight) {
             return;
         }
@@ -46,7 +46,7 @@ public:
         b = on ? static_cast<uint8_t>(b | mask) : static_cast<uint8_t>(b & ~mask);
     }
 
-    constexpr void fill_rect(Rect r, bool on) {
+    constexpr void fill_rect(const Rect r, const bool on) {
         if (r.size.w <= 0 || r.size.h <= 0) {
             return;
         }
@@ -66,12 +66,12 @@ public:
         }
     }
 
-    constexpr void draw_hline(Point p, int len, bool on) { fill_rect({p, {len, 1}}, on); }
+    constexpr void draw_hline(const Point p, const int len, const bool on) { fill_rect({p, {len, 1}}, on); }
 
-    constexpr void draw_vline(Point p, int len, bool on) { fill_rect({p, {1, len}}, on); }
+    constexpr void draw_vline(const Point p, const int len, const bool on) { fill_rect({p, {1, len}}, on); }
 
     // Outline rectangle; the frame is drawn with w x h outer dimensions.
-    constexpr void draw_rect(Rect r, bool on) {
+    constexpr void draw_rect(const Rect r, const bool on) {
         const auto [x, y] = r.pos;
         const auto [w, h] = r.size;
         if (w <= 0 || h <= 0) {
@@ -91,7 +91,7 @@ public:
 
     // Glyph columns are drawn as lit pixels; with `invert`, lit pixels are cleared instead.
     template <std::size_t N>
-    constexpr void draw_glyph(Point p, const std::array<uint16_t, N>& cols, int height, bool invert) {
+    constexpr void draw_glyph(const Point p, const std::array<uint16_t, N>& cols, const int height, const bool invert) {
         for (std::size_t col = 0; col < N; ++col) {
             for (int row = 0; row < height; ++row) {
                 if ((cols[col] & (1u << row)) != 0) {
@@ -101,7 +101,7 @@ public:
         }
     }
 
-    constexpr void draw_char_4x6(Point p, char c, bool invert) {
+    constexpr void draw_char_4x6(const Point p, const char c, const bool invert) {
         const auto u = static_cast<unsigned char>(c);
         if (u < 0x20 || u > 0x7E) {
             return;
@@ -110,14 +110,14 @@ public:
         draw_glyph<4>(p, {g[0], g[1], g[2], g[3]}, 6, invert);
     }
 
-    constexpr void draw_str_4x6(Point p, std::string_view text, bool invert) {
+    constexpr void draw_str_4x6(Point p, std::string_view text, const bool invert) {
         for (char c : text) {
             draw_char_4x6(p, c, invert);
             p.x += 4;
         }
     }
 
-    constexpr void draw_char_6x10(Point p, char c, bool invert) {
+    constexpr void draw_char_6x10(const Point p, const char c, const bool invert) {
         const auto u = static_cast<unsigned char>(c);
         if (u < 0x20 || u > 0x7E) {
             return;
@@ -125,7 +125,7 @@ public:
         draw_glyph<6>(p, fonts::kFont6x10[u - 0x20], 10, invert);
     }
 
-    constexpr void draw_str_6x10(Point p, std::string_view text, bool invert) {
+    constexpr void draw_str_6x10(Point p, std::string_view text, const bool invert) {
         for (char c : text) {
             draw_char_6x10(p, c, invert);
             p.x += 6;
@@ -133,11 +133,11 @@ public:
     }
 
 private:
-    static constexpr std::size_t index(Point p) {
+    static constexpr std::size_t index(const Point p) {
         return static_cast<std::size_t>((p.y / 8) * kWidth + p.x);
     }
 
-    static constexpr uint8_t bit_mask(int y) { return static_cast<uint8_t>(1u << (y % 8)); }
+    static constexpr uint8_t bit_mask(const int y) { return static_cast<uint8_t>(1u << (y % 8)); }
 
     std::array<uint8_t, kBufferSize> px_{};
 };

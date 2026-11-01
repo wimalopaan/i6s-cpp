@@ -29,7 +29,7 @@ inline constexpr uint32_t kPingPeriodMs = 1000;
 inline constexpr std::size_t kMaxRxBytesPerPoll = 128;
 
 /// Enables or disables CRSF on USART2 and the module power switch.
-inline void set_enabled(bool enabled, uint8_t baud_idx, uart::Duplex duplex) {
+inline void set_enabled(const bool enabled, const uint8_t baud_idx, const uart::Duplex duplex) {
     const bool half_duplex = duplex == uart::Duplex::Half;
     if (enabled == g_enabled &&
         (!enabled || (baud_idx == g_baud_idx && half_duplex == g_half_duplex))) {
@@ -57,8 +57,8 @@ inline bool is_enabled() {
 
 /// Sends an RC channels frame every 10 ms (100 Hz).
 template <std::size_t N>
-inline void update_channels(uint32_t now_ms, const std::array<uint16_t, N>& channels,
-                            logic::crsf::ArmModeSwitch arm_mode_switch, logic::crsf::ArmedState armed) {
+inline void update_channels(const uint32_t now_ms, const std::array<uint16_t, N>& channels,
+                            const logic::crsf::ArmModeSwitch arm_mode_switch, const logic::crsf::ArmedState armed) {
     if (!g_enabled || static_cast<uint32_t>(now_ms - g_last_tx_ms) < kTxPeriodMs) {
         return;
     }
@@ -91,7 +91,7 @@ inline void perform(const MenuAction& a) {
 }
 
 /// Device info (0x29): payload is [dest, origin, name\0, serial(4), hw(4), fw(4), param_count, ...].
-inline void on_device_info(std::span<const uint8_t> p, uint32_t now_ms) {
+inline void on_device_info(std::span<const uint8_t> p, const uint32_t now_ms) {
     if (p.size() < 3 || g_menu.state != logic::crsf::menu::Loader::State::Idle) {
         return;
     }
@@ -103,7 +103,7 @@ inline void on_device_info(std::span<const uint8_t> p, uint32_t now_ms) {
 }
 
 /// Parameter entry (0x2B): payload is [dest, origin, param, chunks_remain, chunk...].
-inline void on_param_entry(std::span<const uint8_t> p, uint32_t now_ms) {
+inline void on_param_entry(std::span<const uint8_t> p, const uint32_t now_ms) {
     if (p.size() < 4) {
         return;
     }
@@ -126,7 +126,7 @@ inline void on_param_entry(std::span<const uint8_t> p, uint32_t now_ms) {
 }  // namespace detail
 
 /// Drains USART2 RX, updates telemetry and the parameter menu. Call regularly from the main loop.
-inline void poll_telemetry(uint32_t now_ms) {
+inline void poll_telemetry(const uint32_t now_ms) {
     if (!g_enabled) {
         return;
     }
@@ -188,7 +188,7 @@ inline bool menu_ready() {
 }
 
 /// Writes a value (clamped to the parameter range) to the loaded device.
-inline bool menu_set_value(uint8_t param, int32_t value) {
+inline bool menu_set_value(const uint8_t param, const int32_t value) {
     if (!menu_ready() || param >= logic::crsf::menu::kMaxParams || !g_menu.entries[param]) {
         return false;
     }
@@ -207,24 +207,24 @@ inline bool menu_set_value(uint8_t param, int32_t value) {
 }
 
 /// Cycles a select parameter to its next option.
-inline bool menu_cycle_value(uint8_t param) {
+inline bool menu_cycle_value(const uint8_t param) {
     if (!menu_ready() || param >= logic::crsf::menu::kMaxParams || !g_menu.entries[param]) {
         return false;
     }
     return menu_set_value(param, logic::crsf::menu::cycled_value(*g_menu.entries[param]));
 }
 
-inline void menu_enter_folder(uint8_t folder, uint32_t now_ms) {
+inline void menu_enter_folder(const uint8_t folder, const uint32_t now_ms) {
     detail::perform(g_menu.enter_folder(folder, now_ms));
 }
 
-inline void menu_start_command(uint8_t param, uint32_t now_ms) {
+inline void menu_start_command(const uint8_t param, const uint32_t now_ms) {
     if (menu_ready()) {
         detail::perform(g_command.start(param, now_ms));
     }
 }
 
-inline void menu_confirm_command(uint32_t now_ms) {
+inline void menu_confirm_command(const uint32_t now_ms) {
     detail::perform(g_command.confirm(now_ms));
 }
 

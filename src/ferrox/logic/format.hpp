@@ -15,7 +15,7 @@ struct Text {
     std::array<char, N> buf{};
     std::size_t len{0};
 
-    constexpr void push(char c) {
+    constexpr void push(const char c) {
         if (len < N) {
             buf[len++] = c;
         }
@@ -27,7 +27,7 @@ struct Text {
 namespace detail {
 
 template <std::size_t N>
-constexpr void push_spaces(Text<N>& t, int count) {
+constexpr void push_spaces(Text<N>& t, const int count) {
     for (int i = 0; i < count; ++i) {
         t.push(' ');
     }
@@ -47,12 +47,12 @@ constexpr void push_uint(Text<N>& t, unsigned v) {
     }
 }
 
-constexpr char hex_digit(unsigned v) { return "0123456789ABCDEF"[v & 0x0Fu]; }
+constexpr char hex_digit(const unsigned v) { return "0123456789ABCDEF"[v & 0x0Fu]; }
 
 }  // namespace detail
 
 /// Signed integer without padding, e.g. "-100", "35", "0".
-constexpr Text<4> format_int(int val) {
+constexpr Text<4> format_int(const int val) {
     Text<4> t;
     if (val < 0) {
         t.push('-');
@@ -62,7 +62,7 @@ constexpr Text<4> format_int(int val) {
 }
 
 /// Percent of a stick value (-1000..+1000) as "+100%", "+ 50%", "   0%", "- 10%" (always 5 characters).
-constexpr Text<5> format_percent(int16_t val) {
+constexpr Text<5> format_percent(const int16_t val) {
     const int pct = val / 10;
     Text<5> t;
     if (pct < 0) {
@@ -82,7 +82,7 @@ constexpr Text<5> format_percent(int16_t val) {
 
 /// Unipolar throttle percent 0..100 as "   0%" .. " 100%" (always 5 characters).
 // Vario deadband in tenths of m/s (0..99) as "+1.2m/s" (climb) or "-0.5m/s" (sink).
-constexpr Text<7> format_deadband_ms(uint8_t tenths, bool sink) {
+constexpr Text<7> format_deadband_ms(const uint8_t tenths, const bool sink) {
     Text<7> t;
     t.push(sink ? '-' : '+');
     t.push(static_cast<char>('0' + (tenths / 10) % 10));
@@ -94,7 +94,7 @@ constexpr Text<7> format_deadband_ms(uint8_t tenths, bool sink) {
     return t;
 }
 
-constexpr Text<5> format_throttle_percent(int16_t val) {
+constexpr Text<5> format_throttle_percent(const int16_t val) {
     const int pct = std::clamp((static_cast<int>(val) + 1000) * 100 / 2000, 0, 100);
     Text<5> t;
     t.push(' ');
@@ -106,7 +106,7 @@ constexpr Text<5> format_throttle_percent(int16_t val) {
 }
 
 /// Active trim as "TRM A:+05". `axis` is the one-letter axis name (A, E, T, R).
-constexpr Text<9> format_trim(char axis, int8_t val) {
+constexpr Text<9> format_trim(const char axis, const int8_t val) {
     Text<9> t;
     for (char c : std::string_view("TRM  :")) {
         t.push(c);
@@ -120,7 +120,7 @@ constexpr Text<9> format_trim(char axis, int8_t val) {
 }
 
 /// Flight timer as "MM:SS", prefixed with '+' once expired. Minutes cap at 99.
-constexpr Text<6> format_timer(uint16_t secs, bool expired) {
+constexpr Text<6> format_timer(const uint16_t secs, const bool expired) {
     Text<6> t;
     if (expired) {
         t.push('+');
@@ -136,7 +136,7 @@ constexpr Text<6> format_timer(uint16_t secs, bool expired) {
 }
 
 /// Battery voltage from millivolts as "4.20V" or "12.60V".
-constexpr Text<6> format_vbat(uint16_t mv) {
+constexpr Text<6> format_vbat(const uint16_t mv) {
     const unsigned centi = mv / 10;
     Text<6> t;
     const unsigned integer = centi / 100;
@@ -149,7 +149,7 @@ constexpr Text<6> format_vbat(uint16_t mv) {
 }
 
 /// Two-digit zero-padded decimal, clamped to 99.
-constexpr Text<2> format_dec2(unsigned val) {
+constexpr Text<2> format_dec2(const unsigned val) {
     const unsigned v = std::min(val, 99u);
     Text<2> t;
     t.push(static_cast<char>('0' + v / 10));
@@ -158,7 +158,7 @@ constexpr Text<2> format_dec2(unsigned val) {
 }
 
 /// Eight-digit upper-case hex.
-constexpr Text<8> format_hex32(uint32_t val) {
+constexpr Text<8> format_hex32(const uint32_t val) {
     Text<8> t;
     for (int shift = 28; shift >= 0; shift -= 4) {
         t.push(detail::hex_digit(val >> shift));

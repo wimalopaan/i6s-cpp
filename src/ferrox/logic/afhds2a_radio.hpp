@@ -39,7 +39,7 @@ struct Heartbeat {
     uint16_t last = 0;
     uint8_t stale = 0;
 
-    constexpr bool allow_tx(uint16_t hb) {
+    constexpr bool allow_tx(const uint16_t hb) {
         if (hb == last) {
             if (stale < 0xFF) {
                 ++stale;
@@ -66,7 +66,7 @@ struct Radio {
     uint32_t packets_sent = 0;
     std::array<uint16_t, kNumChannels> channels{};
 
-    constexpr explicit Radio(TxId tx) : link(tx), hop(hopping_table(tx)) {}
+    constexpr explicit Radio(const TxId tx) : link(tx), hop(hopping_table(tx)) {}
 
     constexpr bool binding() const { return link.binding; }
 
@@ -153,7 +153,7 @@ struct Radio {
     }
 
     // Called by the hardware after a CRC-OK RX frame has been read from the FIFO.
-    constexpr void on_rx_frame(const Frame& rx, uint8_t raw_rssi, uint32_t now_ms) {
+    constexpr void on_rx_frame(const Frame& rx, const uint8_t raw_rssi, const uint32_t now_ms) {
         if (link.binding) {
             if (link.on_bind_reply(rx)) {
                 bind_confirm = 0;
@@ -166,7 +166,7 @@ struct Radio {
     }
 
     // Returns the TX power register to apply now, or nullopt while binding.
-    constexpr std::optional<uint8_t> set_bind_mode(bool on) {
+    constexpr std::optional<uint8_t> set_bind_mode(const bool on) {
         if (on) {
             link.binding = true;
             link.bind_step = BindStep::Phase1;
@@ -184,7 +184,7 @@ struct Radio {
         return a7105::power_from_index(link.rf_power_idx);
     }
 
-    constexpr std::optional<uint8_t> set_rf_power(uint8_t idx) {
+    constexpr std::optional<uint8_t> set_rf_power(const uint8_t idx) {
         link.set_rf_power(idx);
         if (link.binding) {
             return std::nullopt;
@@ -192,14 +192,14 @@ struct Radio {
         return a7105::power_from_index(link.rf_power_idx);
     }
 
-    constexpr void set_rx_id(RxId id) {
+    constexpr void set_rx_id(const RxId id) {
         link.rx_id = id.value == 0 ? RxId{0xFFFF'FFFFu} : id;
         link.bind_done = id.value != 0 && id.value != 0xFFFF'FFFFu;
         loss = 0;
         link.telemetry.connected = false;
     }
 
-    constexpr void set_rx_settings(uint16_t rate_hz, PpmOut ppm_out, SbusOut sbus) {
+    constexpr void set_rx_settings(const uint16_t rate_hz, const PpmOut ppm_out, const SbusOut sbus) {
         link.set_rx_settings(rate_hz, ppm_out, sbus);
     }
 

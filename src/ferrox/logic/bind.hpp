@@ -21,7 +21,7 @@ struct Link {
 };
 
 /// Binding is shown only on AFHDS 2A (Rust `is_binding = !is_crsf && rf::is_binding()`).
-constexpr bool binding_shown(Link link) { return link.afhds && link.radio_binding; }
+constexpr bool binding_shown(const Link link) { return link.afhds && link.radio_binding; }
 
 struct Input {
     Link link{};
