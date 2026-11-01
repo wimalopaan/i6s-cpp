@@ -4,6 +4,7 @@
 #include <span>
 
 #include "ferrox/logic/brr.hpp"
+#include "ferrox/logic/calib.hpp"
 #include "ferrox/logic/crsf.hpp"
 #include "ferrox/logic/crsf_menu.hpp"
 #include "ferrox/logic/dashboard.hpp"
@@ -1077,6 +1078,106 @@ void menu_test() {
     check(lit_pixels(gauges) > 0, "system info must render the MCU name");
 }
 
+void calib_test() {
+    using namespace ferrox::logic;
+    using calib::Input;
+    using calib::Wizard;
+    using calib::Step;
+
+    const auto frame = [](Wizard& w, storage::RadioConfig& radio, const input::Raw& raw, uint16_t pressed,
+                          uint16_t held, uint16_t dt) {
+        return calib::update(w, Input{pressed, held, raw, dt}, radio);
+    };
+
+    storage::RadioConfig radio = storage::default_storage().radio;
+    radio.ext_adc = 0;
+    radio.gimbal_type = 0;
+    for (auto& mode : radio.adc_modes) {
+        mode = static_cast<uint8_t>(input::AdcMode::TwoPos);
+    }
+    radio.adc_modes[0] = static_cast<uint8_t>(input::AdcMode::Pot);
+    radio.adc_modes[1] = static_cast<uint8_t>(input::AdcMode::Pot);
+    const auto pot1_before = radio.aux_pots[1];
+
+    input::Raw center{};
+    center.fill(storage::kAdcCenter);
+
+    Wizard w{};
+    check(!calib::active(w), "calib: wizard starts inactive");
+    calib::start(w);
+    check(calib::active(w) && w.step == Step::Center, "calib: start enters Center");
+
+    check(!frame(w, radio, center, logic::kKeyOk, logic::kKeyOk, 10) && w.step == Step::Center,
+          "calib: OK held from the menu must not capture");
+    frame(w, radio, center, 0, 0, 10);
+    frame(w, radio, center, logic::kKeyOk, logic::kKeyOk, 10);
+    check(w.step == Step::Limits, "calib: OK captures centre and moves to Limits");
+    check(w.stick_center[0] == storage::kAdcCenter && w.pot_center[0] == storage::kAdcCenter,
+          "calib: centre values captured");
+    frame(w, radio, center, 0, 0, 10);
+    check(!frame(w, radio, center, logic::kKeyOk, logic::kKeyOk, 10) && w.step == Step::Limits,
+          "calib: OK rejected without travel");
+
+    input::Raw lo = center;
+    input::Raw hi = center;
+    for (std::size_t i = 0; i < 4; ++i) {
+        lo[i] = 1000;
+        hi[i] = 3000;
+    }
+    lo[4] = 1000;
+    hi[4] = 3000;
+    lo[5] = 2000;
+    hi[5] = 2100;
+    frame(w, radio, lo, 0, 0, 10);
+    frame(w, radio, hi, 0, 0, 10);
+    const bool saved = frame(w, radio, hi, logic::kKeyOk, logic::kKeyOk, 10);
+    check(saved && w.step == Step::Complete, "calib: OK with travel saves and enters Complete");
+    check(radio.sticks[0].center == 2048 && radio.sticks[0].min == 1017 && radio.sticks[0].max == 2985,
+          "calib: stick endpoints use the 63/64 margin");
+    check(radio.aux_pots[0].center == 2048 && radio.aux_pots[0].min == 1017 && radio.aux_pots[0].max == 2985,
+          "calib: pot with enough travel is saved");
+    check(radio.aux_pots[1].min == pot1_before.min && radio.aux_pots[1].max == pot1_before.max,
+          "calib: pot with span below 400 keeps its old calibration");
+
+    frame(w, radio, hi, 0, 0, 500);
+    check(w.step == Step::Complete, "calib: Complete holds for 1200 ms");
+    frame(w, radio, hi, 0, 0, 500);
+    frame(w, radio, hi, 0, 0, 500);
+    check(!calib::active(w), "calib: Complete ends after 1200 ms");
+
+    Wizard c{};
+    calib::start(c);
+    frame(c, radio, center, 0, 0, 10);
+    frame(c, radio, center, calib::kKeyCancel, calib::kKeyCancel, 10);
+    check(!calib::active(c), "calib: cancel in Center leaves the wizard");
+
+    for (const std::size_t count : {std::size_t{1}, std::size_t{3}, std::size_t{7}}) {
+        storage::RadioConfig r = storage::default_storage().radio;
+        r.ext_adc = count > 6 ? 1 : 0;
+        for (std::size_t ch = 0; ch < 10; ++ch) {
+            r.adc_modes[ch] = static_cast<uint8_t>(ch < count ? input::AdcMode::Pot : input::AdcMode::TwoPos);
+        }
+        check(calib::configured_pots(r).count == count, "calib: configured pot count");
+        Wizard lw{};
+        calib::start(lw);
+        lw.step = Step::Limits;
+        logic::display::Framebuffer fb{};
+        fb.clear();
+        calib::render(fb, lw, center, r, 0);
+        check(lit_pixels(fb) > 0, "calib: limits screen must draw");
+    }
+
+    logic::menu::State ms{};
+    logic::menu::open(ms);
+    ms.main.selected = logic::menu::kItemCalibration;
+    storage::RadioStorage menu_storage = storage::default_storage();
+    const auto ev0 = logic::menu::update(ms, logic::menu::Input{0, 0, 0}, menu_storage);
+    const auto ev = logic::menu::update(ms, logic::menu::Input{logic::kKeyOk, logic::kKeyOk, 0}, menu_storage);
+    check(ev0.action == logic::menu::Action::None, "menu: release frame must not act");
+    check(ev.action == logic::menu::Action::StartCalibration && ms.screen == logic::menu::Screen::Closed,
+          "menu: Calibration closes the menu and requests the wizard");
+}
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -1088,6 +1189,7 @@ int main() {
     display_test();
     dashboard_test();
     menu_test();
+    calib_test();
     if (failures == 0) {
         std::puts("all host logic tests passed");
     }

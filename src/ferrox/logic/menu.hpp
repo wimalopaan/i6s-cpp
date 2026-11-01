@@ -55,6 +55,7 @@ enum class Screen : uint8_t { Closed, Main, ModelSelect, ModelSetup, ChannelReve
 
 inline constexpr std::size_t kItemChannelReverse = 6;
 inline constexpr std::size_t kItemChannelMonitor = 8;
+inline constexpr std::size_t kItemCalibration = 9;
 inline constexpr std::size_t kItemDiagAnalog = 10;
 inline constexpr std::size_t kItemSystemInfo = 11;
 inline constexpr std::size_t kMonitorPages = 3;
@@ -75,6 +76,7 @@ enum class Action : uint8_t {
     EnterModelSelect,  // caller refreshes ModelNames before the next render
     SwitchModel,       // index = target model slot
     SaveActiveModel,
+    StartCalibration,  // menu closes; caller starts the calibration wizard
 };
 
 struct Event {
@@ -227,6 +229,10 @@ constexpr Event update_main(State& s, const Nav& n, uint8_t active_model) {
         if (s.main.selected == kItemChannelMonitor) {
             s.screen = Screen::ChannelMonitor;
             s.page = 0;
+        }
+        if (s.main.selected == kItemCalibration) {
+            s.screen = Screen::Closed;
+            return {Action::StartCalibration, 0};
         }
         if (s.main.selected == kItemDiagAnalog) {
             s.screen = Screen::DiagAnalog;

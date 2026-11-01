@@ -4,7 +4,7 @@ C++26 port of the FlySky FS-i6X firmware (originally `ferrox-rc/flysky-i6x-rs`, 
 
 Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static polymorphism only (no virtual), no heap, no exceptions/RTTI.
 
-## Status: foundation, CRSF, storage, mixer, input, RC output, LCD, dashboard, menus, main-menu diagnostics
+## Status: foundation, CRSF, storage, mixer, input, RC output, LCD, dashboard, menus, main-menu diagnostics, calibration
 
 Ported so far:
 - Chip/CMSIS: system clock (48 MHz), reset flags, DFU entry and jump, UID
@@ -28,7 +28,10 @@ Ported so far:
 
 - Menus (pure logic, host-tested): hold OK for 1.2 s on the dashboard to open the menu. Main menu with 3-row scrolling list and the 12 Rust 12x12 icons, model select (20 models, names read from EEPROM on entry, OK loads a model and reconfigures CRSF), and model setup for name (char editing), type, arm switch and timer. Cancel saves and steps back. Channel reverse (per-model bit toggle, saved on cancel), channel monitor (3 pages of 6 channels, wrapping), analog diagnostics (2 pages, raw ADC values), and system info (MCU name, flash and profile count). Deviations from Rust: diagnostics pages 2–4 (external switches, external ADC, EEPROM) are not ported, and system info omits the firmware version and storage status lines. Key repeat after 300 ms, every 70 ms. Logic in `logic/menu.hpp`, shared labels in `logic/labels.hpp`, icon bitmaps in `logic/glyphs.hpp` (host-tested). Wired into `main.cpp`. Not tested on hardware.
 
-Not yet ported: main-menu items after "Model Setup" (dual rate, throttle curve, mixer, aux, radio setup, calibration), diagnostics pages 2–4 and system info firmware/storage lines, model setup rows copy, vario, telemetry, protocol and reset, bind, telemetry page P5 (placeholder only), AFHDS2A RF status and model page line, buzzer, USB, trainer, trim key state machine and trim footers, throttle curve (linear pass-through for now), flight timer state machine and arm chimes, bind footer.
+- Calibration wizard (pure logic and rendering, host-tested): start from the main menu "Calibration" entry, which closes the menu. Steps: centre (OK captures), limits (move all sticks and configured pots, OK saves once every stick has enough travel), complete screen for 1.2 s. Stick endpoints get a 63/64 margin. Pots are saved only with at least 400 counts of travel. Pot centre and limits are kept in separate arrays from the sticks, which fixes a Rust bug where pot channels 0–3 overwrote the stick endpoints. Saved to EEPROM with `save_radio_config`. Logic and draw code in `logic/calib.hpp`, wiring in `main.cpp`. Deviations from Rust: no buzzer chimes yet, and the complete screen says "EEPROM updated OK" instead of "Flash updated OK". Not tested on hardware.
+
+Not yet ported: main-menu items after "Model Setup" (dual rate, throttle curve, mixer, aux, radio setup), diagnostics pages 2–4 and system info firmware/storage lines, model setup rows copy, vario, telemetry, protocol and reset, bind, telemetry page P5 (placeholder only), AFHDS2A RF status and model page line, buzzer (including calibration chimes), USB, trainer, trim key state machine and trim footers, throttle curve (linear pass-through for now), flight timer state machine and arm chimes, bind footer.
+
 
 ## Build
 

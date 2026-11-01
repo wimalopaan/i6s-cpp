@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string_view>
@@ -12,6 +13,7 @@
 #include "ferrox/hw/st7567.hpp"
 #include "ferrox/logic/dashboard.hpp"
 #include "ferrox/logic/brr.hpp"
+#include "ferrox/logic/calib.hpp"
 #include "ferrox/logic/flight.hpp"
 #include "ferrox/logic/framebuffer.hpp"
 #include "ferrox/logic/input.hpp"
@@ -33,6 +35,9 @@ ferrox::logic::storage::RadioStorage g_storage{};
 
 // Calibration and filter state derived from g_storage.radio.
 ferrox::logic::input::Calibration g_calib{};
+
+// Stick and pot endpoint capture, started from the main menu.
+ferrox::logic::calib::Wizard g_calib_wizard{};
 
 // Display content is rendered into this buffer and flushed to the ST7567.
 ferrox::logic::display::Framebuffer g_fb{};
@@ -177,6 +182,7 @@ int main() {
     logic::menu::State menu_state{};
     bool ok_armed = false;
     uint32_t ok_press_ms = 0;
+    uint32_t last_loop_ms = time::millis();
 
     for (;;) {
         chip::watchdog::feed();
@@ -188,8 +194,16 @@ int main() {
         const uint16_t pressed = static_cast<uint16_t>(g_keys & ~prev_keys);
         prev_keys = g_keys;
         const uint32_t now = time::millis();
+        const auto dt_ms = static_cast<uint16_t>(std::min<uint32_t>(now - last_loop_ms, 20));
+        last_loop_ms = now;
 
-        if (menu_state.screen == logic::menu::Screen::Closed) {
+        if (logic::calib::active(g_calib_wizard)) {
+            const logic::calib::Input cal_in{pressed, g_keys, input.raw, dt_ms};
+            if (logic::calib::update(g_calib_wizard, cal_in, g_storage.radio)) {
+                logic::input::apply_calibration(g_storage.radio, g_calib);
+                logic::storage::save_radio_config<hw::I2c2Eeprom>(g_storage);
+            }
+        } else if (menu_state.screen == logic::menu::Screen::Closed) {
             handle_keys(page_state, pressed);
             if ((g_keys & logic::kKeyOk) == 0) {
                 ok_armed = true;
@@ -211,6 +225,7 @@ int main() {
                 case logic::menu::Action::SaveActiveModel:
                     logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage);
                     break;
+                case logic::menu::Action::StartCalibration: logic::calib::start(g_calib_wizard); break;
                 case logic::menu::Action::CloseMenu:
                 case logic::menu::Action::None: break;
             }
@@ -227,7 +242,9 @@ int main() {
 
         if (now - last_draw_ms >= 100) {
             g_fb.clear();
-            if (menu_state.screen == logic::menu::Screen::Closed) {
+            if (logic::calib::active(g_calib_wizard)) {
+                logic::calib::render(g_fb, g_calib_wizard, input.raw, g_storage.radio, model.model_type);
+            } else if (menu_state.screen == logic::menu::Screen::Closed) {
                 render(g_fb, page_state, View{input, g_storage, no_trim, channels, crsf});
             } else {
                 logic::menu::render(g_fb, menu_state, g_model_names, g_storage,
