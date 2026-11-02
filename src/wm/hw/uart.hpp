@@ -25,7 +25,7 @@ inline constexpr std::size_t kRxBufSize = 256;
 inline constexpr std::size_t kTxBufSize = 64;
 static_assert((kRxBufSize & (kRxBufSize - 1)) == 0, "RX ring size must be a power of two");
 
-// Raw NVIC priority byte (0x40). CMSIS NVIC_SetPriority would shift it by 6 on Cortex-M0.
+// NVIC priority byte (0x40, Rust `set_priority`); only the top __NVIC_PRIO_BITS bits are implemented.
 inline constexpr uint8_t kIrqPriorityRaw = 0x40;
 
 inline constinit uint8_t g_rx_buf[kRxBufSize]{};
@@ -125,7 +125,8 @@ inline void set_uart_enabled(const bool enabled, const uint8_t baud_index, const
         g_rx_idle_pending = false;
 
         NVIC_ClearPendingIRQ(USART2_IRQn);
-        reinterpret_cast<volatile uint8_t*>(&NVIC->IP[0])[USART2_IRQn] = kIrqPriorityRaw;
+        // Cortex-M0 IPR registers are word-access only; NVIC_SetPriority does a word read-modify-write.
+        NVIC_SetPriority(USART2_IRQn, kIrqPriorityRaw >> (8u - __NVIC_PRIO_BITS));
         NVIC_EnableIRQ(USART2_IRQn);
 
         USART2->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_IDLEIE | USART_CR1_TCIE;

@@ -7,9 +7,11 @@
 #include <span>
 
 #include "wm/arch/regs.hpp"
+#include "wm/chip/watchdog.hpp"
 #include "wm/hw/gpio.hpp"
 #include "wm/hw/keys.hpp"
 #include "wm/logic/usb.hpp"
+#include "wm/time/systick.hpp"
 
 namespace wm::hw::usb {
 
@@ -20,8 +22,8 @@ using lu::UsbMode;
 using Dm = Pin<Port::A, 11>;
 using Dp = Pin<Port::A, 12>;
 
-// USB SRAM: 1 KB. Each 16-bit field sits on a 32-bit word, so the logical
-// PMA byte offset `o` maps to hardware address kPmaBase + 2 * o.
+// USB SRAM: 1 KB, contiguous and accessed as 16-bit half-words (F0 layout, stm32-usbd `Word16x2`):
+// PMA byte offset `o` maps to hardware address kPmaBase + o. The 2 * o mapping is the F1/F3 layout.
 inline constexpr uintptr_t kPmaBase = 0x4000'6000u;
 inline constexpr uint16_t kBtableOff = 0;
 inline constexpr uint16_t kEp0TxOff = 32;
@@ -39,7 +41,10 @@ inline constexpr uint32_t kTelemIntervalMs = 100;
 inline constexpr uint32_t kResetGraceMs = 200;
 inline constexpr std::size_t kTelemBufSize = 160;
 
-inline constexpr uint8_t kIrqPriorityRaw = 0x40;
+// Lowest level so the RF interrupts (0x80) preempt USB (Rust `usb::init`).
+inline constexpr uint8_t kIrqPriorityRaw = 0xC0;
+// SE0 time before (re)attaching, so the host sees the detach (Rust `usb::init`).
+inline constexpr uint32_t kDisconnectMs = 250;
 inline constexpr uint8_t kNoAddress = 0xFF;
 inline constexpr uint32_t kSpinCycles = 4000;
 
@@ -85,7 +90,7 @@ inline volatile uint16_t& ep_reg(const uint8_t n) {
 }
 
 inline volatile uint16_t& pma(const uint16_t off) {
-    return *reinterpret_cast<volatile uint16_t*>(kPmaBase + 2u * off);
+    return *reinterpret_cast<volatile uint16_t*>(kPmaBase + off);
 }
 
 inline void spin(const uint32_t cycles) {
@@ -192,18 +197,72 @@ inline void ep0_stage_blob(const lu::Blob<N>& blob, const uint16_t wanted) {
 inline void open_cdc() {
     ep_reg(kCdcEp) = kCdcEp;
     set_buffers(kCdcEp, kCdcInPmaOff, kCdcOutPmaOff, kRxCountControl);
+    ep_set_dtog(kCdcEp, USB_EP_DTOG_TX, false);
+    ep_set_dtog(kCdcEp, USB_EP_DTOG_RX, false);
     ep_set_status(kCdcEp, kTxStatMask, USB_EP_TX_NAK);
     ep_set_status(kCdcEp, kRxStatMask, USB_EP_RX_VALID);
 
     ep_reg(kNotifyEp) = static_cast<uint16_t>(USB_EP_INTERRUPT | kNotifyEp);
     set_buffers(kNotifyEp, kNotifyPmaOff, 0, 0);
+    ep_set_dtog(kNotifyEp, USB_EP_DTOG_TX, false);
     ep_set_status(kNotifyEp, kTxStatMask, USB_EP_TX_NAK);
 }
 
 inline void open_hid() {
     ep_reg(kHidEp) = static_cast<uint16_t>(USB_EP_INTERRUPT | kHidEp);
     set_buffers(kHidEp, kHidPmaOff, 0, 0);
+    ep_set_dtog(kHidEp, USB_EP_DTOG_TX, false);
     ep_set_status(kHidEp, kTxStatMask, USB_EP_TX_NAK);
+}
+
+// True for a non-control endpoint address (bit 7 = IN) that the current configuration opened.
+inline bool endpoint_open(const uint8_t addr) {
+    if (g_config == 0) {
+        return false;
+    }
+    switch (addr) {
+        case 0x80 | kHidEp: return lu::has_hid(g_mode);
+        case 0x80 | kCdcEp:
+        case kCdcEp:
+        case 0x80 | kNotifyEp: return lu::has_cdc(g_mode);
+        default: return false;
+    }
+}
+
+inline bool endpoint_halted(const uint8_t addr) {
+    const uint16_t r = ep_reg(addr & 0x0F);
+    return (addr & 0x80) != 0 ? (r & kTxStatMask) == USB_EP_TX_STALL : (r & kRxStatMask) == USB_EP_RX_STALL;
+}
+
+// SET_FEATURE / CLEAR_FEATURE(ENDPOINT_HALT). Clearing the halt also resets the data toggle to DATA0.
+inline void set_endpoint_halt(const uint8_t addr, const bool halt) {
+    const uint8_t n = addr & 0x0F;
+    if ((addr & 0x80) != 0) {
+        if (!halt) {
+            ep_set_dtog(n, USB_EP_DTOG_TX, false);
+        }
+        ep_set_status(n, kTxStatMask, halt ? USB_EP_TX_STALL : USB_EP_TX_NAK);
+    } else {
+        if (!halt) {
+            ep_set_dtog(n, USB_EP_DTOG_RX, false);
+        }
+        ep_set_status(n, kRxStatMask, halt ? USB_EP_RX_STALL : USB_EP_RX_VALID);
+    }
+}
+
+inline void handle_feature(const Setup& s, const bool set) {
+    const uint8_t recipient = s.type & 0x1F;
+    const auto addr = static_cast<uint8_t>(s.index & 0xFF);
+    if (recipient == 0) {  // DEVICE_REMOTE_WAKEUP / TEST_MODE: accepted and not used
+        ep0_status_in();
+    } else if (recipient == 2 && s.value == 0 && (addr & 0x0F) == 0) {
+        ep0_status_in();
+    } else if (recipient == 2 && s.value == 0 && endpoint_open(addr)) {
+        set_endpoint_halt(addr, set);
+        ep0_status_in();
+    } else {
+        ep0_stall();
+    }
 }
 
 inline void configure_endpoints() {
@@ -238,13 +297,17 @@ inline void handle_get_descriptor(const Setup& s) {
 
 inline void handle_standard(const Setup& s) {
     switch (s.request) {
-        case 0x00: {  // GET_STATUS
+        case 0x00: {  // GET_STATUS: endpoint recipients report their halt bit
+            const auto addr = static_cast<uint8_t>(s.index & 0xFF);
+            const bool halted = (s.type & 0x1F) == 2 && endpoint_open(addr) && endpoint_halted(addr);
             g_ctl_store = {};
-            g_ctl_store.put(0);
+            g_ctl_store.put(halted ? 1 : 0);
             g_ctl_store.put(0);
             ep0_send_data(g_ctl_store.view(), s.length);
             break;
         }
+        case 0x01: handle_feature(s, false); break;  // CLEAR_FEATURE
+        case 0x03: handle_feature(s, true); break;   // SET_FEATURE
         case 0x05:  // SET_ADDRESS: applied after the status stage
             g_pending_addr = static_cast<uint8_t>(s.value & 0x7F);
             ep0_status_in();
@@ -650,12 +713,27 @@ inline bool is_sim_mode() {
     return lu::is_sim_mode(g_mode, g_config != 0);
 }
 
-/// Starts the device stack in `mode` (pull-up on, interrupts enabled).
+/// Pull-up off and SE0 (both lines driven low) for kDisconnectMs, so the host drops the old device first.
+/// Feeds the watchdog while waiting.
+inline void force_disconnect() {
+    RCC->AHBENR |= RCC_AHBENR_GPIOAEN;
+    RCC->APB1ENR |= RCC_APB1ENR_USBEN;
+    USB->BCDR = 0;
+    Dm::write(false);
+    Dp::write(false);
+    Dm::set_mode(Mode::Output);
+    Dp::set_mode(Mode::Output);
+    const uint32_t t0 = time::millis();
+    while (time::millis() - t0 < kDisconnectMs) {
+        chip::watchdog::feed();
+    }
+}
+
+/// Starts the device stack in `mode` (forced detach, then pull-up on, interrupts enabled).
 inline void start(const UsbMode mode) {
     g_mode = mode;
 
-    RCC->AHBENR |= RCC_AHBENR_GPIOAEN;
-    RCC->APB1ENR |= RCC_APB1ENR_USBEN;
+    force_disconnect();
     RCC->APB1RSTR |= RCC_APB1RSTR_USBRST;
     RCC->APB1RSTR &= ~RCC_APB1RSTR_USBRST;
 
@@ -675,20 +753,21 @@ inline void start(const UsbMode mode) {
     USB->CNTR = USB_CNTR_CTRM | USB_CNTR_RESETM | USB_CNTR_SUSPM | USB_CNTR_WKUPM | USB_CNTR_ERRM;
 
     NVIC_ClearPendingIRQ(USB_IRQn);
-    reinterpret_cast<volatile uint8_t*>(&NVIC->IP[0])[USB_IRQn] = kIrqPriorityRaw;
+    // Cortex-M0 IPR registers are word-access only; NVIC_SetPriority does a word read-modify-write.
+    NVIC_SetPriority(USB_IRQn, kIrqPriorityRaw >> (8u - __NVIC_PRIO_BITS));
     NVIC_EnableIRQ(USB_IRQn);
 
     USB->BCDR = USB_BCDR_DPPU;
 }
 
-/// Detaches from the host (pull-up off), powers the block down and gates its clock.
+/// Detaches from the host (pull-up off), powers the block down, gates its clock and floats the pins (analog).
 inline void stop() {
     NVIC_DisableIRQ(USB_IRQn);
     USB->BCDR = 0;
     USB->CNTR = USB_CNTR_FRES | USB_CNTR_PDWN;
     RCC->APB1ENR &= ~RCC_APB1ENR_USBEN;
-    Dm::set_mode(Mode::Input);
-    Dp::set_mode(Mode::Input);
+    Dm::set_mode(Mode::Analog);
+    Dp::set_mode(Mode::Analog);
     g_mode = UsbMode::Off;
     g_config = 0;
     cdc_reset_state();
