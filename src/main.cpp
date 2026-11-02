@@ -353,6 +353,8 @@ int main() {
     const auto& model = g_storage.active_model;
     load_trims_from_model();
     g_trims.throttle_enabled = g_storage.radio.throttle_trim != 0;
+    // PC13 module power switch: configured (power OFF) before apply_protocol_link() may turn it on.
+    hw::uart::init_power_switch(g_storage.radio.ext_module_pwr == 0);
     apply_protocol_link();
 
     const uint16_t boot_keys = hw::keys::scan_keys();
@@ -503,6 +505,7 @@ int main() {
                     logic::storage::save_radio_config<hw::I2c2Eeprom>(g_storage);
                     apply_lcd_settings(g_storage.radio);
                     apply_trainer_config(g_storage.radio);
+                    hw::uart::set_power_polarity(g_storage.radio.ext_module_pwr == 0);
                     g_trims.throttle_enabled = g_storage.radio.throttle_trim != 0;
 #if FERROX_USE_USB
                     hw::usb::set_mode(logic::usb::mode_from_stored(g_storage.radio.usb_mode));
