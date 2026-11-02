@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string_view>
 
 #include "ferrox/logic/crsf.hpp"
 
@@ -14,6 +15,8 @@ namespace ferrox::logic::crsf::menu {
 inline constexpr uint8_t kNoParent = 0xFF;
 inline constexpr std::size_t kTextLen = 32;
 inline constexpr std::size_t kMaxParams = 48;
+/// Shared storage for the variable text of all cached entries (option lists, units, info).
+inline constexpr std::size_t kTextPoolSize = 1024;
 inline constexpr std::size_t kMaxParamMap = 96;
 inline constexpr std::size_t kChunkBufSize = 256;
 inline constexpr uint32_t kCmdStartTimeoutMs = 1500;
@@ -74,6 +77,23 @@ constexpr std::size_t copy_text(std::span<const uint8_t> c, const std::size_t st
     return end;
 }
 
+/// Variable text of an entry. Fresh from parse_entry it points into the chunk payload; after
+/// Loader::on_entry it points into Loader::pool.
+struct TextRef {
+    uint16_t off = 0;
+    uint16_t len = 0;
+
+    constexpr bool operator==(const TextRef&) const = default;
+};
+
+/// Records the NUL-terminated string at start and returns the index of its NUL.
+constexpr std::size_t ref_text(std::span<const uint8_t> c, const std::size_t start, TextRef& out) {
+    const std::size_t end = find_nul(c, start);
+    out.off = static_cast<uint16_t>(start);
+    out.len = static_cast<uint16_t>(end - start);
+    return end;
+}
+
 /// One parsed parameter entry. Float is recognised but its value is not decoded.
 struct Entry {
     uint8_t parent = kNoParent;
@@ -81,7 +101,7 @@ struct Entry {
     bool hidden = false;
     Text<kTextLen> name{};
     /// Select: ';'-separated options. Uint8/Int8/Uint16/Int16: unit. String/Info/Command: text.
-    Text<kTextLen> text{};
+    TextRef text{};
     int32_t value = 0;
     int32_t min = 0;
     int32_t max = 0;
@@ -107,7 +127,7 @@ constexpr std::optional<Entry> parse_entry(std::span<const uint8_t> c) {
 
     switch (e.type) {
         case Type::Select: {
-            const std::size_t end = copy_text(c, rest, e.text);
+            const std::size_t end = ref_text(c, rest, e.text);
             uint8_t count = 1;
             for (std::size_t i = rest; i < end; ++i) {
                 if (c[i] == ';') {
@@ -134,7 +154,7 @@ constexpr std::optional<Entry> parse_entry(std::span<const uint8_t> c) {
                     e.max = static_cast<int8_t>(c[rest + 2]);
                 }
                 if (rest + 4 < c.size()) {
-                    copy_text(c, rest + 4, e.text);
+                    ref_text(c, rest + 4, e.text);
                 }
             }
             break;
@@ -154,13 +174,13 @@ constexpr std::optional<Entry> parse_entry(std::span<const uint8_t> c) {
                     e.max = static_cast<int16_t>(be16(rest + 4));
                 }
                 if (rest + 8 < c.size()) {
-                    copy_text(c, rest + 8, e.text);
+                    ref_text(c, rest + 8, e.text);
                 }
             }
             break;
         case Type::String:
         case Type::Info:
-            copy_text(c, rest, e.text);
+            ref_text(c, rest, e.text);
             break;
         case Type::Command:
             e.value = c[rest];
@@ -168,7 +188,7 @@ constexpr std::optional<Entry> parse_entry(std::span<const uint8_t> c) {
                 e.cmd_timeout = c[rest + 1];
             }
             if (rest + 2 < c.size()) {
-                copy_text(c, rest + 2, e.text);
+                ref_text(c, rest + 2, e.text);
             }
             break;
         case Type::Float:
@@ -326,8 +346,45 @@ struct Loader {
     Reassembler chunks{};
     std::array<uint8_t, kMaxParamMap> parent_map{};
     std::array<std::optional<Entry>, kMaxParams> entries{};
+    std::array<char, kTextPoolSize> pool{};
+    uint16_t pool_len = 0;
     /// Set to the parameter id whose entry was completed by the last on_entry call.
     std::optional<uint8_t> completed{};
+
+    constexpr std::string_view text(const Entry& e) const {
+        return {pool.data() + e.text.off, e.text.len};
+    }
+
+    /// Moves the text of a freshly parsed entry from the chunk payload into the pool.
+    constexpr void intern(const uint8_t id, Entry& e, std::span<const uint8_t> c) {
+        const uint16_t len = e.text.len;
+        if (len == 0) {
+            e.text = {};
+            return;
+        }
+        uint16_t dst = pool_len;
+        if (id < kMaxParams && entries[id] && entries[id]->text.len >= len) {
+            dst = entries[id]->text.off;
+        } else {
+            const uint16_t avail = static_cast<uint16_t>(pool.size() - pool_len);
+            e.text.len = std::min(len, avail);
+            pool_len = static_cast<uint16_t>(pool_len + e.text.len);
+        }
+        for (uint16_t i = 0; i < e.text.len; ++i) {
+            pool[dst + i] = static_cast<char>(c[e.text.off + i]);
+        }
+        e.text.off = dst;
+    }
+
+    /// Forgets the parameters of other folders; folder entries stay for titles and navigation.
+    constexpr void drop_leaf_entries() {
+        for (auto& e : entries) {
+            if (e && e->type != Type::Folder) {
+                e.reset();
+            }
+        }
+        pool_len = 0;
+    }
 
     constexpr uint32_t timeout() const { return device == kAddrCrsfReceiver ? 1000 : 500; }
 
@@ -338,6 +395,7 @@ struct Loader {
         has_root_folder = true;
         parent_map.fill(kNoParent);
         entries = {};
+        pool_len = 0;
         state = State::Loading;
         loading_id = 0;
         retry = 0;
@@ -393,7 +451,9 @@ struct Loader {
                 parent_map[param_id.value] = parsed->parent;
             }
             if (param_id.value < kMaxParams) {
-                entries[param_id.value] = parsed;
+                auto entry = *parsed;
+                intern(param_id.value, entry, chunks.bytes());
+                entries[param_id.value] = entry;
             }
         }
         if (state == State::Loading && param_id.value == loading_id) {
@@ -452,6 +512,7 @@ struct Loader {
             return {};
         }
         folder = folder_id;
+        drop_leaf_entries();
         state = State::Loading;
         const auto first = next_param_for_folder(ParamId{0}, FolderId{folder}, ParamCount{param_count},
                                                  parent_map, has_root_folder);

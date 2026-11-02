@@ -3,7 +3,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include "ferrox/logic/a7105.hpp"
 #include "ferrox/logic/usb.hpp"
@@ -3628,6 +3630,24 @@ void crsf_protocol_setup_test() {
     s.screen = mn::Screen::CrsfSetup;
     s.crsf = {};
 
+    // Option lists longer than a fixed field must survive caching in the text pool.
+    {
+        cm::Loader big{};
+        big.start(logic::crsf::DeviceAddr{0xEE}, cm::ParamCount{3}, 0);
+        std::string opts_long;
+        for (int i = 0; i < 12; ++i) {
+            opts_long += "Rate" + std::to_string(i) + "(" + std::to_string(50 + i * 25) + "Hz);";
+        }
+        opts_long.pop_back();
+        std::vector<uint8_t> chunk{0x00, 0x09, 'R', 'a', 't', 'e', 0};
+        chunk.insert(chunk.end(), opts_long.begin(), opts_long.end());
+        chunk.insert(chunk.end(), {0, 3, 0, 0, 0});
+        big.on_entry(logic::crsf::DeviceAddr{0xEE}, logic::crsf::ParamId{0}, cm::ChunksRemain{0}, chunk, 1);
+        check(big.entries[0] && big.entries[0]->max == 11 && big.text(*big.entries[0]) == opts_long &&
+                  cc::select_option(big.text(*big.entries[0]), 11) == "Rate11(325Hz)",
+              "long option lists must be cached completely");
+    }
+
     // Browser with a loaded device: a select in the root and a folder with an integer.
     loader.state = cm::Loader::State::Ready;
     auto entry = [](const char* name, const cm::Type type, const uint8_t parent) {
@@ -3641,8 +3661,9 @@ void crsf_protocol_setup_test() {
     };
     cm::Entry sel = entry("Rate", cm::Type::Select, 0);
     const std::string_view opts = "25Hz;50Hz;100Hz";
-    std::copy(opts.begin(), opts.end(), sel.text.data.begin());
-    sel.text.len = static_cast<uint8_t>(opts.size());
+    std::copy(opts.begin(), opts.end(), loader.pool.begin());
+    loader.pool_len = static_cast<uint16_t>(opts.size());
+    sel.text = {0, static_cast<uint16_t>(opts.size())};
     sel.max = 2;
     sel.value = 1;
     loader.entries[1] = sel;
@@ -3658,7 +3679,7 @@ void crsf_protocol_setup_test() {
 
     check(cc::items_in_folder(loader, 0).count == 2 && cc::items_in_folder(loader, 2).count == 1,
           "folder listing must skip hidden and back entries");
-    check(cc::select_option(sel, 2) == "100Hz" && cc::select_option(sel, 0) == "25Hz",
+    check(cc::select_option(loader.text(sel), 2) == "100Hz" && cc::select_option(loader.text(sel), 0) == "25Hz",
           "select options must split at ';'");
 
     s.screen = mn::Screen::CrsfSetup;

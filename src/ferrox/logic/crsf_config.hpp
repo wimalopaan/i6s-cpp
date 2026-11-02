@@ -195,9 +195,8 @@ constexpr std::string_view head(const std::string_view sv, const std::size_t n) 
     return {sv.data(), std::min(n, sv.size())};
 }
 
-/// Option `index` of a Select entry whose options are separated by ';'.
-constexpr std::string_view select_option(const menu::Entry& e, const int32_t index) {
-    const std::string_view all = view_of(e.text);
+/// Option `index` of a list of options separated by ';'.
+constexpr std::string_view select_option(const std::string_view all, const int32_t index) {
     std::size_t start = 0;
     for (int32_t i = 0; i < index; ++i) {
         const std::size_t semi = all.find(';', start);
@@ -403,8 +402,8 @@ constexpr void draw_row(display::Framebuffer& fb, const std::size_t slot, const 
     widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, head(name, max_name), value, {0});
 }
 
-constexpr format::Text<24> select_text(const menu::Entry& e, const int32_t index, const bool edit) {
-    std::string_view opt = select_option(e, index);
+constexpr format::Text<24> select_text(const menu::Loader& l, const menu::Entry& e, const int32_t index, const bool edit) {
+    std::string_view opt = select_option(l.text(e), index);
     // Long options lose their trailing "(...)" detail first.
     const std::size_t paren = opt.find('(');
     if (paren != std::string_view::npos && paren > 0 && (edit || view_of(e.name).size() + opt.size() > 18)) {
@@ -424,7 +423,7 @@ constexpr format::Text<24> select_text(const menu::Entry& e, const int32_t index
     return t;
 }
 
-constexpr format::Text<24> number_text(const menu::Entry& e, const int32_t v, const bool edit) {
+constexpr format::Text<24> number_text(const menu::Loader& l, const menu::Entry& e, const int32_t v, const bool edit) {
     format::Text<24> t;
     if (edit) {
         push_text(t, "< ");
@@ -432,7 +431,7 @@ constexpr format::Text<24> number_text(const menu::Entry& e, const int32_t v, co
     push_int(t, v);
     if (e.text.len > 0) {
         t.push(' ');
-        push_text(t, head(view_of(e.text), 6));
+        push_text(t, head(l.text(e), 6));
     }
     if (edit) {
         push_text(t, " >");
@@ -440,7 +439,7 @@ constexpr format::Text<24> number_text(const menu::Entry& e, const int32_t v, co
     return t;
 }
 
-constexpr void draw_param(display::Framebuffer& fb, const State& s, const menu::Command* c, const std::size_t slot,
+constexpr void draw_param(display::Framebuffer& fb, const State& s, const menu::Loader& l, const menu::Command* c, const std::size_t slot,
                           const std::size_t index, const uint8_t id, const menu::Entry& e) {
     const bool selected = index == s.selected;
     const bool edit = selected && s.editing;
@@ -450,7 +449,7 @@ constexpr void draw_param(display::Framebuffer& fb, const State& s, const menu::
             draw_row(fb, slot, selected, head(name, 18), ">");
             break;
         case menu::Type::Select: {
-            const auto t = select_text(e, edit ? s.edit_val : e.value, edit);
+            const auto t = select_text(l, e, edit ? s.edit_val : e.value, edit);
             draw_row(fb, slot, selected, name, t.view());
             break;
         }
@@ -458,7 +457,7 @@ constexpr void draw_param(display::Framebuffer& fb, const State& s, const menu::
         case menu::Type::Int8:
         case menu::Type::Uint16:
         case menu::Type::Int16: {
-            const auto t = number_text(e, edit ? s.edit_val : e.value, edit);
+            const auto t = number_text(l, e, edit ? s.edit_val : e.value, edit);
             draw_row(fb, slot, selected, name, t.view());
             break;
         }
@@ -478,7 +477,7 @@ constexpr void draw_param(display::Framebuffer& fb, const State& s, const menu::
         }
         case menu::Type::Info:
         case menu::Type::String: {
-            const std::string_view info = view_of(e.text);
+            const std::string_view info = l.text(e);
             if (info.empty()) {
                 draw_row(fb, slot, selected, name, {});
             } else if (info.size() > 7 || name.size() + info.size() > 17) {
@@ -591,7 +590,7 @@ constexpr void render(display::Framebuffer& fb, const State& s, const menu::Load
         if (index >= items.count) {
             break;
         }
-        detail::draw_param(fb, s, c, slot, index, items.ids[index], *l->entries[items.ids[index]]);
+        detail::draw_param(fb, s, *l, c, slot, index, items.ids[index], *l->entries[items.ids[index]]);
     }
     widgets::draw_scrollbar(fb, {static_cast<int>(s.selected)}, {static_cast<int>(items.count)}, {14, 36});
 
