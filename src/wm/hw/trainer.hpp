@@ -19,7 +19,7 @@ namespace wm::hw::trainer {
 using PpmOutPin = Pin<Port::F, 10>;
 using PpmInPin = Pin<Port::F, 9>;
 
-// Raw NVIC priority byte (0x90). CMSIS NVIC_SetPriority would shift it by 6 on Cortex-M0.
+// NVIC priority byte (0x90, Rust `set_priority`); only the top __NVIC_PRIO_BITS bits are implemented.
 inline constexpr uint8_t kIrqPriorityRaw = 0x90;
 // PSC=47 gives 1 us ticks. ARR=0xFFFF is a free-running 16-bit counter.
 inline constexpr uint16_t kTimerPrescaler = 47;
@@ -39,7 +39,8 @@ inline constinit bool g_out_enabled = false;
 inline constinit uint16_t g_last_capture = 0;
 
 inline void set_irq_priority(const IRQn_Type irq) {
-    reinterpret_cast<volatile uint8_t*>(&NVIC->IP[0])[irq] = kIrqPriorityRaw;
+    // Cortex-M0 IPR registers are word-access only; NVIC_SetPriority does a word read-modify-write.
+    NVIC_SetPriority(irq, kIrqPriorityRaw >> (8u - __NVIC_PRIO_BITS));
 }
 
 /// Configures the pins and TIM15 without starting the timer. Call set_enabled() to start it.
