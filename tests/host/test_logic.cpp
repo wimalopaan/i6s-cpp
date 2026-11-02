@@ -3576,11 +3576,42 @@ void crsf_protocol_setup_test() {
     check(arm.action == Action::SaveActiveModel && rs.active_model.crsf_arm_mode == 1,
           "OK on Arm Mode must switch to the switch mode and save");
 
-    // AFHDS 2A has only the protocol row.
+    // AFHDS 2A rows: Bind, Power, Servo Hz, RX Out and Serial; no CRSF rows.
     rs.active_model.rf_protocol = 0;
+    rs.active_model.rf_power = 3;
+    rs.active_model.servo_rate_hz = 400;
+    rs.active_model.rx_out_mode = 0;
+    rs.active_model.rx_serial_proto = 1;
     s.protocol = {};
     press(mn::kKeyDown, 120);
-    check(s.protocol.selected == 0, "AFHDS2A must not offer the CRSF rows");
+    check(s.protocol.selected == 1, "AFHDS2A must offer the Bind row");
+    press(mn::kKeyDown, 121);
+    const mn::Event pwr = press(mn::kKeyOk, 122);
+    check(pwr.action == Action::SaveActiveModel && rs.active_model.rf_power == 0,
+          "OK on Power must cycle 100uW back to 100mW and save");
+    press(mn::kKeyDown, 123);
+    press(mn::kKeyOk, 124);
+    check(rs.active_model.servo_rate_hz == 50, "Servo Hz must wrap from 400 to 50");
+    press(mn::kKeyOk, 125);
+    check(rs.active_model.servo_rate_hz == 60, "Servo Hz must step 50 -> 60");
+    press(mn::kKeyDown, 126);
+    press(mn::kKeyOk, 127);
+    check(rs.active_model.rx_out_mode == 1, "OK on RX Out must switch to PPM");
+    press(mn::kKeyDown, 128);
+    press(mn::kKeyOk, 129);
+    check(rs.active_model.rx_serial_proto == 0, "OK on Serial must switch to i-BUS");
+    {
+        mn::ModelNames names{};
+        logic::display::Framebuffer fb{};
+        mn::render(fb, s, names, rs, mn::Live{});
+    }
+    s.protocol = {};
+    press(mn::kKeyDown, 130);
+    const mn::Event bind = press(mn::kKeyOk, 131);
+    check(bind.action == Action::StartBind && s.screen == mn::Screen::Closed,
+          "OK on Bind must close the menu and request binding");
+    s.screen = mn::Screen::ProtocolSetup;
+    s.protocol = {};
 
     // Configure Module restarts discovery and opens the browser.
     rs.active_model.rf_protocol = 1;

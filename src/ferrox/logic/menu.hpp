@@ -149,6 +149,7 @@ enum class Action : uint8_t {
     CopyActiveModel,   // index = destination slot; caller copies the active model there
     ResetActiveModel,  // active model already reset to defaults; caller reloads trims and applies the RF link
     CrsfRequest,       // caller performs State::crsf_req on the CRSF link
+    StartBind,         // menu closes; caller starts AFHDS 2A binding
 };
 
 struct Event {
@@ -558,10 +559,29 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
     return {};
 }
 
-inline constexpr std::size_t kProtocolRowsAfhds = 1;
+inline constexpr std::size_t kProtocolRowsAfhds = 6;
 inline constexpr std::size_t kProtocolRowsCrsf = 5;
 inline constexpr std::size_t kCrsfBaudCount = 5;
 enum class CrsfRow : uint8_t { Proto = 0, Baud, Duplex, ArmMode, Configure };
+enum class AfhdsRow : uint8_t { Proto = 0, Bind, Power, ServoHz, RxOut, Serial };
+inline constexpr std::size_t kRfPowerCount = 4;
+inline constexpr std::array<std::string_view, kRfPowerCount> kRfPowerNames{"100mW (HI)", "10mW (MID)", "1mW (LOW)",
+                                                                           "100uW (TST)"};
+
+// Servo rate steps of the RX output; unknown values restart at 50 Hz.
+constexpr uint16_t next_servo_hz(const uint16_t hz) {
+    switch (hz) {
+        case 50: return 60;
+        case 60: return 100;
+        case 100: return 150;
+        case 150: return 200;
+        case 200: return 250;
+        case 250: return 300;
+        case 300: return 350;
+        case 350: return 400;
+        default: return 50;
+    }
+}
 
 // Protocol sub-screen. Proto and Baud are edited (UP/DN, OK saves); Duplex and Arm Mode toggle on OK;
 // Configure Module opens the device parameter browser. As in Rust, ESC while editing keeps the changed value
@@ -606,9 +626,24 @@ constexpr Event update_protocol(State& s, const Nav& n, storage::ModelConfig& m)
     if (!n.ok) {
         return {};
     }
-    if (row == CrsfRow::Proto || !crsf_active) {
+    if (row == CrsfRow::Proto) {
         s.editing = true;
         return {};
+    }
+    if (!crsf_active) {
+        switch (static_cast<AfhdsRow>(s.protocol.selected)) {
+            case AfhdsRow::Bind:
+                s.screen = Screen::Closed;
+                s.cue = buzzer::Cue::Click;
+                return {Action::StartBind, 0};
+            case AfhdsRow::Power: m.rf_power = static_cast<uint8_t>((m.rf_power + 1) % kRfPowerCount); break;
+            case AfhdsRow::ServoHz: m.servo_rate_hz = next_servo_hz(m.servo_rate_hz); break;
+            case AfhdsRow::RxOut: m.rx_out_mode = m.rx_out_mode != 0 ? 0 : 1; break;
+            case AfhdsRow::Serial: m.rx_serial_proto = m.rx_serial_proto != 0 ? 0 : 1; break;
+            case AfhdsRow::Proto: return {};
+        }
+        s.cue = buzzer::Cue::Click;
+        return {Action::SaveActiveModel, 0};
     }
     switch (row) {
         case CrsfRow::Baud:
@@ -1710,6 +1745,55 @@ constexpr format::Text<N> bracketed(const std::string_view sv, const bool edit) 
     return t;
 }
 
+constexpr void render_afhds_row(Framebuffer& fb, const int slot, const AfhdsRow row, const bool selected, const bool edit,
+                                const storage::ModelConfig& m) {
+    switch (row) {
+        case AfhdsRow::Proto: {
+            const auto t = bracketed<12>(protocol::label(protocol::from_raw(m.rf_protocol)), edit);
+            widgets::draw_list_row(fb, {slot}, selected, "Proto:", t.view(), {0});
+            break;
+        }
+        case AfhdsRow::Bind: {
+            format::Text<16> t;
+            for (const char c : std::string_view{"[Bind: "}) {
+                t.push(c);
+            }
+            for (const char c : format::format_hex32(m.rx_id).view()) {
+                t.push(c);
+            }
+            t.push(']');
+            widgets::draw_list_row(fb, {slot}, selected, t.view(), {}, {0});
+            break;
+        }
+        case AfhdsRow::Power:
+            widgets::draw_list_row(fb, {slot}, selected, "Power:", kRfPowerNames[m.rf_power % kRfPowerCount], {0});
+            break;
+        case AfhdsRow::ServoHz: {
+            const uint16_t hz = std::clamp<uint16_t>(m.servo_rate_hz, 50, 400);
+            std::array<char, 3> digits{};
+            std::size_t n = 0;
+            for (uint16_t v = hz; v > 0; v /= 10) {
+                digits[n++] = static_cast<char>('0' + v % 10);
+            }
+            format::Text<8> t;
+            while (n > 0) {
+                t.push(digits[--n]);
+            }
+            for (const char c : std::string_view{" Hz"}) {
+                t.push(c);
+            }
+            widgets::draw_list_row(fb, {slot}, selected, "Servo Hz:", t.view(), {0});
+            break;
+        }
+        case AfhdsRow::RxOut:
+            widgets::draw_list_row(fb, {slot}, selected, "RX Out:", m.rx_out_mode == 0 ? "PWM" : "PPM", {0});
+            break;
+        case AfhdsRow::Serial:
+            widgets::draw_list_row(fb, {slot}, selected, "Serial:", m.rx_serial_proto == 0 ? "i-BUS" : "S.BUS", {0});
+            break;
+    }
+}
+
 constexpr void render_protocol(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
     widgets::draw_header(fb, "PROTOCOL SETUP");
     const bool crsf_active = protocol::from_raw(m.rf_protocol) == protocol::Protocol::Crsf;
@@ -1722,6 +1806,10 @@ constexpr void render_protocol(Framebuffer& fb, const State& s, const storage::M
         const bool selected = idx == s.protocol.selected;
         const bool edit = selected && s.editing;
         const int slot_i = static_cast<int>(slot);
+        if (!crsf_active) {
+            render_afhds_row(fb, slot_i, static_cast<AfhdsRow>(idx), selected, edit, m);
+            continue;
+        }
         switch (static_cast<CrsfRow>(idx)) {
             case CrsfRow::Proto: {
                 const auto t = bracketed<12>(protocol::label(protocol::from_raw(m.rf_protocol)), edit);
@@ -1750,7 +1838,13 @@ constexpr void render_protocol(Framebuffer& fb, const State& s, const storage::M
     if (s.editing) {
         widgets::draw_footer(fb, "[OK] Save   [UP/DN] Change");
     } else if (!crsf_active) {
-        widgets::draw_footer(fb, "[OK] Edit   [ESC] Exit");
+        if (s.protocol.selected == static_cast<uint8_t>(AfhdsRow::Bind)) {
+            widgets::draw_footer(fb, "[OK] Start Bind   [ESC] Exit");
+        } else if (s.protocol.selected >= static_cast<uint8_t>(AfhdsRow::Power)) {
+            widgets::draw_footer(fb, "[OK] Toggle/Cycle [ESC] Exit");
+        } else {
+            widgets::draw_footer(fb, "[OK] Edit   [ESC] Exit");
+        }
     } else if (s.protocol.selected == static_cast<uint8_t>(CrsfRow::Duplex) ||
                s.protocol.selected == static_cast<uint8_t>(CrsfRow::ArmMode)) {
         widgets::draw_footer(fb, "[OK] Toggle Mode  [ESC] Exit");

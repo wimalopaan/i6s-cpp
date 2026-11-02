@@ -508,6 +508,11 @@ int main() {
                 case logic::menu::Action::CloseMenu:
                     play_buzzer_cue(logic::buzzer::Cue::Click);
                     break;
+                case logic::menu::Action::StartBind:
+                    if (g_rf_ok && afhds) {
+                        hw::rf::set_bind_mode(true);
+                    }
+                    break;
                 case logic::menu::Action::CrsfRequest: hw::crsf::menu_apply(menu_state.crsf_req, now); break;
                 case logic::menu::Action::None: break;
             }
