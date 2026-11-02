@@ -3464,12 +3464,12 @@ void model_copy_test() {
         return e;
     };
     press(mn::kKeyUp, 10);
-    check(s.setup.selected == 8 && s.setup.scroll == 5, "up from Name must wrap to the Reset row and scroll");
+    check(s.setup.selected == 9 && s.setup.scroll == 6, "up from Name must wrap to the Reset row and scroll");
     press(mn::kKeyUp, 15);
     press(mn::kKeyUp, 16);
     press(mn::kKeyUp, 17);
     press(mn::kKeyUp, 18);
-    check(s.setup.selected == 4, "up from Reset must reach the Copy row");
+    check(s.setup.selected == 5, "up from Reset must reach the Copy row");
     const mn::Event open_ev = press(mn::kKeyOk, 20);
     check(open_ev.action == Action::None && s.editing && s.copy.dst == mc::DstSlot{3},
           "OK on Copy must open the picker at source + 1");
@@ -3515,8 +3515,8 @@ void protocol_reset_test() {
     rs.active_model.rf_protocol = 0;
     mn::State s{};
     s.screen = mn::Screen::ModelSetup;
-    s.setup.selected = 7;
-    s.setup.scroll = 4;
+    s.setup.selected = 8;
+    s.setup.scroll = 5;
     auto press = [&](const uint16_t key, const uint32_t now) {
         const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
         mn::update(s, mn::Input{0, 0, now + 1}, rs);
@@ -3536,11 +3536,11 @@ void protocol_reset_test() {
     check(save_ev.action == Action::SaveActiveModel && !s.editing && rs.active_model.rf_protocol == 1,
           "second OK must save the CRSF selection and stop editing");
     press(mn::kKeyCancel, 70);
-    check(s.screen == mn::Screen::ModelSetup && s.setup.selected == 7 && s.setup.scroll == 4,
+    check(s.screen == mn::Screen::ModelSetup && s.setup.selected == 8 && s.setup.scroll == 5,
           "ESC must return to Model Setup on the Protocol row");
 
     // Cancel while editing keeps the toggled value in RAM without saving, then cancel leaves the sub-screen.
-    s.setup.selected = 7;
+    s.setup.selected = 8;
     press(mn::kKeyOk, 80);
     press(mn::kKeyOk, 90);
     press(mn::kKeyUp, 100);
@@ -3557,15 +3557,77 @@ void protocol_reset_test() {
     rs.active_model.rf_protocol = 1;
     rs.active_model.rx_id = 0x1234;
     rs.active_model.name = {'X', 'X', 'X', 0, 0, 0, 0, 0, 0, 0};
-    s.setup.selected = 8;
+    s.setup.selected = 9;
     const mn::Event reset_ev = press(mn::kKeyOk, 130);
     check(reset_ev.action == Action::ResetActiveModel && rs.active_model.rf_protocol == 0 &&
               rs.active_model.rx_id == 0 && rs.active_model.name == st::default_model_config(2).name,
           "OK on Reset must restore the active model defaults and request a reset");
 
-    s.setup.selected = 8;
+    s.setup.selected = 9;
     press(mn::kKeyUp, 140);
-    check(s.setup.selected == 7, "UP from Reset must reach the Protocol row");
+    check(s.setup.selected == 8, "UP from Reset must reach the Protocol row");
+}
+
+void model_setup_trigger_test() {
+    namespace mn = logic::menu;
+    namespace st = logic::storage;
+    namespace lb = logic::labels;
+    using mn::Action;
+
+    check(lb::timer_source_label(0) == "OFF" && lb::timer_source_label(1) == "THs (RUN)" &&
+              lb::timer_source_label(2) == "THt (LTCH)" && lb::timer_source_label(3) == "ALWAYS ON" &&
+              lb::timer_source_label(4) == "SA^" && lb::timer_source_label(17) == "SFv" &&
+              lb::timer_source_label(18) == "OFF",
+          "timer trigger labels must match Rust");
+
+    st::RadioStorage rs = st::default_storage();
+    rs.radio.adc_modes.fill(3);  // SixPos: no SA..SD switch conditions
+    rs.radio.ext_switches = 0;
+    check(mn::is_timer_source_available(3, rs.radio) && !mn::is_timer_source_available(18, rs.radio),
+          "OFF..ALWAYS ON must always exist and codes past 17 must not");
+    check(!mn::is_timer_source_available(4, rs.radio) && !mn::is_timer_source_available(14, rs.radio),
+          "switch triggers must need their switch");
+
+    mn::State s{};
+    s.screen = mn::Screen::ModelSetup;
+    s.setup.selected = static_cast<uint8_t>(mn::SetupRow::Timer);
+    auto press = [&](const uint16_t key, const uint32_t now) {
+        const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
+        mn::update(s, mn::Input{0, 0, now + 1}, rs);
+        return e;
+    };
+    press(mn::kKeyDown, 10);
+    check(s.setup.selected == static_cast<uint8_t>(mn::SetupRow::Trigger) && s.setup.scroll == 1,
+          "T-Trig must follow the Timer row");
+
+    rs.active_model.timer_source = 3;
+    press(mn::kKeyOk, 20);
+    check(s.editing, "OK on T-Trig must start editing");
+    press(mn::kKeyUp, 30);
+    check(rs.active_model.timer_source == 0, "UP must skip missing switches and wrap to OFF");
+    press(mn::kKeyDown, 40);
+    check(rs.active_model.timer_source == 3, "DOWN must wrap back to ALWAYS ON");
+
+    rs.radio.ext_switches = 1;
+    press(mn::kKeyUp, 50);
+    check(rs.active_model.timer_source == 14, "UP must reach SE^ once external switches exist");
+    const mn::Event done = press(mn::kKeyOk, 60);
+    check(done.action == Action::SaveActiveModel && !s.editing && rs.active_model.timer_source == 14,
+          "OK must save the trigger and stop editing");
+
+    logic::display::Framebuffer got{};
+    mn::render(got, s, mn::ModelNames{}, rs, mn::Live{});
+    logic::display::Framebuffer want{};
+    logic::widgets::draw_list_row(want, {3}, true, "T-Trig:", "SE^", {52});
+    bool row_ok = true;
+    for (int x = 0; x < 120; ++x) {
+        for (int y = 14 + 27; y < 14 + 36; ++y) {
+            const auto i = static_cast<std::size_t>((y / 8) * 128 + x);
+            const auto bit = static_cast<uint8_t>(1u << (y % 8));
+            row_ok = row_ok && (got.data()[i] & bit) == (want.data()[i] & bit);
+        }
+    }
+    check(row_ok, "T-Trig row must render label and value like Rust");
 }
 
 void crsf_protocol_setup_test() {
@@ -3838,8 +3900,8 @@ void vario_setup_test() {
     rs.active_model.vario_motor_mute = 1;
     mn::State s{};
     s.screen = mn::Screen::ModelSetup;
-    s.setup.selected = 5;
-    s.setup.scroll = 2;
+    s.setup.selected = mn::kItemVarioRow;
+    s.setup.scroll = 3;
     auto press = [&](const uint16_t key, const uint32_t now) {
         const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
         mn::update(s, mn::Input{0, 0, now + 1}, rs);
@@ -3889,7 +3951,7 @@ void vario_setup_test() {
 
     // ESC from the sub-screen returns to Model Setup on the Vario row.
     press(mn::kKeyCancel, 190);
-    check(s.screen == mn::Screen::ModelSetup && s.setup.selected == 5 && s.setup.scroll == 2,
+    check(s.screen == mn::Screen::ModelSetup && s.setup.selected == mn::kItemVarioRow && s.setup.scroll == 3,
           "ESC must return to Model Setup on the Vario row");
 
     // Rendering and the available-switch rule.
@@ -4091,6 +4153,18 @@ void auto_select_test() {
     check(st.active_model.arm_switch == 0, "auto: unusable arm switch change is ignored");
     st.radio.adc_modes[0] = two_pos_code;
 
+    ms.setup.selected = static_cast<uint8_t>(mn::SetupRow::Trigger);
+    st.active_model.timer_source = 0;
+    mn::update(ms, mn::Input{0, 0, 0, sa_moved}, st);
+    check(st.active_model.timer_source == 4, "auto: timer trigger stores condition + 3");
+    st.radio.adc_modes[0] = 3;
+    st.active_model.timer_source = 1;
+    mn::update(ms, mn::Input{0, 0, 1, sa_moved}, st);
+    check(st.active_model.timer_source == 1, "auto: unusable timer trigger switch change is ignored");
+    st.radio.adc_modes[0] = two_pos_code;
+    mn::update(ms, mn::Input{0, 0, 2, as::Changes{.sw_cond = 20}}, st);
+    check(st.active_model.timer_source == 1, "auto: switch codes past SFv must not become a timer trigger");
+
     ms.screen = Screen::VarioSetup;
     ms.vario = mn::ListPos{};
     ms.editing = true;
@@ -4155,7 +4229,7 @@ void telem_slots_test() {
     mn::State s{};
     s.screen = mn::Screen::ModelSetup;
     s.setup.selected = mn::kItemTelemRow;
-    s.setup.scroll = 3;
+    s.setup.scroll = 4;
     auto press = [&](const uint16_t key, const uint32_t now) {
         const mn::Event e = mn::update(s, mn::Input{key, key, now}, rs);
         mn::update(s, mn::Input{0, 0, now + 1}, rs);
@@ -4163,7 +4237,7 @@ void telem_slots_test() {
     };
 
     check(static_cast<std::size_t>(mn::SetupRow::Telemetry) == mn::kItemTelemRow &&
-              mn::kSetupRows == 9 && static_cast<std::size_t>(mn::SetupRow::Protocol) == 7,
+              mn::kSetupRows == 10 && static_cast<std::size_t>(mn::SetupRow::Protocol) == 8,
           "Telemetry must be the row before Protocol on the model setup screen");
 
     press(mn::kKeyOk, 10);
@@ -4471,6 +4545,7 @@ int main() {
     bind_test();
     model_copy_test();
     protocol_reset_test();
+    model_setup_trigger_test();
     crsf_protocol_setup_test();
     vario_setup_test();
     trainer_test();
