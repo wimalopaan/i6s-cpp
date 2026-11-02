@@ -18,6 +18,28 @@
 
 namespace wm::logic::telemetry {
 
+/// CRSF link state in the shared link-telemetry form used by the status bar, alarms and session
+/// stats, as in Rust main.rs: link quality takes the place of the AFHDS 2A RSSI.
+constexpr afhds2a::Telemetry from_crsf(const crsf::Telemetry& ct) {
+    return {
+        .connected = ct.connected,
+        .rssi = ct.uplink_link_quality,
+        .rx_voltage_mv = ct.rx_battery_mv,
+        .alt_m = ct.baro_alt_m,
+        .alt_dm = ct.baro_alt_dm,
+        .vspeed_cms = ct.vspeed_cms,
+        .has_vspeed = ct.has_vspeed,
+        .rpm = ct.rpm,
+        .temp_c_x10 = ct.temp_c_x10,
+        .last_rx_voltage_ms = ct.last_vbat_ms,
+        .last_alt_ms = ct.last_alt_ms,
+        .last_vspd_ms = ct.last_vspd_ms,
+        .last_rpm_ms = ct.last_rpm_ms,
+        .last_temp_ms = ct.last_temp_ms,
+        .packets_received = 0,
+    };
+}
+
 // Strong types so timestamps, sources and counters cannot be mixed up at a call site.
 struct LastSeenMs {
     uint32_t value = 0;  // 0 means the sensor was never received

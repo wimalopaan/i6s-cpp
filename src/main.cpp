@@ -635,20 +635,22 @@ int main() {
             hw::crsf::poll_telemetry(now);
         }
 
+        // Link telemetry of the active protocol: CRSF link quality stands in for the AFHDS 2A RSSI.
+        const auto link_telem = crsf    ? logic::telemetry::from_crsf(hw::crsf::telemetry())
+                                : g_rf_ok ? hw::rf::get_telemetry()
+                                          : logic::afhds2a::Telemetry{};
+
         if (now - last_draw_ms >= 100) {
             g_fb.clear();
-            const auto rf_telem = g_rf_ok ? hw::rf::get_telemetry() : logic::afhds2a::Telemetry{};
             const bool rf_binding = logic::bind::binding_shown({afhds, hw::rf::is_binding()});
             const bool rf_bound = g_rf_ok && hw::rf::is_bound();
             const uint32_t rf_sent = g_rf_ok ? hw::rf::packets_sent() : 0u;
-            if (g_rf_ok) {
-                logic::dashboard::track_session(g_rf_stats, rf_telem);
-            }
+            logic::dashboard::track_session(g_rf_stats, link_telem);
             if (logic::calib::active(g_calib_wizard)) {
                 logic::calib::render(g_fb, g_calib_wizard, input.raw, g_storage.radio, model.model_type);
             } else if (menu_state.screen == logic::menu::Screen::Closed) {
                 render(g_fb, page_state,
-                       View{input, g_storage, g_trims, channels, crsf, rf_telem, rf_binding, g_rf_ok, rf_bound, now,
+                       View{input, g_storage, g_trims, channels, crsf, link_telem, rf_binding, g_rf_ok, rf_bound, now,
                             rf_sent, g_rf_stats,
                             logic::flight_timer::display(g_flight_timer, timer_config(model)),
                             logic::flight_timer::modal(g_flight_timer), hw::crsf::telemetry()});
@@ -713,8 +715,8 @@ int main() {
             if (g_battery_warn.step(battery_low, logic::buzzer::Millis{dt_ms})) {
                 play_buzzer_cue(logic::buzzer::Cue::WarnBattery);
             }
-            const auto link = afhds ? hw::rf::get_telemetry() : logic::afhds2a::Telemetry{};
-            const auto rssi_level = logic::buzzer::rssi_alarm(logic::buzzer::Rssi{link.rssi}, link.connected);
+            const auto rssi_level =
+                logic::buzzer::rssi_alarm(logic::buzzer::Rssi{link_telem.rssi}, link_telem.connected);
             if (g_rssi_warn.step(rssi_level, logic::buzzer::Millis{dt_ms})) {
                 play_buzzer_cue(rssi_level == logic::buzzer::RssiAlarm::Critical ? logic::buzzer::Cue::WarnRssiCritical
                                                                                   : logic::buzzer::Cue::WarnRssiLow);
