@@ -698,7 +698,9 @@ int main() {
             play_buzzer_cue(logic::buzzer::Cue::WarnInactivity);
         }
 
-        if (menu_open) {
+        // The Vario Setup screen previews the tone regardless of the vario switch, as in Rust.
+        const bool vario_preview = menu_state.screen == logic::menu::Screen::VarioSetup;
+        if (menu_open && !vario_preview) {
             g_buzzer.set_vario(logic::vario::kSilent);
         } else {
             const auto vario_telem = afhds ? hw::rf::get_telemetry() : logic::afhds2a::Telemetry{};
@@ -711,7 +713,8 @@ int main() {
                 .vspeed = {crsf_link ? crsf_telem.vspeed_cms : vario_telem.vspeed_cms},
                 .has_native_vspeed = crsf_link ? crsf_telem.has_vspeed : vario_telem.has_vspeed,
                 .telem_connected = crsf_link ? crsf_telem.connected : vario_telem.connected,
-                .switch_active = logic::buzzer_inputs::vario_switch_active(model.vario_switch, input.switches),
+                .switch_active =
+                    vario_preview || logic::buzzer_inputs::vario_switch_active(model.vario_switch, input.switches),
                 .throttle = {channels[2]},
             };
             const logic::vario::Config vario_cfg{

@@ -2832,7 +2832,26 @@ void buzzer_test() {
     same.tick(Millis{50});
     check(same.output() == FreqHz{}, "buzzer: re-setting the same vario tone keeps its phase");
     same.set_vario(Tone{2500, 100, 200});
-    check(same.output() == FreqHz{2500}, "buzzer: a new vario tone restarts the pulse");
+    check(same.output() == FreqHz{}, "buzzer: a new vario tone must not cut the running pause");
+    same.tick(Millis{200});
+    check(same.output() == FreqHz{2500}, "buzzer: the next pulse uses the new tone");
+
+    // Climb tone that changes every 10 ms loop must still pulse (was a continuous tone).
+    Player climb{};
+    unsigned on_ms = 0;
+    for (unsigned t = 0; t < 1000; t += 10) {
+        climb.set_vario(Tone{static_cast<uint16_t>(1500 + t), 100, 200});
+        on_ms += climb.output() != FreqHz{} ? 10u : 0u;
+        climb.tick(Millis{10});
+    }
+    check(on_ms >= 300 && on_ms <= 400, "buzzer: a changing vario tone must keep its pulse/pause cadence");
+
+    Player restart{};
+    restart.set_vario(Tone{2000, 100, 200});
+    restart.tick(Millis{150});
+    restart.set_vario(vario::kSilent);
+    restart.set_vario(Tone{2000, 100, 200});
+    check(restart.output() == FreqHz{2000}, "buzzer: vario restarts with a pulse after silence");
 
     Player over{};
     over.set_vario(Tone{2000, 100, 0});

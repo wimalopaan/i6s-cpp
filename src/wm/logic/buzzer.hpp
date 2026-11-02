@@ -313,7 +313,8 @@ public:
         vario_remaining_ = ElapsedMs{};
     }
 
-    // Background vario tone. Changing the parameters restarts the pulse, as in the Rust code.
+    // Background vario tone. New parameters take effect without cutting the running pulse or pause;
+    // only a start from silence begins a fresh pulse (Rust: params_changed && vario_rem_ms == 0).
     constexpr void set_vario(const Tone tone) {
         if (tone.is_silent()) {
             vario_ = vario::kSilent;
@@ -321,8 +322,9 @@ public:
             vario_remaining_ = ElapsedMs{};
             return;
         }
-        if (!(tone == vario_)) {
-            vario_ = tone;
+        const bool changed = !(tone == vario_);
+        vario_ = tone;
+        if (changed && vario_remaining_.value == 0) {
             vario_pause_ = false;
             vario_remaining_ = ElapsedMs{tone.pulse_ms};
         }
