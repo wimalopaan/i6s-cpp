@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -60,10 +61,11 @@ wm::logic::calib::Wizard g_calib_wizard{};
 // Display content is rendered into this buffer and flushed to the ST7567.
 wm::logic::display::Framebuffer g_fb{};
 
-// RF radio init result, and whether the A7105 is currently silenced (starts silenced, as in hw::rf).
+// RF radio init result, and the silence state last applied to the A7105. Empty until the first
+// apply, so a CRSF boot really puts the chip to sleep (Rust starts unsilenced and silences it).
 bool g_rf_ok = false;
 wm::logic::dashboard::SessionStats g_rf_stats{};
-bool g_rf_silenced = true;
+std::optional<bool> g_rf_silenced{};
 #if WM_USE_USB
 // USB sim mode as last applied to the RF link, CRSF UART and PPM out.
 bool g_sim_mode = false;
@@ -156,7 +158,7 @@ wm::logic::afhds2a::TxId tx_id_from_uid() {
 
 // Silences the A7105 for CRSF models. Only changes state when the protocol changes.
 void set_rf_silenced(const bool silenced) {
-    if (!g_rf_ok || silenced == g_rf_silenced) {
+    if (!g_rf_ok || g_rf_silenced == silenced) {
         return;
     }
     wm::hw::rf::set_silenced(silenced);

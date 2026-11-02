@@ -28,9 +28,6 @@ inline constexpr uint32_t kGio2Pin = 2;
 inline constexpr uint32_t kSpiAf = 1;
 inline constexpr uint32_t kSpiTimeout = 10000;
 
-inline void csn_low() { clear_pins<Port::E>(1u << kCsnPin); }
-inline void csn_high() { set_pins<Port::E>(1u << kCsnPin); }
-
 inline bool wait_flag(const uint32_t mask, const bool want_set) {
     for (uint32_t i = 0; i < kSpiTimeout; ++i) {
         const bool set = (SPI1->SR & mask) != 0;
@@ -39,6 +36,40 @@ inline bool wait_flag(const uint32_t mask, const bool want_set) {
         }
     }
     return false;
+}
+
+inline void csn_low() { clear_pins<Port::E>(1u << kCsnPin); }
+inline void csn_high() {
+    wait_flag(SPI_SR_BSY, false);
+    set_pins<Port::E>(1u << kCsnPin);
+}
+
+/// Front-end switch. Off puts both RX_EN and TX_EN in the disabled state.
+inline void set_front_end(const logic::afhds2a::FrontEnd mode) {
+    using logic::afhds2a::FrontEnd;
+    switch (mode) {
+        case FrontEnd::RxEn:
+            set_pins<Port::E>(1u << kTxEnPin);
+            clear_pins<Port::E>(1u << kRxEnPin);
+            break;
+        case FrontEnd::TxEn:
+            set_pins<Port::E>(1u << kRxEnPin);
+            clear_pins<Port::E>(1u << kTxEnPin);
+            break;
+        case FrontEnd::Off:
+            set_pins<Port::E>((1u << kRxEnPin) | (1u << kTxEnPin));
+            break;
+    }
+}
+
+inline void switch_antenna(const bool state) {
+    if (state) {
+        clear_pins<Port::E>(1u << kAntennaA);
+        set_pins<Port::E>(1u << kAntennaB);
+    } else {
+        set_pins<Port::E>(1u << kAntennaA);
+        clear_pins<Port::E>(1u << kAntennaB);
+    }
 }
 
 // 8-bit transfer. The DR byte view avoids a 16-bit access that would
@@ -61,6 +92,9 @@ inline void init_bus() {
                                (1u << kAntennaA) | (1u << kAntennaB),
                            Mode::Output);
     csn_high();
+    // Same idle state as Rust: front-end off, antenna 0 (PE10 high, PE11 low).
+    set_front_end(logic::afhds2a::FrontEnd::Off);
+    switch_antenna(false);
     set_mode_mask<Port::E>(kSpiPinMask, Mode::Alternate);
     set_high_speed_mask<Port::E>(kSpiPinMask | (1u << kCsnPin));
     for (uint32_t pin : {13u, 14u, 15u}) {
@@ -69,7 +103,8 @@ inline void init_bus() {
 
     SPI1->CR1 = 0;
     SPI1->CR2 = (0x7u << 8) | SPI_CR2_FRXTH;
-    SPI1->CR1 = SPI_CR1_MSTR | SPI_CR1_BR_0 | SPI_CR1_SSM | SPI_CR1_SSI;
+    // PCLK/8 = 6 MHz SCK, matching the Rust driver.
+    SPI1->CR1 = SPI_CR1_MSTR | SPI_CR1_BR_1 | SPI_CR1_SSM | SPI_CR1_SSI;
     for (int i = 0; i < 16 && (SPI1->SR & SPI_SR_RXNE) != 0; ++i) {
         volatile uint8_t* dr = reinterpret_cast<volatile uint8_t*>(&SPI1->DR);
         (void)*dr;
@@ -123,6 +158,8 @@ inline void write_id(const uint32_t id) {
 
 inline void write_fifo(std::span<const uint8_t> data, const uint8_t channel) {
     strobe(logic::a7105::kStrobeStandby);
+    // The previous RX window left the front-end in RX (or Off); switch the PA path back on.
+    set_front_end(logic::afhds2a::FrontEnd::TxEn);
     strobe(logic::a7105::kStrobeRstWrPtr);
     csn_low();
     transfer(logic::a7105::cmd_write(logic::a7105::kRegFifoData));
@@ -156,24 +193,6 @@ inline void set_power(const uint8_t tx_test) {
     write_reg({logic::a7105::kRegTxTest}, {tx_test});
 }
 
-/// Front-end switch. Off puts both RX_EN and TX_EN in the disabled state.
-inline void set_front_end(const logic::afhds2a::FrontEnd mode) {
-    using logic::afhds2a::FrontEnd;
-    switch (mode) {
-        case FrontEnd::RxEn:
-            set_pins<Port::E>(1u << kTxEnPin);
-            clear_pins<Port::E>(1u << kRxEnPin);
-            break;
-        case FrontEnd::TxEn:
-            set_pins<Port::E>(1u << kRxEnPin);
-            clear_pins<Port::E>(1u << kTxEnPin);
-            break;
-        case FrontEnd::Off:
-            set_pins<Port::E>((1u << kRxEnPin) | (1u << kTxEnPin));
-            break;
-    }
-}
-
 /// Returns true when the chip answers with the AFHDS 2A signature.
 inline bool reset() {
     using namespace logic::a7105;
@@ -197,9 +216,9 @@ inline bool reset() {
     return false;
 }
 
-inline bool wait_calc_done() {
+inline bool wait_calc_done(const uint8_t mask) {
     for (uint32_t i = 0; i < 10000; ++i) {
-        if ((read_reg(logic::a7105::kRegCalc) & 1u) == 0) {
+        if ((read_reg(logic::a7105::kRegCalc) & mask) == 0) {
             return true;
         }
     }
@@ -218,30 +237,20 @@ inline void init_regs() {
     strobe(kStrobeStandby);
 
     write_reg({kRegCalc}, {kCalcIfBank});
-    wait_calc_done();
+    wait_calc_done(kCalcIfBank);
     write_reg({kRegVcoCurcal}, {kVcoCurcal});
     write_reg({kRegVcoSbcalII}, {kVcoSbcalII});
     write_reg({kRegPllI}, {0x00});
     write_reg({kRegCalc}, {kCalcVcoBank});
-    wait_calc_done();
+    wait_calc_done(kCalcVcoBank);
     write_reg({kRegPllI}, {0xA0});
     write_reg({kRegCalc}, {kCalcVcoBank});
-    wait_calc_done();
+    wait_calc_done(kCalcVcoBank);
     write_reg({kRegVcoSbcalI}, {kVcoSbcalIDefault});
 
     set_front_end(logic::afhds2a::FrontEnd::TxEn);
     set_power(kPowerHigh);
     strobe(kStrobeStandby);
-}
-
-inline void switch_antenna(const bool state) {
-    if (state) {
-        clear_pins<Port::E>(1u << kAntennaA);
-        set_pins<Port::E>(1u << kAntennaB);
-    } else {
-        set_pins<Port::E>(1u << kAntennaA);
-        clear_pins<Port::E>(1u << kAntennaB);
-    }
 }
 
 }  // namespace wm::hw::a7105

@@ -4,6 +4,7 @@
 // telemetry handling). The A7105 radio driver (SPI, GIO2/TIM16 ISRs) lives in
 // the hardware layer and is not part of this header.
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -335,14 +336,13 @@ private:
                 case 0xF9: {
                     const auto alt = static_cast<int16_t>(val);
                     telemetry.alt_m = alt;
-                    telemetry.alt_dm = static_cast<int16_t>(alt * 10);
+                    telemetry.alt_dm = static_cast<int16_t>(std::clamp(alt * 10, -32768, 32767));
                     telemetry.last_alt_ms = now_ms;
                     break;
                 }
                 case 0xFE:
-                    if (val <= 100) {
-                        telemetry.rssi = static_cast<uint8_t>(100 - val);
-                    }
+                    // Rust: 100.saturating_sub(val), so a value above 100 reads as 0.
+                    telemetry.rssi = static_cast<uint8_t>(val >= 100 ? 0 : 100 - val);
                     break;
                 default:
                     break;
