@@ -8,6 +8,7 @@
 
 #include "ferrox/hw/uart.hpp"
 #include "ferrox/logic/crsf.hpp"
+#include "ferrox/logic/crsf_config.hpp"
 #include "ferrox/logic/crsf_menu.hpp"
 
 namespace ferrox::hw::crsf {
@@ -192,12 +193,13 @@ inline bool menu_set_value(const uint8_t param, const int32_t value) {
     if (!menu_ready() || param >= logic::crsf::menu::kMaxParams || !g_menu.entries[param]) {
         return false;
     }
-    const auto& e = *g_menu.entries[param];
+    auto& e = *g_menu.entries[param];
     std::array<uint8_t, 2> bytes{};
     const std::size_t n = logic::crsf::menu::encode_value(e, value, bytes);
     if (n == 0) {
         return false;
     }
+    e.value = logic::crsf::menu::clamp_value(e, value);
     std::array<uint8_t, 16> frame{};
     const std::size_t len = logic::crsf::build_param_write_multi(
         logic::crsf::DeviceAddr{g_menu.device}, logic::crsf::ParamId{param},
@@ -230,6 +232,34 @@ inline void menu_confirm_command(const uint32_t now_ms) {
 
 inline void menu_cancel_command() {
     detail::perform(g_command.cancel());
+}
+
+/// Drops the loaded device so that discovery (1 Hz ping) starts over.
+inline void menu_restart() {
+    g_menu.stop();
+    g_command = logic::crsf::menu::Command{};
+}
+
+inline const logic::crsf::menu::Loader& menu_loader() {
+    return g_menu;
+}
+
+inline const logic::crsf::menu::Command& menu_command() {
+    return g_command;
+}
+
+/// Performs a request of the Configure Module screen.
+inline void menu_apply(const logic::crsf::config::Request& r, const uint32_t now_ms) {
+    using Kind = logic::crsf::config::Request::Kind;
+    switch (r.kind) {
+        case Kind::Restart: menu_restart(); break;
+        case Kind::Write: menu_set_value(r.param, r.value); break;
+        case Kind::EnterFolder: menu_enter_folder(r.param, now_ms); break;
+        case Kind::StartCommand: menu_start_command(r.param, now_ms); break;
+        case Kind::ConfirmCommand: menu_confirm_command(now_ms); break;
+        case Kind::CancelCommand: menu_cancel_command(); break;
+        case Kind::None: break;
+    }
 }
 
 inline const logic::crsf::Telemetry& telemetry() {

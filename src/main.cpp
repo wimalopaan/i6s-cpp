@@ -461,7 +461,9 @@ int main() {
             }
         } else {
             const auto ev = logic::menu::update(menu_state,
-                                                logic::menu::Input{pressed, g_keys, now, auto_changes}, g_storage);
+                                                logic::menu::Input{pressed, g_keys, now, auto_changes,
+                                                                   &hw::crsf::menu_loader(), &hw::crsf::menu_command()},
+                                                g_storage);
             if (menu_state.nav_tick) {
                 play_buzzer_cue(logic::buzzer::Cue::NavStep);
             }
@@ -477,7 +479,7 @@ int main() {
                     break;
                 case logic::menu::Action::SaveActiveModel:
                     logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage);
-                    apply_rf_link();
+                    apply_protocol_link();
                     break;
                 case logic::menu::Action::ResetActiveModel:
                     load_trims_from_model();
@@ -505,6 +507,7 @@ int main() {
                 case logic::menu::Action::CloseMenu:
                     play_buzzer_cue(logic::buzzer::Cue::Click);
                     break;
+                case logic::menu::Action::CrsfRequest: hw::crsf::menu_apply(menu_state.crsf_req, now); break;
                 case logic::menu::Action::None: break;
             }
         }
@@ -632,7 +635,8 @@ int main() {
                 eeprom.write_err = hw::I2c2Eeprom::write_failed();
                 logic::menu::render(g_fb, menu_state, g_model_names, g_storage,
                                     logic::menu::Live{channels, input.raw, input.switches, eeprom,
-                                                      chip::kProfile.name, kBuild});
+                                                      chip::kProfile.name, kBuild, &hw::crsf::menu_loader(),
+                                                      &hw::crsf::menu_command()});
             }
             hw::lcd::flush(g_fb);
             last_draw_ms = now;

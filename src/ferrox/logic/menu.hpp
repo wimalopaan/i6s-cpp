@@ -10,6 +10,8 @@
 #include "ferrox/logic/auto_select.hpp"
 #include "ferrox/logic/buzzer.hpp"
 #include "ferrox/logic/channels.hpp"
+#include "ferrox/logic/crsf_config.hpp"
+#include "ferrox/logic/crsf_menu.hpp"
 #include "ferrox/logic/curve.hpp"
 #include "ferrox/logic/format.hpp"
 #include "ferrox/logic/framebuffer.hpp"
@@ -88,6 +90,7 @@ enum class Screen : uint8_t {
     ProtocolSetup,
     VarioSetup,
     TelemSetup,
+    CrsfSetup,
 };
 
 inline constexpr std::size_t kItemDualRate = 2;
@@ -130,6 +133,8 @@ struct Live {
     storage::EepromStatus eeprom{};
     std::string_view mcu_name{};
     sysinfo::Build build{};
+    const crsf::menu::Loader* crsf_loader{nullptr};
+    const crsf::menu::Command* crsf_command{nullptr};
 };
 
 enum class Action : uint8_t {
@@ -142,6 +147,7 @@ enum class Action : uint8_t {
     StartCalibration,  // menu closes; caller starts the calibration wizard
     CopyActiveModel,   // index = destination slot; caller copies the active model there
     ResetActiveModel,  // active model already reset to defaults; caller reloads trims and applies the RF link
+    CrsfRequest,       // caller performs State::crsf_req on the CRSF link
 };
 
 struct Event {
@@ -154,6 +160,8 @@ struct Input {
     uint16_t held;
     uint32_t now_ms;
     auto_select::Changes changes{};  // switch and pot movement since the previous tick
+    const crsf::menu::Loader* crsf_loader{nullptr};
+    const crsf::menu::Command* crsf_command{nullptr};
 };
 
 struct ListPos {
@@ -187,6 +195,9 @@ struct State {
     ListPos input_setup{};
     ListPos vario{};
     ListPos telem{};
+    ListPos protocol{};
+    crsf::config::State crsf{};
+    crsf::config::Request crsf_req{};  // pending request for Action::CrsfRequest
     uint8_t axis{0};  // dual rate axis: 0 Roll, 1 Pitch, 2 Yaw
     uint8_t page{0};  // page of the channel monitor or analog diagnostics
     bool editing{false};
@@ -462,6 +473,7 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
                     break;
                 case SetupRow::Protocol:
                     s.screen = Screen::ProtocolSetup;
+                    s.protocol = ListPos{};
                     s.editing = false;
                     break;
                 case SetupRow::Reset:
@@ -544,30 +556,96 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
     return {};
 }
 
-// Protocol sub-screen. OK toggles the protocol while editing and saves on the second OK, as Rust does.
-// Cancel while editing leaves the toggled value in RAM (not saved), then cancel returns to Model Setup.
+inline constexpr std::size_t kProtocolRowsAfhds = 1;
+inline constexpr std::size_t kProtocolRowsCrsf = 5;
+inline constexpr std::size_t kCrsfBaudCount = 5;
+enum class CrsfRow : uint8_t { Proto = 0, Baud, Duplex, ArmMode, Configure };
+
+// Protocol sub-screen. Proto and Baud are edited (UP/DN, OK saves); Duplex and Arm Mode toggle on OK;
+// Configure Module opens the device parameter browser. As in Rust, ESC while editing keeps the changed value
+// in RAM without saving, and ESC otherwise returns to Model Setup.
 constexpr Event update_protocol(State& s, const Nav& n, storage::ModelConfig& m) {
-    if (!s.editing) {
+    const bool crsf_active = protocol::from_raw(m.rf_protocol) == protocol::Protocol::Crsf;
+    const std::size_t rows = crsf_active ? kProtocolRowsCrsf : kProtocolRowsAfhds;
+    if (s.protocol.selected >= rows) {
+        s.protocol = ListPos{};
+    }
+    const auto row = static_cast<CrsfRow>(s.protocol.selected);
+
+    if (s.editing) {
+        if (n.up != n.down) {
+            if (row == CrsfRow::Proto) {
+                m.rf_protocol = protocol::to_raw(protocol::toggle(protocol::from_raw(m.rf_protocol)));
+            } else {
+                const uint8_t cur = m.crsf_baud < kCrsfBaudCount ? m.crsf_baud : 0;
+                m.crsf_baud = n.up ? static_cast<uint8_t>((cur + 1) % kCrsfBaudCount)
+                                   : static_cast<uint8_t>(cur == 0 ? kCrsfBaudCount - 1 : cur - 1);
+                s.cue = buzzer::Cue::ValueStep;
+            }
+        }
         if (n.ok) {
-            s.editing = true;
+            s.editing = false;
+            return {Action::SaveActiveModel, 0};
         }
         if (n.cancel) {
-            s.screen = Screen::ModelSetup;
-            s.cue = buzzer::Cue::Click;
+            s.editing = false;
         }
         return {};
     }
+
     if (n.up != n.down) {
-        m.rf_protocol = protocol::to_raw(protocol::toggle(protocol::from_raw(m.rf_protocol)));
-    }
-    if (n.ok) {
-        s.editing = false;
-        return {Action::SaveActiveModel, 0};
+        s.nav_tick = step_list(s.protocol, rows, Rows{kListVisible}, nav_dir(n));
     }
     if (n.cancel) {
-        s.editing = false;
+        s.screen = Screen::ModelSetup;
+        s.cue = buzzer::Cue::Click;
+        return {};
+    }
+    if (!n.ok) {
+        return {};
+    }
+    if (row == CrsfRow::Proto || !crsf_active) {
+        s.editing = true;
+        return {};
+    }
+    switch (row) {
+        case CrsfRow::Baud:
+            s.editing = true;
+            break;
+        case CrsfRow::Duplex:
+            m.crsf_half_duplex = m.crsf_half_duplex != 0 ? 0 : 1;
+            return {Action::SaveActiveModel, 0};
+        case CrsfRow::ArmMode:
+            m.crsf_arm_mode = m.crsf_arm_mode != 0 ? 0 : 1;
+            return {Action::SaveActiveModel, 0};
+        case CrsfRow::Configure:
+            s.screen = Screen::CrsfSetup;
+            s.crsf = crsf::config::State{};
+            s.crsf_req = {crsf::config::Request::Kind::Restart, 0, 0};
+            s.waiting_release = true;
+            s.cue = buzzer::Cue::Click;
+            return {Action::CrsfRequest, 0};
+        case CrsfRow::Proto: break;
     }
     return {};
+}
+
+// Configure Module screen. The caller performs `s.crsf_req` when the event asks for it.
+constexpr Event update_crsf_setup(State& s, const Nav& n, const Input& in) {
+    const auto r = crsf::config::update(s.crsf, {n.up, n.down, n.ok, n.cancel}, in.crsf_loader, in.crsf_command);
+    s.nav_tick = r.nav_tick;
+    if (r.click) {
+        s.cue = buzzer::Cue::Click;
+    }
+    if (r.leave) {
+        s.screen = Screen::ProtocolSetup;
+        return {};
+    }
+    if (r.req.kind == crsf::config::Request::Kind::None) {
+        return {};
+    }
+    s.crsf_req = r.req;
+    return {Action::CrsfRequest, 0};
 }
 
 // Advances the menu state for one tick. `st` is edited in place; the caller persists it when told to.
@@ -1350,6 +1428,7 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
         case Screen::RadioSetup: return update_radio_setup(s, n, st.radio);
         case Screen::InputSetup: return update_input_setup(s, n, st.radio);
         case Screen::ProtocolSetup: return update_protocol(s, n, st.active_model);
+        case Screen::CrsfSetup: return update_crsf_setup(s, n, in);
         case Screen::VarioSetup: return update_vario(s, n, st.active_model, st.radio);
         case Screen::TelemSetup: return update_telem(s, n, st.active_model);
         case Screen::ChannelReverse: return update_channel_reverse(s, n, st.active_model);
@@ -1609,13 +1688,73 @@ constexpr void render_vario(Framebuffer& fb, const State& s, const storage::Mode
     widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Switch" : "[OK] Edit/Cycle    [ESC] Back");
 }
 
+inline constexpr std::array<std::string_view, kCrsfBaudCount> kCrsfBaudNames{
+    "115.2k (Low)", "416.6k (TBS)", "420k (ELRS)", "921.6k (Fast)", "1.875M (Max)"};
+
+// `sv`, wrapped in [] while it is being edited.
+template <std::size_t N>
+constexpr format::Text<N> bracketed(const std::string_view sv, const bool edit) {
+    format::Text<N> t;
+    if (edit) {
+        t.push('[');
+    }
+    for (const char c : sv) {
+        t.push(c);
+    }
+    if (edit) {
+        t.push(']');
+    }
+    return t;
+}
+
 constexpr void render_protocol(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
     widgets::draw_header(fb, "PROTOCOL SETUP");
-    widgets::draw_list_row(fb, {0}, !s.editing, "Proto:", protocol::label(protocol::from_raw(m.rf_protocol)), {64});
-    if (!s.editing) {
-        widgets::draw_footer(fb, "[OK] Select    [ESC] Back");
+    const bool crsf_active = protocol::from_raw(m.rf_protocol) == protocol::Protocol::Crsf;
+    const std::size_t rows = crsf_active ? kProtocolRowsCrsf : kProtocolRowsAfhds;
+    for (std::size_t slot = 0; slot < kListVisible; ++slot) {
+        const std::size_t idx = s.protocol.scroll + slot;
+        if (idx >= rows) {
+            break;
+        }
+        const bool selected = idx == s.protocol.selected;
+        const bool edit = selected && s.editing;
+        const int slot_i = static_cast<int>(slot);
+        switch (static_cast<CrsfRow>(idx)) {
+            case CrsfRow::Proto: {
+                const auto t = bracketed<12>(protocol::label(protocol::from_raw(m.rf_protocol)), edit);
+                widgets::draw_list_row(fb, {slot_i}, selected, "Proto:", t.view(), {0});
+                break;
+            }
+            case CrsfRow::Baud: {
+                const auto t = bracketed<16>(kCrsfBaudNames[std::min<std::size_t>(m.crsf_baud, kCrsfBaudCount - 1)], edit);
+                widgets::draw_list_row(fb, {slot_i}, selected, "Baud:", t.view(), {0});
+                break;
+            }
+            case CrsfRow::Duplex:
+                widgets::draw_list_row(fb, {slot_i}, selected, "Duplex:",
+                                       m.crsf_half_duplex == 0 ? "Full (2W)" : "Half (1W)", {0});
+                break;
+            case CrsfRow::ArmMode:
+                widgets::draw_list_row(fb, {slot_i}, selected, "Arm Mode:",
+                                       m.crsf_arm_mode == 0 ? "CH5 (Std)" : "Switch", {0});
+                break;
+            case CrsfRow::Configure:
+                widgets::draw_list_row(fb, {slot_i}, selected, "[Configure Module]", {}, {0});
+                break;
+        }
+    }
+    widgets::draw_scrollbar(fb, {s.protocol.selected}, {static_cast<int>(rows)}, {14, 36});
+    if (s.editing) {
+        widgets::draw_footer(fb, "[OK] Save   [UP/DN] Change");
+    } else if (!crsf_active) {
+        widgets::draw_footer(fb, "[OK] Edit   [ESC] Exit");
+    } else if (s.protocol.selected == static_cast<uint8_t>(CrsfRow::Duplex) ||
+               s.protocol.selected == static_cast<uint8_t>(CrsfRow::ArmMode)) {
+        widgets::draw_footer(fb, "[OK] Toggle Mode  [ESC] Exit");
+    } else if (s.protocol.selected == static_cast<uint8_t>(CrsfRow::Configure)) {
+        widgets::draw_footer(fb, "[OK] Open Config  [ESC] Exit");
     } else {
-        widgets::draw_footer(fb, "[OK] Done   [UP/DN] Value");
+        widgets::draw_footer(fb, "[OK] Edit   [ESC] Exit");
     }
 }
 
@@ -2168,6 +2307,7 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::RadioSetup: render_radio_setup(fb, s, st.radio); break;
         case Screen::InputSetup: render_input_setup(fb, s, st.radio); break;
         case Screen::ProtocolSetup: render_protocol(fb, s, st.active_model); break;
+        case Screen::CrsfSetup: crsf::config::render(fb, s.crsf, live.crsf_loader, live.crsf_command); break;
         case Screen::VarioSetup: render_vario(fb, s, st.active_model); break;
         case Screen::TelemSetup: render_telem(fb, s, st.active_model); break;
         case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;

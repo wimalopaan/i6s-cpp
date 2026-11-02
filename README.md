@@ -15,7 +15,7 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 - USB sim mode (trainer): joystick mode with a host connected mutes the RF link, stops CRSF and PPM out
 - Mixer, input, RC output, safety/preflight, calibration, trim, flight timer, vario, bind
 - Dashboard pages P1–P5 (P5: AFHDS 2A or CRSF diagnostics, or the custom 2×2 telemetry slot page)
-- Menus: main menu, model setup (incl. copy), model select, dual rate/expo, throttle curve, wing/mixer, aux channels, diagnostics, system info, radio setup, vario setup, telemetry slot setup, protocol and reset
+- Menus: main menu, model setup (incl. copy), model select, dual rate/expo, throttle curve, wing/mixer, aux channels, diagnostics, system info, radio setup, vario setup, telemetry slot setup, protocol setup (CRSF baud, duplex, arm mode, module parameter browser) and reset
 
 ## Not yet ported
 

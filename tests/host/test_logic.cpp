@@ -3527,6 +3527,152 @@ void protocol_reset_test() {
     check(s.setup.selected == 7, "UP from Reset must reach the Protocol row");
 }
 
+void crsf_protocol_setup_test() {
+    namespace mn = logic::menu;
+    namespace st = logic::storage;
+    namespace cm = logic::crsf::menu;
+    namespace cc = logic::crsf::config;
+    using mn::Action;
+
+    st::RadioStorage rs = st::default_storage();
+    rs.active_model.rf_protocol = 1;
+    cm::Loader loader{};
+    cm::Command command{};
+    mn::State s{};
+    s.screen = mn::Screen::ProtocolSetup;
+    auto press = [&](const uint16_t key, const uint32_t now) {
+        const mn::Event e = mn::update(s, mn::Input{key, key, now, {}, &loader, &command}, rs);
+        mn::update(s, mn::Input{0, 0, now + 1, {}, &loader, &command}, rs);
+        return e;
+    };
+
+    // Baud: edit with UP/DOWN (wrapping over the five rates), OK saves.
+    press(mn::kKeyDown, 10);
+    check(s.protocol.selected == 1, "DOWN must reach the Baud row for CRSF");
+    press(mn::kKeyOk, 20);
+    check(s.editing, "OK on Baud must start editing");
+    rs.active_model.crsf_baud = 4;
+    press(mn::kKeyUp, 30);
+    check(rs.active_model.crsf_baud == 0, "UP on the last baud must wrap to the first");
+    press(mn::kKeyDown, 40);
+    check(rs.active_model.crsf_baud == 4, "DOWN on the first baud must wrap to the last");
+    press(mn::kKeyDown, 50);
+    check(rs.active_model.crsf_baud == 3, "DOWN must select the previous baud");
+    const mn::Event baud_save = press(mn::kKeyOk, 60);
+    check(baud_save.action == Action::SaveActiveModel && !s.editing, "OK must save the baud and stop editing");
+
+    // Duplex and arm mode toggle on OK and save immediately.
+    press(mn::kKeyDown, 70);
+    const mn::Event duplex = press(mn::kKeyOk, 80);
+    check(duplex.action == Action::SaveActiveModel && rs.active_model.crsf_half_duplex == 1,
+          "OK on Duplex must switch to half duplex and save");
+    press(mn::kKeyOk, 90);
+    check(rs.active_model.crsf_half_duplex == 0, "second OK on Duplex must switch back to full duplex");
+    press(mn::kKeyDown, 100);
+    const mn::Event arm = press(mn::kKeyOk, 110);
+    check(arm.action == Action::SaveActiveModel && rs.active_model.crsf_arm_mode == 1,
+          "OK on Arm Mode must switch to the switch mode and save");
+
+    // AFHDS 2A has only the protocol row.
+    rs.active_model.rf_protocol = 0;
+    s.protocol = {};
+    press(mn::kKeyDown, 120);
+    check(s.protocol.selected == 0, "AFHDS2A must not offer the CRSF rows");
+
+    // Configure Module restarts discovery and opens the browser.
+    rs.active_model.rf_protocol = 1;
+    s.protocol.selected = 4;
+    s.protocol.scroll = 1;
+    const mn::Event cfg = press(mn::kKeyOk, 130);
+    check(cfg.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::Restart &&
+              s.screen == mn::Screen::CrsfSetup,
+          "OK on Configure Module must request a restart and open the browser");
+    press(mn::kKeyCancel, 140);
+    check(s.screen == mn::Screen::ProtocolSetup && s.protocol.selected == 4,
+          "ESC while no device is found must return to the protocol screen");
+
+    // Browser with a loaded device: a select in the root and a folder with an integer.
+    loader.state = cm::Loader::State::Ready;
+    auto entry = [](const char* name, const cm::Type type, const uint8_t parent) {
+        cm::Entry e{};
+        e.type = type;
+        e.parent = parent;
+        for (const char* p = name; *p != 0; ++p) {
+            e.name.data[e.name.len++] = *p;
+        }
+        return e;
+    };
+    cm::Entry sel = entry("Rate", cm::Type::Select, 0);
+    const std::string_view opts = "25Hz;50Hz;100Hz";
+    std::copy(opts.begin(), opts.end(), sel.text.data.begin());
+    sel.text.len = static_cast<uint8_t>(opts.size());
+    sel.max = 2;
+    sel.value = 1;
+    loader.entries[1] = sel;
+    loader.entries[2] = entry("WiFi", cm::Type::Folder, 0);
+    cm::Entry power = entry("Power", cm::Type::Uint8, 2);
+    power.min = 10;
+    power.max = 12;
+    power.value = 10;
+    loader.entries[3] = power;
+    loader.entries[4] = entry("Hidden", cm::Type::Uint8, 0);
+    loader.entries[4]->hidden = true;
+    loader.entries[5] = entry("Back", cm::Type::Back, 2);
+
+    check(cc::items_in_folder(loader, 0).count == 2 && cc::items_in_folder(loader, 2).count == 1,
+          "folder listing must skip hidden and back entries");
+    check(cc::select_option(sel, 2) == "100Hz" && cc::select_option(sel, 0) == "25Hz",
+          "select options must split at ';'");
+
+    s.screen = mn::Screen::CrsfSetup;
+    s.crsf = {};
+    press(mn::kKeyOk, 150);
+    check(s.crsf.editing && s.crsf.edit_val == 1, "OK on a select must start editing at its current value");
+    press(mn::kKeyDown, 160);
+    check(s.crsf.edit_val == 2, "DOWN must step to the next option");
+    press(mn::kKeyDown, 170);
+    check(s.crsf.edit_val == 0, "DOWN on the last option must wrap");
+    const mn::Event write = press(mn::kKeyOk, 180);
+    check(write.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::Write &&
+              s.crsf_req.param == 1 && s.crsf_req.value == 0 && !s.crsf.editing,
+          "OK must write the chosen option");
+
+    press(mn::kKeyDown, 190);
+    const mn::Event enter = press(mn::kKeyOk, 200);
+    check(enter.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::EnterFolder &&
+              s.crsf_req.param == 2 && s.crsf.folder == 2,
+          "OK on a folder must request loading it");
+    press(mn::kKeyOk, 210);
+    press(mn::kKeyUp, 220);
+    press(mn::kKeyUp, 225);
+    check(s.crsf.edit_val == 12, "integers must clamp at their maximum");
+    press(mn::kKeyCancel, 230);
+    const mn::Event up = press(mn::kKeyCancel, 240);
+    check(up.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::EnterFolder &&
+              s.crsf_req.param == 0 && s.crsf.folder == 0 && s.screen == mn::Screen::CrsfSetup,
+          "ESC in a folder must request the parent folder");
+
+    // Command confirmation dialog takes over the keys.
+    command.kind = cm::Command::Kind::WaitingConfirm;
+    command.param = 6;
+    const mn::Event yes = press(mn::kKeyOk, 250);
+    check(yes.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::ConfirmCommand,
+          "OK in the confirmation dialog must confirm the command");
+    const mn::Event no = press(mn::kKeyCancel, 260);
+    check(no.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::CancelCommand,
+          "ESC in the confirmation dialog must cancel the command");
+    command = {};
+
+    // Rendering must not crash and must draw something for every state.
+    mn::ModelNames names{};
+    const mn::Live live{.crsf_loader = &loader, .crsf_command = &command};
+    logic::display::Framebuffer fb{};
+    mn::render(fb, s, names, rs, live);
+    s.screen = mn::Screen::ProtocolSetup;
+    s.editing = true;
+    mn::render(fb, s, names, rs, live);
+}
+
 void vario_setup_test() {
     namespace mn = logic::menu;
     namespace st = logic::storage;
@@ -4192,6 +4338,7 @@ int main() {
     bind_test();
     model_copy_test();
     protocol_reset_test();
+    crsf_protocol_setup_test();
     vario_setup_test();
     trainer_test();
     telem_slots_test();
