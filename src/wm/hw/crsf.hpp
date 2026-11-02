@@ -19,6 +19,8 @@ inline constinit uint8_t g_baud_idx = 0;
 inline constinit bool g_half_duplex = false;
 inline constinit uint32_t g_last_tx_ms = 0;
 inline constinit uint32_t g_last_ping_ms = 0;
+// Set by the first menu_restart (configurator opened). No discovery pings before that.
+inline constinit bool g_discovery = false;
 inline constinit logic::crsf::Framer g_framer{};
 inline constinit logic::crsf::Telemetry g_telemetry{};
 inline constinit logic::crsf::menu::Loader g_menu{};
@@ -119,12 +121,10 @@ inline void on_param_entry(std::span<const uint8_t> p, const uint32_t now_ms) {
         return;
     }
     const uint8_t id = *g_menu.completed;
-    if (id < logic::crsf::menu::kMaxParams && g_menu.entries[id] &&
-        g_menu.entries[id]->type == logic::crsf::menu::Type::Command) {
-        const auto& e = *g_menu.entries[id];
+    if (const auto* e = g_menu.find(id); e != nullptr && e->type == logic::crsf::menu::Type::Command) {
         g_command.on_status(logic::crsf::ParamId{id},
-                            static_cast<logic::crsf::menu::CmdStatus>(static_cast<uint8_t>(e.value)),
-                            logic::crsf::menu::TimeoutByte{e.cmd_timeout}, now_ms);
+                            static_cast<logic::crsf::menu::CmdStatus>(static_cast<uint8_t>(e->value)),
+                            logic::crsf::menu::TimeoutByte{e->cmd_timeout}, now_ms, e->text.len > 0);
     }
 }
 
@@ -186,8 +186,9 @@ inline void poll_telemetry(const uint32_t now_ms) {
         g_telemetry.connected = false;
     }
 
-    // Parameter discovery: ping while no device is loaded.
-    if (g_menu.state == logic::crsf::menu::Loader::State::Idle &&
+    // Parameter discovery: ping while no device is loaded, once the configurator has been opened
+    // (Rust `start_config`).
+    if (g_discovery && g_menu.state == logic::crsf::menu::Loader::State::Idle &&
         static_cast<uint32_t>(now_ms - g_last_ping_ms) >= kPingPeriodMs) {
         g_last_ping_ms = now_ms;
         g_devices.prune(now_ms);
@@ -200,22 +201,17 @@ inline void poll_telemetry(const uint32_t now_ms) {
     detail::perform(g_command.tick(now_ms));
 }
 
-/// Parameter menu API (no UI). Entries are filled after the device has been loaded.
-inline const std::array<std::optional<logic::crsf::menu::Entry>,
-                        logic::crsf::menu::kMaxParams>& menu_entries() {
-    return g_menu.entries;
-}
-
 inline bool menu_ready() {
     return g_menu.state == logic::crsf::menu::Loader::State::Ready;
 }
 
 /// Writes a value (clamped to the parameter range) to the loaded device.
 inline bool menu_set_value(const uint8_t param, const int32_t value) {
-    if (!menu_ready() || param >= logic::crsf::menu::kMaxParams || !g_menu.entries[param]) {
+    auto* found = menu_ready() ? g_menu.find(param) : nullptr;
+    if (found == nullptr) {
         return false;
     }
-    auto& e = *g_menu.entries[param];
+    auto& e = *found;
     std::array<uint8_t, 2> bytes{};
     const std::size_t n = logic::crsf::menu::encode_value(e, value, bytes);
     if (n == 0) {
@@ -232,10 +228,11 @@ inline bool menu_set_value(const uint8_t param, const int32_t value) {
 
 /// Cycles a select parameter to its next option.
 inline bool menu_cycle_value(const uint8_t param) {
-    if (!menu_ready() || param >= logic::crsf::menu::kMaxParams || !g_menu.entries[param]) {
+    const auto* e = menu_ready() ? g_menu.find(param) : nullptr;
+    if (e == nullptr || e->type != logic::crsf::menu::Type::Select || e->max <= 0) {
         return false;
     }
-    return menu_set_value(param, logic::crsf::menu::cycled_value(*g_menu.entries[param]));
+    return menu_set_value(param, logic::crsf::menu::cycled_value(*e));
 }
 
 inline void menu_enter_folder(const uint8_t folder, const uint32_t now_ms) {
@@ -257,7 +254,9 @@ inline void menu_cancel_command() {
 }
 
 /// Drops the loaded device and the device list so that discovery (1 Hz ping) starts over.
+/// Sent when the configurator opens; discovery stays on from then (Rust `start_config`).
 inline void menu_restart(const uint32_t now_ms) {
+    g_discovery = true;
     g_menu.stop();
     g_command = logic::crsf::menu::Command{};
     g_devices.clear();
@@ -306,6 +305,7 @@ inline void menu_apply(const logic::crsf::config::Request& r, const uint32_t now
         case Kind::StartCommand: menu_start_command(r.param, now_ms); break;
         case Kind::ConfirmCommand: menu_confirm_command(now_ms); break;
         case Kind::CancelCommand: menu_cancel_command(); break;
+        case Kind::DismissCommand: g_command.dismiss(); break;
         case Kind::None: break;
     }
 }

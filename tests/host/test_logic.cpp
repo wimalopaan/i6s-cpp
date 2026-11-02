@@ -103,7 +103,9 @@ static_assert(logic::crsf::us_to_crsf(100) == 172);
 static_assert(logic::crsf::us_to_crsf(5000) == 1811);
 static_assert(logic::crsf::decode_packed_vspeed(0) == 0);
 static_assert(logic::crsf::decode_packed_vspeed(1) == 65 && logic::crsf::decode_packed_vspeed(-1) == -65);
-static_assert(logic::crsf::decode_packed_vspeed(-128) == -logic::crsf::kPackedVspeed[128]);
+static_assert(logic::crsf::decode_packed_vspeed(-128) == -logic::crsf::kPackedVspeed[127]);
+static_assert(logic::crsf::m_to_dm(3277) == 32767 && logic::crsf::m_to_dm(-3277) == -32768 &&
+              logic::crsf::m_to_dm(-100) == -1000);
 
 static_assert(logic::usart_brr(115200) == 417);
 static_assert(logic::usart_brr(416666) == 115);
@@ -227,7 +229,7 @@ void crsf_menu_test() {
     step = loader.on_entry(crsf::DeviceAddr{0xEE}, crsf::ParamId{1}, menu::ChunksRemain{0}, part2, 30);
     check(step.kind == menu::Action::Kind::Done && loader.state == menu::Loader::State::Ready,
           "last param in root must finish loading");
-    check(loader.entries[1] && loader.entries[1]->name.len == 1, "param 1 must be stored");
+    check(loader.find(1) && loader.find(1)->name.len == 1, "param 1 must be stored");
 
     // Retry path on a fresh load with no reply: retries, then give up on param 1.
     menu::Loader retry;
@@ -247,6 +249,10 @@ void crsf_menu_test() {
     check(cmd.kind == menu::Command::Kind::WaitingConfirm, "confirmation-needed must wait for confirm");
     const auto confirm = cmd.confirm(20);
     check(confirm.kind == menu::Action::Kind::Write && confirm.arg == 4, "confirm must write 4");
+    check(cmd.kind == menu::Command::Kind::Running && cmd.poll_interval_ms == 250 && cmd.poll_at_ms == 20 + 250 &&
+              cmd.deadline_ms == 20 + 8000,
+          "confirm must run with 250 ms polling and an 8 s timeout (Rust confirm_command)");
+    check(cmd.tick(20 + 250).arg == 6, "confirmed command must poll without a progress reply");
     cmd.on_status(crsf::ParamId{2}, menu::CmdStatus::Progress, menu::TimeoutByte{5}, 30);
     check(cmd.kind == menu::Command::Kind::Running && cmd.poll_interval_ms == 500, "progress runs with 500 ms poll");
     const auto poll = cmd.tick(30 + 500);
@@ -255,6 +261,58 @@ void crsf_menu_test() {
     check(cmd.kind == menu::Command::Kind::Completed, "ready must complete command");
     cmd.tick(600 + 2500);
     check(cmd.kind == menu::Command::Kind::Idle, "completed command must go idle after display time");
+
+    // Device info text of the running command, start guard and dismiss.
+    menu::Command info_cmd;
+    info_cmd.start(3, 0);
+    info_cmd.on_status(crsf::ParamId{3}, menu::CmdStatus::Progress, menu::TimeoutByte{0}, 10, true);
+    check(info_cmd.has_info && info_cmd.kind == menu::Command::Kind::Running, "info text must be flagged");
+    check(info_cmd.start(4, 20).kind == menu::Action::Kind::None && info_cmd.param == 3,
+          "a running command must not be replaced");
+    info_cmd.on_status(crsf::ParamId{3}, menu::CmdStatus::Ready, menu::TimeoutByte{0}, 30);
+    check(info_cmd.start(4, 40).kind == menu::Action::Kind::Write && !info_cmd.has_info,
+          "a completed command may be replaced and starts without info");
+    info_cmd.dismiss();
+    check(info_cmd.kind == menu::Command::Kind::Idle, "dismiss must go idle");
+
+    // Param 0 that is not a folder: legacy sequential scan (Rust select_device starts without a root folder).
+    menu::Loader legacy;
+    legacy.start(crsf::DeviceAddr{0xEE}, menu::ParamCount{2}, 0);
+    check(!legacy.has_root_folder, "start must not assume a root folder");
+    const std::array<uint8_t, 4> info0{0xFF, 0x0C, 'I', 0x00};
+    step = legacy.on_entry(crsf::DeviceAddr{0xEE}, crsf::ParamId{0}, menu::ChunksRemain{0}, info0, 10);
+    check(step.kind == menu::Action::Kind::Read && step.param == 1, "non-folder param 0 must scan from param 1");
+
+    // Ids beyond 48 are cached; the slot count is the limit.
+    menu::Loader slots;
+    menu::Entry leaf{};
+    leaf.type = menu::Type::Uint8;
+    check(slots.store(200, leaf) && slots.find(200) != nullptr && slots.find(47) == nullptr,
+          "high parameter ids must be stored");
+    for (uint8_t id = 50; id < 50 + menu::kMaxParams - 1; ++id) {
+        slots.store(id, leaf);
+    }
+    check(!slots.store(10, leaf) && slots.find(10) == nullptr, "a full cache must refuse new ids");
+    check(slots.store(200, leaf), "an existing id must be updated in place");
+    menu::Entry folder{};
+    folder.type = menu::Type::Folder;
+    slots.clear_entries();
+    slots.store(5, folder);
+    slots.store(90, leaf);
+    slots.drop_leaf_entries();
+    check(slots.find(5) != nullptr && slots.find(90) == nullptr && slots.store(91, leaf),
+          "dropping leaves must keep folders and free their slots");
+
+    menu::Entry one{};
+    one.type = menu::Type::Select;
+    one.value = 0;
+    one.max = 0;
+    check(menu::cycled_value(one) == 0, "a select with one option must not change");
+
+    crsf::Telemetry alt{};
+    const std::array<uint8_t, 2> baro_m{0x80 | (3277 >> 8), 3277 & 0xFF};
+    crsf::parse_telemetry(crsf::kTypeBaro, baro_m, alt, 0);
+    check(alt.baro_alt_m == 3277 && alt.baro_alt_dm == 32767, "baro metres must saturate in decimetres");
 }
 
 void storage_test() {
@@ -3803,8 +3861,8 @@ void crsf_protocol_setup_test() {
         chunk.insert(chunk.end(), opts_long.begin(), opts_long.end());
         chunk.insert(chunk.end(), {0, 3, 0, 0, 0});
         big.on_entry(logic::crsf::DeviceAddr{0xEE}, logic::crsf::ParamId{0}, cm::ChunksRemain{0}, chunk, 1);
-        check(big.entries[0] && big.entries[0]->max == 11 && big.text(*big.entries[0]) == opts_long &&
-                  cc::select_option(big.text(*big.entries[0]), 11) == "Rate11(325Hz)",
+        check(big.find(0) && big.find(0)->max == 11 && big.text(*big.find(0)) == opts_long &&
+                  cc::select_option(big.text(*big.find(0)), 11) == "Rate11(325Hz)",
               "long option lists must be cached completely");
     }
 
@@ -3826,16 +3884,16 @@ void crsf_protocol_setup_test() {
     sel.text = {0, static_cast<uint16_t>(opts.size())};
     sel.max = 2;
     sel.value = 1;
-    loader.entries[1] = sel;
-    loader.entries[2] = entry("WiFi", cm::Type::Folder, 0);
+    loader.store(1, sel);
+    loader.store(2, entry("WiFi", cm::Type::Folder, 0));
     cm::Entry power = entry("Power", cm::Type::Uint8, 2);
     power.min = 10;
     power.max = 12;
     power.value = 10;
-    loader.entries[3] = power;
-    loader.entries[4] = entry("Hidden", cm::Type::Uint8, 0);
-    loader.entries[4]->hidden = true;
-    loader.entries[5] = entry("Back", cm::Type::Back, 2);
+    loader.store(3, power);
+    loader.store(4, entry("Hidden", cm::Type::Uint8, 0));
+    loader.find(4)->hidden = true;
+    loader.store(5, entry("Back", cm::Type::Back, 2));
 
     check(cc::items_in_folder(loader, 0).count == 2 && cc::items_in_folder(loader, 2).count == 1,
           "folder listing must skip hidden and back entries");
@@ -3870,6 +3928,17 @@ void crsf_protocol_setup_test() {
               s.crsf_req.param == 0 && s.crsf.folder == 0 && s.screen == mn::Screen::CrsfSetup,
           "ESC in a folder must request the parent folder");
 
+    // ESC while a subfolder is still loading goes up one level instead of dropping the device.
+    press(mn::kKeyDown, 241);
+    press(mn::kKeyOk, 242);
+    check(s.crsf.folder == 2 && s.crsf.depth == 1, "OK must enter the folder again");
+    loader.state = cm::Loader::State::Loading;
+    const mn::Event up_loading = press(mn::kKeyCancel, 243);
+    check(up_loading.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::EnterFolder &&
+              s.crsf_req.param == 0 && s.crsf.folder == 0 && s.crsf.depth == 0,
+          "ESC during a folder load must go up one folder");
+    loader.state = cm::Loader::State::Ready;
+
     const mn::Event back = press(mn::kKeyCancel, 245);
     check(back.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::BackToList &&
               s.screen == mn::Screen::CrsfSetup,
@@ -3884,6 +3953,10 @@ void crsf_protocol_setup_test() {
     const mn::Event no = press(mn::kKeyCancel, 260);
     check(no.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::CancelCommand,
           "ESC in the confirmation dialog must cancel the command");
+    command.kind = cm::Command::Kind::Completed;
+    const mn::Event dismiss = press(mn::kKeyOk, 265);
+    check(dismiss.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::DismissCommand,
+          "OK on a completed command must dismiss it");
     command = {};
 
     // Rendering must not crash and must draw something for every state.

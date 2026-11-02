@@ -14,12 +14,15 @@ namespace wm::logic::crsf::menu {
 
 inline constexpr uint8_t kNoParent = 0xFF;
 inline constexpr std::size_t kTextLen = 32;
+/// Cached entries per device (Rust `MAX_PARAMS`). Parameter ids are not limited by this: any id 0..255 fits.
 inline constexpr std::size_t kMaxParams = 48;
+inline constexpr std::size_t kMaxParamId = 256;
 /// Shared storage for the variable text of all cached entries (option lists, units, info).
 inline constexpr std::size_t kTextPoolSize = 1024;
 inline constexpr std::size_t kMaxParamMap = 96;
 inline constexpr std::size_t kChunkBufSize = 256;
 inline constexpr uint32_t kCmdStartTimeoutMs = 1500;
+inline constexpr uint32_t kCmdConfirmPollMs = 250;
 inline constexpr uint32_t kCmdRunTimeoutMs = 8000;
 inline constexpr uint32_t kCmdDoneMs = 2500;
 inline constexpr uint32_t kCmdDefaultPollMs = 250;
@@ -208,7 +211,7 @@ constexpr int32_t clamp_value(const Entry& e, const int32_t v) {
 
 /// Next value of a select entry (wraps around). Other types are unchanged.
 constexpr int32_t cycled_value(const Entry& e) {
-    if (e.type != Type::Select || e.max < 0) {
+    if (e.type != Type::Select || e.max <= 0) {
         return e.value;
     }
     return (e.value + 1) % (e.max + 1);
@@ -339,7 +342,7 @@ struct Loader {
     uint8_t device = 0;
     uint8_t param_count = 0;
     uint8_t folder = 0;
-    // start() sets this. It is false in a fresh Loader so that the whole object is all-zero and lands in .bss
+    // Set when param 0 answers as a FOLDER. Keep every default zero so that the whole object lands in .bss
     // (a single non-zero byte would put its 4 KB into .data and cost 4 KB of flash).
     bool has_root_folder = false;
     uint8_t loading_id = 0;
@@ -347,7 +350,9 @@ struct Loader {
     uint32_t next_req_ms = 0;
     Reassembler chunks{};
     std::array<uint8_t, kMaxParamMap> parent_map{};
-    std::array<std::optional<Entry>, kMaxParams> entries{};
+    /// Entry slots; slot_of[id] is the slot index + 1 (0 = not cached), so a fresh Loader stays all-zero.
+    std::array<std::optional<Entry>, kMaxParams> slots{};
+    std::array<uint8_t, kMaxParamId> slot_of{};
     std::array<char, kTextPoolSize> pool{};
     uint16_t pool_len = 0;
     /// Set to the parameter id whose entry was completed by the last on_entry call.
@@ -355,6 +360,37 @@ struct Loader {
 
     constexpr std::string_view text(const Entry& e) const {
         return {pool.data() + e.text.off, e.text.len};
+    }
+
+    constexpr const Entry* find(const uint8_t id) const {
+        const uint8_t slot = slot_of[id];
+        return slot != 0 && slots[slot - 1u] ? &*slots[slot - 1u] : nullptr;
+    }
+
+    constexpr Entry* find(const uint8_t id) {
+        const uint8_t slot = slot_of[id];
+        return slot != 0 && slots[slot - 1u] ? &*slots[slot - 1u] : nullptr;
+    }
+
+    /// Caches an entry under its id. Returns false when all kMaxParams slots are taken.
+    constexpr bool store(const uint8_t id, const Entry& e) {
+        if (Entry* cur = find(id)) {
+            *cur = e;
+            return true;
+        }
+        for (std::size_t i = 0; i < slots.size(); ++i) {
+            if (!slots[i]) {
+                slots[i] = e;
+                slot_of[id] = static_cast<uint8_t>(i + 1);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    constexpr void clear_entries() {
+        slots = {};
+        slot_of = {};
     }
 
     /// Moves the text of a freshly parsed entry from the chunk payload into the pool.
@@ -365,8 +401,8 @@ struct Loader {
             return;
         }
         uint16_t dst = pool_len;
-        if (id < kMaxParams && entries[id] && entries[id]->text.len >= len) {
-            dst = entries[id]->text.off;
+        if (const Entry* cur = find(id); cur != nullptr && cur->text.len >= len) {
+            dst = cur->text.off;
         } else {
             const uint16_t avail = static_cast<uint16_t>(pool.size() - pool_len);
             e.text.len = std::min(len, avail);
@@ -380,9 +416,11 @@ struct Loader {
 
     /// Forgets the parameters of other folders; folder entries stay for titles and navigation.
     constexpr void drop_leaf_entries() {
-        for (auto& e : entries) {
-            if (e && e->type != Type::Folder) {
-                e.reset();
+        for (std::size_t id = 0; id < slot_of.size(); ++id) {
+            const uint8_t slot = slot_of[id];
+            if (slot != 0 && slots[slot - 1u] && slots[slot - 1u]->type != Type::Folder) {
+                slots[slot - 1u].reset();
+                slot_of[id] = 0;
             }
         }
         pool_len = 0;
@@ -394,9 +432,10 @@ struct Loader {
         device = dev.value;
         param_count = count.value;
         folder = 0;
-        has_root_folder = true;
+        // Only a FOLDER reply for param 0 sets it (Rust `select_device`); otherwise the legacy scan applies.
+        has_root_folder = false;
         parent_map.fill(kNoParent);
-        entries = {};
+        clear_entries();
         pool_len = 0;
         state = State::Loading;
         loading_id = 0;
@@ -451,11 +490,9 @@ struct Loader {
             if (param_id.value < kMaxParamMap) {
                 parent_map[param_id.value] = parsed->parent;
             }
-            if (param_id.value < kMaxParams) {
-                auto entry = *parsed;
-                intern(param_id.value, entry, chunks.bytes());
-                entries[param_id.value] = entry;
-            }
+            auto entry = *parsed;
+            intern(param_id.value, entry, chunks.bytes());
+            store(param_id.value, entry);
         }
         chunks.reset();
         if (state == State::Loading && param_id.value == loading_id) {
@@ -508,9 +545,9 @@ struct Loader {
         return {Action::Kind::Read, *next, 0};
     }
 
-    /// Enters a folder and reloads its children. Returns nothing if the folder is not known.
+    /// Enters a folder and reloads its children. Also works while a folder is still loading (ESC goes up).
     constexpr Action enter_folder(const uint8_t folder_id, const uint32_t now) {
-        if (state != State::Ready) {
+        if (state == State::Idle) {
             return {};
         }
         folder = folder_id;
@@ -539,9 +576,16 @@ struct Command {
     uint32_t deadline_ms = 0;
     uint32_t poll_at_ms = 0;
     uint32_t poll_interval_ms = kCmdDefaultPollMs;
+    /// The device sent an info text for this run (Rust `cmd_info`); the UI shows the entry text then.
+    bool has_info = false;
 
+    /// Starts a command. Ignored while another one is in progress (Rust `trigger_command`).
     constexpr Action start(const uint8_t id, const uint32_t now) {
+        if (kind != Kind::Idle && kind != Kind::Completed) {
+            return {};
+        }
         param = id;
+        has_info = false;
         kind = Kind::Starting;
         deadline_ms = now + kCmdStartTimeoutMs;
         return {Action::Kind::Write, id, static_cast<uint8_t>(CmdStatus::Start)};
@@ -551,8 +595,11 @@ struct Command {
         if (kind != Kind::WaitingConfirm) {
             return {};
         }
-        kind = Kind::Starting;
-        deadline_ms = now + kCmdStartTimeoutMs;
+        // Rust `confirm_command`: poll right away instead of waiting for the first Progress reply.
+        kind = Kind::Running;
+        poll_interval_ms = kCmdConfirmPollMs;
+        poll_at_ms = now + kCmdConfirmPollMs;
+        deadline_ms = now + kCmdRunTimeoutMs;
         return {Action::Kind::Write, param, static_cast<uint8_t>(CmdStatus::Confirm)};
     }
 
@@ -562,13 +609,25 @@ struct Command {
         }
         const uint8_t id = param;
         kind = Kind::Idle;
+        has_info = false;
         return {Action::Kind::Write, id, static_cast<uint8_t>(CmdStatus::Cancel)};
     }
 
+    /// Closes the result of a completed command without a write (Rust `dismiss_command`).
+    constexpr void dismiss() {
+        kind = Kind::Idle;
+        has_info = false;
+    }
+
     /// Applies a status frame for the given command parameter.
-    constexpr void on_status(const ParamId id, const CmdStatus status, const TimeoutByte timeout_byte, const uint32_t now) {
+    /// `info` is true when the entry carried a non-empty info text.
+    constexpr void on_status(const ParamId id, const CmdStatus status, const TimeoutByte timeout_byte, const uint32_t now,
+                             const bool info = false) {
         if (id.value != param || (kind != Kind::Starting && kind != Kind::Running)) {
             return;
+        }
+        if (info) {
+            has_info = true;
         }
         poll_interval_ms = timeout_byte.value > 0 ? static_cast<uint32_t>(timeout_byte.value) * 100 : kCmdDefaultPollMs;
         switch (status) {
@@ -594,12 +653,12 @@ struct Command {
         switch (kind) {
             case Kind::Starting:
                 if (due(Now{now}, Deadline{deadline_ms})) {
-                    kind = Kind::Idle;
+                    dismiss();
                 }
                 break;
             case Kind::Running:
                 if (due(Now{now}, Deadline{deadline_ms})) {
-                    kind = Kind::Idle;
+                    dismiss();
                 } else if (due(Now{now}, Deadline{poll_at_ms})) {
                     poll_at_ms = now + poll_interval_ms;
                     return {Action::Kind::Write, param, static_cast<uint8_t>(CmdStatus::Poll)};
@@ -607,7 +666,7 @@ struct Command {
                 break;
             case Kind::Completed:
                 if (due(Now{now}, Deadline{deadline_ms})) {
-                    kind = Kind::Idle;
+                    dismiss();
                 }
                 break;
             default:
