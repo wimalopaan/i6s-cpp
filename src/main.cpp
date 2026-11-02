@@ -439,7 +439,8 @@ int main() {
         const uint16_t pressed = static_cast<uint16_t>(g_keys & ~prev_keys);
         prev_keys = g_keys;
         const uint32_t now = time::millis();
-        const auto dt_ms = static_cast<uint16_t>(std::min<uint32_t>(now - last_loop_ms, 20));
+        // Clamp as in Rust: long iterations (EEPROM writes, LCD flush) still advance the timers.
+        const auto dt_ms = static_cast<uint16_t>(std::min<uint32_t>(now - last_loop_ms, 100));
         last_loop_ms = now;
 
         g_buzzer.set_enabled(g_storage.radio.audio_enabled != 0);
