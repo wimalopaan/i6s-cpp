@@ -32,6 +32,7 @@ inline constinit uint8_t g_tx_buf[kTxBufSize]{};
 inline constinit std::size_t g_rx_tail = 0;
 inline constinit volatile bool g_tx_busy = false;
 inline constinit volatile bool g_rx_idle_pending = false;
+inline constinit volatile uint16_t g_rx_idle_pos = 0;
 inline constinit volatile bool g_active_high = true;
 inline constinit volatile bool g_power_on = false;
 inline constinit volatile bool g_half_duplex = false;
@@ -173,12 +174,20 @@ inline std::size_t write_bytes(std::span<const uint8_t> bytes) {
     return n;
 }
 
-/// Returns true once after the RX line went idle (end of a received burst).
-inline bool take_rx_idle() {
+/// Read position of the RX ring (the consumer side).
+inline std::size_t rx_tail() {
+    return g_rx_tail;
+}
+
+/// Once after the RX line went idle: the ring position where the burst ended. Bytes before that
+/// position may still be unread, so a partial frame is only stale once rx_tail() reaches it.
+inline std::optional<std::size_t> take_rx_idle() {
     arch::CriticalSection cs;
-    const bool pending = g_rx_idle_pending;
+    if (!g_rx_idle_pending) {
+        return std::nullopt;
+    }
     g_rx_idle_pending = false;
-    return pending;
+    return g_rx_idle_pos;
 }
 
 /// USART2 interrupt body: TC frees the transmitter, IDLE marks the end of an RX burst.
@@ -191,6 +200,7 @@ inline void on_irq() {
     }
     if ((isr & USART_ISR_IDLE) != 0) {
         USART2->ICR = USART_ICR_IDLECF;
+        g_rx_idle_pos = static_cast<uint16_t>(rx_head() & (kRxBufSize - 1));
         g_rx_idle_pending = true;
     }
 }
