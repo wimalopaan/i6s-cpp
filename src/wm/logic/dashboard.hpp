@@ -712,7 +712,7 @@ constexpr void draw_splash(Framebuffer& fb) {
     fb.clear();
     glyphs::draw_logo(fb, {46, 1});
     fb.draw_str_6x10({34, 41}, "wimalopaan", false);
-    fb.draw_str_4x6({38, 53}, "flysky-i6x-rs", false);
+    fb.draw_str_4x6({44, 53}, "wm-i6x-cpp", false);
 }
 
 }  // namespace wm::logic::dashboard
