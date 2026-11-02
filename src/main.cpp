@@ -421,7 +421,9 @@ int main() {
     uint32_t last_loop_ms = time::millis();
     bool rx_id_dirty = false;
     const auto boot_input = sample_inputs();
-    bool prev_armed = logic::flight::is_armed(model.arm_switch, boot_input.switches);
+    // Arm state as in Rust: only an assigned arm switch can arm. flight::is_armed (true without a switch)
+    // is meant for the timer trigger, not for save inhibits, chimes or the CRSF arm flag.
+    bool prev_armed = logic::mixer::eval_arm_switch(model.arm_switch, boot_input.switches);
     logic::buzzer_inputs::ActivityTracker activity{};
     activity.prime(boot_input.raw, boot_input.switches);
     logic::buzzer_inputs::PotCenterTracker<6> pot_centre{};
@@ -497,7 +499,7 @@ int main() {
                     switch_model(ev.index);
                     apply_protocol_link();
                     apply_rf_model();
-                    prev_armed = logic::flight::is_armed(g_storage.active_model.arm_switch, input.switches);
+                    prev_armed = logic::mixer::eval_arm_switch(g_storage.active_model.arm_switch, input.switches);
                     vario.reset();
                     break;
                 case logic::menu::Action::SaveActiveModel:
@@ -546,7 +548,7 @@ int main() {
             }
         }
 
-        const bool armed = logic::flight::is_armed(model.arm_switch, input.switches);
+        const bool armed = logic::mixer::eval_arm_switch(model.arm_switch, input.switches);
         if (g_rf_ok) {
             if (const auto id = hw::rf::take_pending_rx_save()) {
                 if (id->value != 0 && id->value != 0xFFFF'FFFFu && model.rx_id != id->value) {
@@ -558,8 +560,8 @@ int main() {
         if (rx_id_dirty && !armed) {
             if (logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage)) {
                 play_buzzer_cue(logic::buzzer::Cue::RxSave);
+                rx_id_dirty = false;
             }
-            rx_id_dirty = false;
         }
 
         const bool menu_open = menu_state.screen != logic::menu::Screen::Closed || logic::calib::active(g_calib_wizard);
