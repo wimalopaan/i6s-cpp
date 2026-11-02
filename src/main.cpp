@@ -355,7 +355,10 @@ int main() {
     g_trims.throttle_enabled = g_storage.radio.throttle_trim != 0;
     apply_protocol_link();
 
-    const bool bind_on_boot = !was_watchdog_reset && (hw::keys::scan_keys() & logic::kKeyBind) != 0;
+    const uint16_t boot_keys = hw::keys::scan_keys();
+    const bool bind_on_boot = !was_watchdog_reset && (boot_keys & logic::kKeyBind) != 0;
+    // OK held at power-on starts the calibration wizard directly.
+    const bool calib_on_boot = !was_watchdog_reset && (boot_keys & logic::kKeyOk) != 0;
     g_rf_ok = hw::rf::init(tx_id_from_uid());
     apply_rf_model();
     if (bind_on_boot && g_rf_ok && model.rf_protocol == 0) {
@@ -376,26 +379,34 @@ int main() {
 
     using namespace logic::dashboard;
     PageState page_state{};
-    g_fb.clear();
-    draw_splash(g_fb);
-    hw::lcd::flush(g_fb);
     g_buzzer.set_enabled(g_storage.radio.audio_enabled != 0);
-    play_buzzer_cue(was_watchdog_reset ? logic::buzzer::Cue::WatchdogRecover : logic::buzzer::Cue::Welcome);
-    uint32_t buzz_ms = time::millis();
-    const uint32_t splash_start_ms = time::millis();
-    while (time::millis() - splash_start_ms < 1200) {
-        chip::watchdog::feed();
-        pump_buzzer(buzz_ms);
-        __WFI();
+    if (was_watchdog_reset) {
+        // Resume immediately after a watchdog reset: no splash, only the warning chirp.
+        play_buzzer_cue(logic::buzzer::Cue::WatchdogRecover);
+    } else {
+        g_fb.clear();
+        draw_splash(g_fb);
+        hw::lcd::flush(g_fb);
+        play_buzzer_cue(logic::buzzer::Cue::Welcome);
     }
-
-    if (!was_watchdog_reset) {
+    uint32_t buzz_ms = time::millis();
+    if (calib_on_boot) {
+        logic::calib::start(g_calib_wizard);
+        play_buzzer_cue(g_calib_wizard.cue);
+    }
+    if (!was_watchdog_reset && !logic::calib::active(g_calib_wizard)) {
+        const uint32_t splash_start_ms = time::millis();
+        while (time::millis() - splash_start_ms < 1200) {
+            chip::watchdog::feed();
+            pump_buzzer(buzz_ms);
+            __WFI();
+        }
         run_preflight(model);
     }
 
     const auto stick_mode = logic::safety::stick_mode_from(g_storage.radio.stick_mode);
     uint32_t last_draw_ms = 0;
-    uint16_t prev_keys = 0;
+    uint16_t prev_keys = calib_on_boot ? boot_keys : 0;  // the held OK must not step the wizard
     logic::menu::State menu_state{};
     bool ok_armed = false;
     uint32_t ok_press_ms = 0;
