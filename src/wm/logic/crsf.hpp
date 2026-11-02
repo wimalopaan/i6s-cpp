@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -189,8 +190,8 @@ constexpr int16_t packed_vspeed_magnitude(const int abs_v) {
 
 // Table instead of runtime 64-bit divisions: avoids the soft 64-bit division routines on the Cortex-M0.
 inline constexpr auto kPackedVspeed = [] {
-    std::array<int16_t, 129> t{};
-    for (int i = 0; i < 129; ++i) {
+    std::array<int16_t, 128> t{};
+    for (int i = 0; i < 128; ++i) {
         t[i] = packed_vspeed_magnitude(i);
     }
     return t;
@@ -198,9 +199,15 @@ inline constexpr auto kPackedVspeed = [] {
 
 /// Decodes the 1-byte logarithmic vertical speed used in the 3-byte baro frame.
 constexpr int16_t decode_packed_vspeed(const int8_t raw) {
-    const int abs_v = raw < 0 ? -static_cast<int>(raw) : static_cast<int>(raw);
+    // -128 decodes like -127 (Rust `.min(127)`).
+    const int abs_v = std::min(raw < 0 ? -static_cast<int>(raw) : static_cast<int>(raw), 127);
     const int16_t cms = kPackedVspeed[static_cast<std::size_t>(abs_v)];
     return raw < 0 ? static_cast<int16_t>(-cms) : cms;
+}
+
+/// Metres to decimetres, saturating at the int16 range (Rust `i16::saturating_mul(10)`).
+constexpr int16_t m_to_dm(const int16_t m) {
+    return static_cast<int16_t>(std::clamp(static_cast<int32_t>(m) * 10, -32768, 32767));
 }
 
 constexpr void mark_alive(Telemetry& t, const uint32_t now_ms) {
@@ -273,7 +280,7 @@ constexpr bool parse_telemetry(const uint8_t type, std::span<const uint8_t> p, T
                 // Whole meters without offset.
                 const auto alt_m = static_cast<int16_t>(raw & 0x7FFFu);
                 t.baro_alt_m = alt_m;
-                t.baro_alt_dm = static_cast<int16_t>(alt_m * 10);
+                t.baro_alt_dm = m_to_dm(alt_m);
             }
             t.last_alt_ms = now_ms;
 
@@ -327,7 +334,7 @@ constexpr bool parse_telemetry(const uint8_t type, std::span<const uint8_t> p, T
             const auto alt_m = static_cast<int32_t>(be16(p, 12)) - 1000;
             if (t.baro_alt_m == 0 && t.baro_alt_dm == 0) {
                 t.baro_alt_m = static_cast<int16_t>(alt_m);
-                t.baro_alt_dm = static_cast<int16_t>(alt_m * 10);
+                t.baro_alt_dm = m_to_dm(static_cast<int16_t>(alt_m));
                 t.last_alt_ms = now_ms;
             }
             t.gps_groundspeed_kmh_x10 = be16(p, 8);

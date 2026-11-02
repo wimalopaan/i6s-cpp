@@ -30,6 +30,7 @@ struct Request {
         StartCommand,
         ConfirmCommand,
         CancelCommand,
+        DismissCommand,
     };
 
     Kind kind{Kind::None};
@@ -172,9 +173,9 @@ constexpr bool is_editable(const menu::Type t) {
 /// Visible parameters of a folder in id order. Parameter 0 is the root folder itself.
 constexpr Items items_in_folder(const menu::Loader& l, const uint8_t folder) {
     Items items;
-    for (std::size_t id = 1; id < menu::kMaxParams; ++id) {
-        const auto& entry = l.entries[id];
-        if (!entry || entry->hidden || entry->type == menu::Type::Back) {
+    for (std::size_t id = 1; id < menu::kMaxParamId && items.count < items.ids.size(); ++id) {
+        const menu::Entry* entry = l.find(static_cast<uint8_t>(id));
+        if (entry == nullptr || entry->hidden || entry->type == menu::Type::Back) {
             continue;
         }
         const bool legacy_top = !l.has_root_folder && entry->parent == menu::kNoParent && folder == 0;
@@ -261,6 +262,11 @@ constexpr Result update(State& s, const Keys& k, const menu::Loader* l, const me
         }
         return r;
     }
+    if (cmd == Kind::Completed && (k.ok || k.cancel)) {
+        r.req.kind = Request::Kind::DismissCommand;
+        r.click = true;
+        return r;
+    }
     if (cmd == Kind::Starting || cmd == Kind::Running) {
         if (k.cancel) {
             r.req.kind = Request::Kind::CancelCommand;
@@ -303,9 +309,17 @@ constexpr Result update(State& s, const Keys& k, const menu::Loader* l, const me
     }
     if (l->state == menu::Loader::State::Loading) {
         if (k.cancel) {
-            r.req.kind = Request::Kind::BackToList;
-            s = State{};
             r.click = true;
+            // A subfolder load goes up one level (Rust `exit_current_folder`); the device load drops the device.
+            if (s.depth > 0) {
+                s.folder = s.stack[--s.depth];
+                s.selected = 0;
+                s.scroll = 0;
+                r.req = {Request::Kind::EnterFolder, s.folder, 0};
+            } else {
+                r.req.kind = Request::Kind::BackToList;
+                s = State{};
+            }
         }
         return r;
     }
@@ -318,7 +332,7 @@ constexpr Result update(State& s, const Keys& k, const menu::Loader* l, const me
     }
 
     if (s.editing) {
-        const auto& e = *l->entries[items.ids[s.selected]];
+        const auto& e = *l->find(items.ids[s.selected]);
         if (k.ok) {
             r.req = {Request::Kind::Write, items.ids[s.selected], s.edit_val};
             s.editing = false;
@@ -339,7 +353,7 @@ constexpr Result update(State& s, const Keys& k, const menu::Loader* l, const me
 
     if (k.ok && items.count > 0) {
         const uint8_t id = items.ids[s.selected];
-        const auto& e = *l->entries[id];
+        const auto& e = *l->find(id);
         if (e.type == menu::Type::Folder) {
             if (s.depth < kMaxDepth) {
                 s.stack[s.depth++] = s.folder;
@@ -466,7 +480,13 @@ constexpr void draw_param(display::Framebuffer& fb, const State& s, const menu::
             const bool active = c != nullptr && c->param == id && c->kind != Kind::Idle;
             std::string_view text = name;
             if (active) {
-                text = c->kind == Kind::Completed ? std::string_view{"OK"} : std::string_view{"Executing..."};
+                // The device's own progress / result text wins (Rust `cmd_info`).
+                const std::string_view info = c->has_info ? l.text(e) : std::string_view{};
+                if (!info.empty()) {
+                    text = info;
+                } else {
+                    text = c->kind == Kind::Completed ? std::string_view{"OK"} : std::string_view{"Executing..."};
+                }
             }
             format::Text<24> t;
             t.push('[');
@@ -497,15 +517,20 @@ constexpr void draw_param(display::Framebuffer& fb, const State& s, const menu::
     }
 }
 
-constexpr void draw_confirm(display::Framebuffer& fb, const menu::Loader& l, const uint8_t id) {
+constexpr void draw_confirm(display::Framebuffer& fb, const menu::Loader& l, const menu::Command& c) {
     fb.fill_rect({{10, 16}, {108, 32}}, false);
     fb.draw_rect({{10, 16}, {108, 32}}, true);
+    const menu::Entry* e = l.find(c.param);
+    const std::string_view info = c.has_info && e != nullptr ? l.text(*e) : std::string_view{};
     format::Text<24> q;
-    push_text(q, "Run: [");
-    if (id < menu::kMaxParams && l.entries[id]) {
-        push_text(q, head(view_of(l.entries[id]->name), 8));
+    if (!info.empty()) {
+        // The device's confirmation prompt (Rust `render_confirm_dialog`).
+        push_text(q, head(info, 17));
+    } else {
+        push_text(q, "Run: [");
+        push_text(q, head(e != nullptr ? view_of(e->name) : std::string_view{"Action"}, 8));
+        push_text(q, "]?");
     }
-    push_text(q, "]?");
     const int x = 10 + std::max((108 - static_cast<int>(q.len) * 6) / 2, 0);
     fb.draw_str_6x10({x, 20}, q.view(), false);
     fb.draw_str_4x6({20, 37}, "[OK] Yes  [ESC] No", false);
@@ -568,12 +593,12 @@ constexpr void render(display::Framebuffer& fb, const State& s, const menu::Load
     if (l->state == menu::Loader::State::Loading) {
         widgets::draw_header(fb, "CRSF CONFIG");
         fb.draw_str_6x10({12, 21}, "Loading...", false);
-        widgets::draw_footer(fb, "Please wait...  [ESC] Devices");
+        widgets::draw_footer(fb, s.depth > 0 ? "Loading...    [ESC] Back" : "Please wait...  [ESC] Devices");
         return;
     }
 
-    if (s.folder > 0 && s.folder < menu::kMaxParams && l->entries[s.folder]) {
-        widgets::draw_header(fb, head(view_of(l->entries[s.folder]->name), 20));
+    if (const menu::Entry* f = s.folder > 0 ? l->find(s.folder) : nullptr) {
+        widgets::draw_header(fb, head(view_of(f->name), 20));
     } else {
         widgets::draw_header(fb, "CRSF CONFIG");
     }
@@ -590,17 +615,17 @@ constexpr void render(display::Framebuffer& fb, const State& s, const menu::Load
         if (index >= items.count) {
             break;
         }
-        detail::draw_param(fb, s, *l, c, slot, index, items.ids[index], *l->entries[items.ids[index]]);
+        detail::draw_param(fb, s, *l, c, slot, index, items.ids[index], *l->find(items.ids[index]));
     }
     widgets::draw_scrollbar(fb, {static_cast<int>(s.selected)}, {static_cast<int>(items.count)}, {14, 36});
 
     const uint8_t sel_id = s.selected < items.count ? items.ids[s.selected] : 0;
     if (c != nullptr && c->kind == Kind::WaitingConfirm) {
-        detail::draw_confirm(fb, *l, c->param);
+        detail::draw_confirm(fb, *l, *c);
     } else if (s.editing) {
         widgets::draw_footer(fb, "[OK] Confirm   [ESC] Cancel");
     } else {
-        const auto& e = *l->entries[sel_id];
+        const auto& e = *l->find(sel_id);
         const std::string_view back = s.depth > 0 ? "[ESC] Up" : "[ESC] Devices";
         if (e.type == menu::Type::Folder) {
             widgets::draw_footer_split(fb, "[OK] Enter", back);
