@@ -18,6 +18,7 @@
 #include "wm/hw/trainer.hpp"
 #include "wm/logic/dashboard.hpp"
 #include "wm/logic/auto_select.hpp"
+#include "wm/logic/backlight.hpp"
 #include "wm/logic/bind.hpp"
 #include "wm/logic/brr.hpp"
 #include "wm/logic/buzzer.hpp"
@@ -251,7 +252,7 @@ void refresh_model_names() {
 
 // Applies the stored LCD backlight level and contrast.
 void apply_lcd_settings(const wm::logic::storage::RadioConfig& r) {
-    wm::hw::lcd::set_backlight_level(static_cast<uint8_t>(r.backlight_brightness * 10));
+    wm::hw::lcd::set_backlight_level(wm::logic::backlight::on_level(r));
     wm::hw::lcd::set_contrast(r.lcd_contrast);
 }
 
@@ -425,6 +426,7 @@ int main() {
     activity.prime(boot_input.raw, boot_input.switches);
     logic::buzzer_inputs::PotCenterTracker<6> pot_centre{};
     logic::buzzer::InactivityTimer inactivity{};
+    logic::backlight::Dimmer dimmer{};
     logic::vario::State vario{};
 
     for (;;) {
@@ -685,6 +687,9 @@ int main() {
         prev_armed = armed;
 
         const bool user_active = activity.step(input.raw, input.switches, g_keys);
+        if (const auto level = dimmer.step(user_active, g_storage.radio, dt_ms)) {
+            hw::lcd::set_backlight_level(*level);
+        }
         const std::size_t pot_count = g_storage.radio.ext_adc != 0 ? 6 : 2;
         if (pot_centre.step(std::span<const int16_t>(input.aux_pots).subspan(4, pot_count))) {
             play_buzzer_cue(logic::buzzer::Cue::PotCenter);
