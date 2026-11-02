@@ -101,6 +101,8 @@ static_assert(logic::crsf::us_to_crsf(2012) == 1811);
 static_assert(logic::crsf::us_to_crsf(100) == 172);
 static_assert(logic::crsf::us_to_crsf(5000) == 1811);
 static_assert(logic::crsf::decode_packed_vspeed(0) == 0);
+static_assert(logic::crsf::decode_packed_vspeed(1) == 65 && logic::crsf::decode_packed_vspeed(-1) == -65);
+static_assert(logic::crsf::decode_packed_vspeed(-128) == -logic::crsf::kPackedVspeed[128]);
 
 static_assert(logic::usart_brr(115200) == 417);
 static_assert(logic::usart_brr(416666) == 115);

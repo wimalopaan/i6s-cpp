@@ -339,7 +339,9 @@ struct Loader {
     uint8_t device = 0;
     uint8_t param_count = 0;
     uint8_t folder = 0;
-    bool has_root_folder = true;
+    // start() sets this. It is false in a fresh Loader so that the whole object is all-zero and lands in .bss
+    // (a single non-zero byte would put its 4 KB into .data and cost 4 KB of flash).
+    bool has_root_folder = false;
     uint8_t loading_id = 0;
     uint8_t retry = 0;
     uint32_t next_req_ms = 0;

@@ -177,21 +177,30 @@ constexpr int16_t be16s(std::span<const uint8_t> p, const std::size_t i) {
     return static_cast<int16_t>(be16(p, i));
 }
 
-/// Decodes the 1-byte logarithmic vertical speed used in the 3-byte baro frame.
-constexpr int16_t decode_packed_vspeed(const int8_t raw) {
-    if (raw == 0) {
-        return 0;
-    }
-    const int64_t abs_v = raw < 0 ? -static_cast<int64_t>(raw) : static_cast<int64_t>(raw);
-    const int64_t z = abs_v * 2600;
+/// Logarithmic 1-byte vertical speed for |raw| = abs_v, in cm/s (0 to 128). The 64-bit maths runs at compile time only.
+constexpr int16_t packed_vspeed_magnitude(const int abs_v) {
+    const int64_t z = static_cast<int64_t>(abs_v) * 2600;
     const int64_t term1 = z / 40;
     const int64_t term2 = (z * z) / 8'000'000;
     const int64_t term3 = ((z * z) / 1'000'000 * z) / 2'400'000'000;
-    int64_t cms = term1 + term2 + term3;
-    if (cms > 32767) {
-        cms = 32767;
+    const int64_t cms = term1 + term2 + term3;
+    return static_cast<int16_t>(cms > 32767 ? 32767 : cms);
+}
+
+// Table instead of runtime 64-bit divisions: avoids the soft 64-bit division routines on the Cortex-M0.
+inline constexpr auto kPackedVspeed = [] {
+    std::array<int16_t, 129> t{};
+    for (int i = 0; i < 129; ++i) {
+        t[i] = packed_vspeed_magnitude(i);
     }
-    return static_cast<int16_t>(raw < 0 ? -cms : cms);
+    return t;
+}();
+
+/// Decodes the 1-byte logarithmic vertical speed used in the 3-byte baro frame.
+constexpr int16_t decode_packed_vspeed(const int8_t raw) {
+    const int abs_v = raw < 0 ? -static_cast<int>(raw) : static_cast<int>(raw);
+    const int16_t cms = kPackedVspeed[static_cast<std::size_t>(abs_v)];
+    return raw < 0 ? static_cast<int16_t>(-cms) : cms;
 }
 
 constexpr void mark_alive(Telemetry& t, const uint32_t now_ms) {
