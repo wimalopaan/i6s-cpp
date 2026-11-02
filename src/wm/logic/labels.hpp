@@ -32,6 +32,16 @@ constexpr std::string_view switch_cond_label(const uint8_t cond) {
     return cond < kSwitchCondNames.size() ? kSwitchCondNames[cond] : kSwitchCondNames[0];
 }
 
+// Timer trigger codes: 0 off, 1 throttle run, 2 throttle latch, 3 always, 4..17 switch conditions 1..14.
+constexpr std::string_view timer_source_label(const uint8_t ts) {
+    switch (ts) {
+        case 1: return "THs (RUN)";
+        case 2: return "THt (LTCH)";
+        case 3: return "ALWAYS ON";
+        default: return ts >= 4 && ts <= 17 ? kSwitchCondNames[ts - 3] : "OFF";
+    }
+}
+
 // Vario sink mode: 0 mute, 1 pulse, 2 continuous (shown as DRONE).
 constexpr std::string_view vario_sink_mode_label(const uint8_t mode) {
     switch (mode) {

@@ -54,15 +54,16 @@ inline constexpr std::size_t kItemModelSelect = 0;
 inline constexpr std::size_t kItemModelSetup = 1;
 
 // Rows of the model setup screen. Each row maps to one slot of the 4-row view.
-enum class SetupRow : uint8_t { Name = 0, Type, ArmSwitch, Timer, Copy, Vario, Telemetry, Protocol, Reset };
-inline constexpr std::size_t kSetupRows = 9;
-inline constexpr std::size_t kItemVarioRow = 5;
-inline constexpr std::size_t kItemTelemRow = 6;
+enum class SetupRow : uint8_t { Name = 0, Type, ArmSwitch, Timer, Trigger, Copy, Vario, Telemetry, Protocol, Reset };
+inline constexpr std::size_t kSetupRows = 10;
+inline constexpr std::size_t kItemVarioRow = static_cast<std::size_t>(SetupRow::Vario);
+inline constexpr std::size_t kItemTelemRow = static_cast<std::size_t>(SetupRow::Telemetry);
 inline constexpr uint8_t kNameLen = 10;
 inline constexpr uint8_t kModelTypeCount = 5;
 inline constexpr uint8_t kArmSwitchCount = 23;
 inline constexpr uint16_t kTimerStepSecs = 30;
 inline constexpr uint16_t kTimerMaxSecs = 3600;
+inline constexpr uint8_t kTimerSourceCount = 18;
 // Vario switch codes: 0 OFF, 1 ON, 2..23 arm conditions 1..22.
 inline constexpr uint8_t kVarioSwitchCount = 24;
 inline constexpr uint8_t kVarioClimbMaxTenths = 10;
@@ -428,9 +429,29 @@ constexpr std::optional<uint8_t> pot_change_source(const auto_select::Changes& c
 
 constexpr bool is_switch_cond_available(const uint8_t cond, const storage::RadioConfig& r);
 
+// Next (down = false) or previous (down = true) code that passes `ok`, wrapping over 0..count-1. Returns cur if none does.
+template <typename Ok>
+constexpr uint8_t step_available(const uint8_t cur, const std::size_t count, const bool down, Ok ok) {
+    for (std::size_t i = 1; i < count; ++i) {
+        const auto cand = static_cast<uint8_t>(down ? (cur + count - i) % count : (cur + i) % count);
+        if (ok(cand)) {
+            return cand;
+        }
+    }
+    return cur;
+}
+
 // Arm switch codes are condition codes 1..22 (0 is unused by auto-select).
 constexpr bool is_arm_switch_available(const uint8_t sw, const storage::RadioConfig& r) {
     return sw < kArmSwitchCount && is_switch_cond_available(sw, r);
+}
+
+// Timer trigger codes 0..3 always exist; 4..17 need switch condition 1..14.
+constexpr bool is_timer_source_available(const uint8_t ts, const storage::RadioConfig& r) {
+    if (ts <= 3) {
+        return true;
+    }
+    return ts < kTimerSourceCount && is_switch_cond_available(static_cast<uint8_t>(ts - 3), r);
 }
 
 constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, const storage::RadioConfig& r,
@@ -458,6 +479,7 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
                     return save;
                 case SetupRow::ArmSwitch:
                 case SetupRow::Timer:
+                case SetupRow::Trigger:
                     s.editing = true;
                     break;
                 case SetupRow::Copy:
@@ -536,6 +558,21 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
             }
             if (n.down && m.timer_secs >= kTimerStepSecs) {
                 m.timer_secs = static_cast<uint16_t>(m.timer_secs - kTimerStepSecs);
+            }
+            if (n.ok || n.cancel) {
+                s.editing = false;
+                return save;
+            }
+            break;
+        case SetupRow::Trigger:
+            if (n.changes.sw_cond) {
+                const auto ts = static_cast<uint8_t>(*n.changes.sw_cond + 3);
+                if (is_timer_source_available(ts, r)) {
+                    m.timer_source = ts;
+                }
+            } else if (n.up != n.down) {
+                m.timer_source = step_available(m.timer_source, kTimerSourceCount, n.down,
+                                                [&](const uint8_t ts) { return is_timer_source_available(ts, r); });
             }
             if (n.ok || n.cancel) {
                 s.editing = false;
@@ -971,18 +1008,6 @@ constexpr bool is_switch_cond_available(const uint8_t cond, const storage::Radio
         case 22: return r.ext_adc != 0 && is_two_or_three_pos(adc_mode_at(r, 7));
         default: return false;
     }
-}
-
-// Next (down = false) or previous (down = true) code that passes `ok`, wrapping over 0..count-1. Returns cur if none does.
-template <typename Ok>
-constexpr uint8_t step_available(const uint8_t cur, const std::size_t count, const bool down, Ok ok) {
-    for (std::size_t i = 1; i < count; ++i) {
-        const auto cand = static_cast<uint8_t>(down ? (cur + count - i) % count : (cur + i) % count);
-        if (ok(cand)) {
-            return cand;
-        }
-    }
-    return cur;
 }
 
 // Vario switch codes that can be picked: OFF and ON always, others when their arm condition exists.
@@ -1630,6 +1655,10 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
                 }
                 break;
             }
+            case SetupRow::Trigger:
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "T-Trig:",
+                                       labels::timer_source_label(m.timer_source), {52});
+                break;
             case SetupRow::Copy: {
                 if (s.editing && idx == s.setup.selected) {
                     const auto target = model_copy::target_label(s.copy.dst);
