@@ -710,9 +710,9 @@ constexpr void render(Framebuffer& fb, PageState& s, const View& v) {
 
 constexpr void draw_splash(Framebuffer& fb) {
     fb.clear();
-    glyphs::draw_ferrox_logo(fb, {50, 3});
-    fb.draw_str_6x10({37, 34}, "FERROX-RC", false);
-    fb.draw_str_4x6({38, 45}, "flysky-i6x-rs", false);
+    glyphs::draw_logo(fb, {46, 1});
+    fb.draw_str_6x10({34, 41}, "wimalopaan", false);
+    fb.draw_str_4x6({38, 53}, "flysky-i6x-rs", false);
 }
 
 }  // namespace wm::logic::dashboard

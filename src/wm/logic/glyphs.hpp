@@ -70,23 +70,27 @@ constexpr void draw_battery_gauge(display::Framebuffer& fb, const Point p, const
     }
 }
 
-inline constexpr int kLogoWidth = 28;
-inline constexpr int kLogoHeight = 27;
+inline constexpr int kLogoWidth = 35;
+inline constexpr int kLogoHeight = 38;
 
-/// 28x27 Ferrox-RC emblem. Bit index is row * 28 + col, LSB first.
-inline constexpr std::array<uint8_t, 95> kLogo28x27{
-    0,   96,  0,   0,   0,   6,   0,   0,   240, 0,   0,   0,   9,   0,   0,   152, 1,   0,   192, 48,
-    0,   0,   12,  3,   0,   64,  32,  0,   0,   6,   6,   0,   32,  64,  0,   0,   99,  12,  0,   144,
-    144, 0,   128, 9,   25,  0,   8,   6,   1,   64,  96,  32,  0,   134, 16,  6,   32,  0,   64,  0,
-    1,   0,   8,   48,  0,   192, 128, 1,   0,   24,  8,   0,   0,   129, 6,   0,   22,  60,  0,   192,
-    227, 3,   0,   124, 30,  240, 128, 247, 1,   6,   248, 7,   96,  0,   14,
+/// 35x38 wimalopaan avatar (robot with hat). Bit index is row * 35 + col, LSB first.
+inline constexpr std::array<uint8_t, 167> kLogo35x38{
+    0,   252, 255, 1,   0,   48,  56,  24,  0,   128, 0,   128, 0,   0,   6,   0,   12,  0,   16,  0,
+    64,  0,   128, 0,   0,   2,   0,   6,   0,   48,  0,   16,  0,   0,   1,   128, 0,   0,   8,   0,
+    14,  0,   224, 0,   254, 7,   240, 63,  188, 255, 255, 191, 39,  196, 255, 31,  161, 1,   0,   0,
+    0,   27,  0,   0,   0,   140, 7,   0,   0,   60,  240, 7,   0,   127, 0,   240, 255, 31,  0,   0,
+    128, 0,   0,   0,   6,   4,   12,  0,   48,  32,  96,  0,   0,   1,   3,   1,   0,   12,  28,  24,
+    0,   252, 255, 255, 7,   240, 251, 255, 126, 128, 143, 255, 227, 3,   60,  249, 79,  30,  224, 217,
+    127, 243, 0,   15,  254, 131, 7,   248, 248, 63,  62,  192, 255, 255, 255, 1,   254, 249, 243, 15,
+    240, 31,  199, 127, 128, 255, 131, 255, 3,   124, 254, 63,  31,  224, 51,  140, 249, 0,   255, 255,
+    255, 7,   240, 255, 255, 31,  0,
 };
 
-constexpr void draw_ferrox_logo(display::Framebuffer& fb, const Point p) {
+constexpr void draw_logo(display::Framebuffer& fb, const Point p) {
     for (int row = 0; row < kLogoHeight; ++row) {
         for (int col = 0; col < kLogoWidth; ++col) {
             const int bit = row * kLogoWidth + col;
-            if ((kLogo28x27[static_cast<std::size_t>(bit / 8)] >> (bit % 8)) & 1u) {
+            if ((kLogo35x38[static_cast<std::size_t>(bit / 8)] >> (bit % 8)) & 1u) {
                 fb.set_pixel({p.x + col, p.y + row}, true);
             }
         }
