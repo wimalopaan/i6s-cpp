@@ -17,7 +17,7 @@
 
 namespace wm::hw::rf {
 
-// Raw NVIC priority byte (0x80). CMSIS NVIC_SetPriority would shift it by 6 on Cortex-M0.
+// NVIC priority 0x80 (Rust raw value), i.e. level 2 of the 2 implemented bits.
 inline constexpr uint8_t kIrqPriorityRaw = 0x80;
 // PSC=47 gives 1 us ticks; ARR=3849 gives the 3850 us frame period.
 inline constexpr uint16_t kTimerPrescaler = 47;
@@ -34,11 +34,16 @@ inline constinit volatile uint16_t g_heartbeat = 0;
 inline constinit logic::afhds2a::Heartbeat g_gate{};
 inline constinit bool g_antenna_state = false;
 
-inline void gio2_irq_enable() { EXTI->IMR |= 1u << kGio2Line; }
+// Drops an edge latched while masked (e.g. the standby strobe ending an unanswered RX window).
+inline void gio2_irq_enable() {
+    EXTI->PR = 1u << kGio2Line;
+    EXTI->IMR |= 1u << kGio2Line;
+}
 inline void gio2_irq_disable() { EXTI->IMR &= ~(1u << kGio2Line); }
 
+// Cortex-M0 IPR registers are word-access only; NVIC_SetPriority does a word read-modify-write.
 inline void set_irq_priority(const IRQn_Type irq) {
-    reinterpret_cast<volatile uint8_t*>(&NVIC->IP[0])[irq] = kIrqPriorityRaw;
+    NVIC_SetPriority(irq, kIrqPriorityRaw >> (8u - __NVIC_PRIO_BITS));
 }
 
 inline void init_gio2_exti() {
@@ -58,14 +63,15 @@ inline void init_timer() {
 }
 
 /// Brings up SPI, the A7105 and the frame timer. Radio stays silenced until set_silenced(false).
+/// As in Rust, the register init always runs; the chip counts as present if the
+/// signature matched during reset or reads back correctly afterwards.
 inline bool init(const logic::afhds2a::TxId tx) {
     g_radio.emplace(tx);
     a7105::init_bus();
     init_gio2_exti();
-    if (!a7105::reset()) {
-        return false;
-    }
+    const bool reset_ok = a7105::reset();
     a7105::init_regs();
+    const bool ok = reset_ok || a7105::read_reg(logic::a7105::kRegPllII) == logic::a7105::kChipSignature;
 
     set_irq_priority(EXTI2_3_IRQn);
     set_irq_priority(TIM16_IRQn);
@@ -73,7 +79,7 @@ inline bool init(const logic::afhds2a::TxId tx) {
     NVIC_EnableIRQ(TIM16_IRQn);
     init_timer();
     TIM16->CR1 |= TIM_CR1_CEN;
-    return true;
+    return ok;
 }
 
 inline void set_silenced(const bool silenced) {
@@ -131,7 +137,8 @@ inline void set_rx_settings(const uint16_t rate_hz, const logic::afhds2a::PpmOut
 
 inline bool is_bound() {
     arch::CriticalSection cs;
-    return g_radio->link.bind_done;
+    const uint32_t id = g_radio->link.rx_id.value;
+    return g_radio->link.bind_done || (id != 0 && id != 0xFFFF'FFFFu);
 }
 
 inline bool is_binding() {

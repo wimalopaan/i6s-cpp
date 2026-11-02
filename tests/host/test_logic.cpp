@@ -1998,6 +1998,22 @@ void afhds2a_test() {
     check(tl.on_downlink(rx, 0, 0) == af::RxEvent::Data && tl.telemetry.connected, "afhds2a: downlink accepted");
     check(tl.telemetry.vspeed_cms == 250 && tl.telemetry.has_vspeed, "afhds2a: vario 2.5 m/s");
     check(tl.telemetry.alt_m == 185 && tl.telemetry.alt_dm == 1850, "afhds2a: altitude 185 m");
+    {
+        // Rust saturating_mul(10) for the altitude and 100.saturating_sub(val) for the LQ sensor.
+        af::Frame hi = rx;
+        hi[14] = 0x41;
+        hi[16] = static_cast<uint8_t>(10000 & 0xFF);
+        hi[17] = static_cast<uint8_t>(10000 >> 8);
+        hi[18] = 0xFE;
+        hi[19] = 0x00;
+        hi[20] = 150;
+        hi[21] = 0;
+        af::Link hl{af::TxId{0x12345678}};
+        hl.rx_id = af::RxId{0x9ABCDEF0};
+        check(hl.on_downlink(hi, 0x20, 0) == af::RxEvent::Data, "afhds2a: saturation frame accepted");
+        check(hl.telemetry.alt_m == 10000 && hl.telemetry.alt_dm == 32767, "afhds2a: altitude dm saturates");
+        check(hl.telemetry.rssi == 0, "afhds2a: LQ sensor above 100 reads 0");
+    }
 
     rx[1] = 0x00;
     check(tl.on_downlink(rx, 0, 0) == af::RxEvent::Ignored, "afhds2a: foreign TX ID ignored");
