@@ -9,6 +9,7 @@
 
 #include "wm/logic/a7105.hpp"
 #include "wm/logic/usb.hpp"
+#include "wm/logic/backlight.hpp"
 #include "wm/logic/bind.hpp"
 #include "wm/logic/afhds2a.hpp"
 #include "wm/logic/afhds2a_radio.hpp"
@@ -4273,6 +4274,35 @@ void telem_slots_test() {
           "ESC must return to the Telemetry row of model setup");
 }
 
+void backlight_test() {
+    namespace bl = wm::logic::backlight;
+    auto r = wm::logic::storage::default_storage().radio;
+    r.backlight_brightness = 7;
+
+    check(bl::timeout_ms(0) == 0 && bl::timeout_ms(1) == 15'000 && bl::timeout_ms(2) == 30'000 &&
+              bl::timeout_ms(3) == 60'000,
+          "backlight timeouts must match Rust");
+
+    bl::Dimmer d{};
+    r.backlight_timeout = 1;
+    check(d.step(true, r, 10) == std::optional<uint8_t>{70} && d.remaining_ms == 15'000,
+          "activity must restore the brightness and restart the timeout");
+    bool off = false;
+    for (int i = 0; i < 149; ++i) {
+        off = off || d.step(false, r, 100).has_value();
+    }
+    check(!off && d.remaining_ms == 100, "the light must stay on until the timeout runs out");
+    check(d.step(false, r, 100) == std::optional<uint8_t>{0}, "expiry must switch the light off");
+    check(d.step(true, r, 100) == std::optional<uint8_t>{70}, "activity must switch it on again");
+
+    r.backlight_timeout = 0;
+    d.remaining_ms = 0;
+    check(!d.step(false, r, 100).has_value(), "ALWAYS ON must never dim");
+    r.backlight_timeout = 2;
+    check(!d.step(false, r, 0).has_value(), "a zero delta must not dim");
+    check(bl::Dimmer{}.remaining_ms == 30'000, "boot timeout must be 30 s as in Rust");
+}
+
 void wiring_cues_test() {
     namespace mn = wm::logic::menu;
     using wm::logic::buzzer::Cue;
@@ -4545,6 +4575,7 @@ int main() {
     crsf_diag_test();
     buzzer_test();
     wiring_cues_test();
+    backlight_test();
     usb_logic_test();
     trim_controller_test();
     trim_autosave_test();
