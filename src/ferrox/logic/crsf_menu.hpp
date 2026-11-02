@@ -445,7 +445,6 @@ struct Loader {
                 }
             }
         }
-        chunks.reset();
         retry = 0;
         completed = param_id.value;
         if (parsed) {
@@ -458,6 +457,7 @@ struct Loader {
                 entries[param_id.value] = entry;
             }
         }
+        chunks.reset();
         if (state == State::Loading && param_id.value == loading_id) {
             return advance(now, param_id.value);
         }

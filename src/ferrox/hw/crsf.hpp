@@ -24,6 +24,8 @@ inline constinit logic::crsf::Telemetry g_telemetry{};
 inline constinit logic::crsf::menu::Loader g_menu{};
 inline constinit logic::crsf::menu::Command g_command{};
 inline constinit logic::crsf::config::DeviceList g_devices{};
+// Ring position where the RX line last went idle and that the reader has not reached yet.
+inline constinit std::optional<std::size_t> g_rx_idle_at{};
 
 inline constexpr uint32_t kTxPeriodMs = 10;
 inline constexpr uint32_t kTelemetryTimeoutMs = 1000;
@@ -48,6 +50,7 @@ inline void set_enabled(const bool enabled, const uint8_t baud_idx, const uart::
         g_telemetry = logic::crsf::Telemetry{};
         g_framer.reset();
         g_framer.last_byte_ms = 0;
+        g_rx_idle_at.reset();
         g_menu.stop();
         g_command = logic::crsf::menu::Command{};
     }
@@ -133,13 +136,25 @@ inline void poll_telemetry(const uint32_t now_ms) {
         return;
     }
 
-    if (uart::take_rx_idle()) {
-        g_framer.reset();
+    // The IDLE interrupt marks the end of a burst at a ring position. The main loop often runs while a frame is
+    // still arriving, so bytes before that position may be unread: the framer is only reset once the reader has
+    // caught up with it (a truncated frame), never before draining.
+    if (const auto idle_at = uart::take_rx_idle()) {
+        g_rx_idle_at = idle_at;
     }
-    g_framer.check_stall(now_ms);
 
     std::size_t count = 0;
-    while (const auto byte = uart::read_byte()) {
+    bool drained = false;
+    while (true) {
+        if (g_rx_idle_at && uart::rx_tail() == *g_rx_idle_at) {
+            g_framer.reset();
+            g_rx_idle_at.reset();
+        }
+        const auto byte = uart::read_byte();
+        if (!byte) {
+            drained = true;
+            break;
+        }
         const auto frame = g_framer.push(*byte, now_ms);
         if (!frame.empty()) {
             const uint8_t type = frame[2];
@@ -159,6 +174,11 @@ inline void poll_telemetry(const uint32_t now_ms) {
         if (++count >= kMaxRxBytesPerPoll) {
             break;
         }
+    }
+    // Stall check only after draining: last_byte_ms is the read time, so bytes waiting in the ring while the
+    // loop was busy (LCD flush, EEPROM write) must not count as a stall.
+    if (drained) {
+        g_framer.check_stall(now_ms);
     }
 
     if (g_telemetry.connected &&
