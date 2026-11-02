@@ -789,7 +789,7 @@ bool load_storage(RadioStorage& s) {
         s = default_storage();
         save_slot<Dev>(kRadioSlotA, s.radio);
         save_slot<Dev>(kRadioSlotB, s.radio);
-        save_slot<Dev>(model_slot_addr(0).value(), s.active_model);
+        save_slot<Dev>(*model_slot_addr(0), s.active_model);
         sanitize(s);
         return false;
     }

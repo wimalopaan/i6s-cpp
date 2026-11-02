@@ -85,6 +85,11 @@ constexpr std::string_view view_of(const menu::Text<N>& t) {
     return {t.data.data(), t.len};
 }
 
+/// First `n` characters of `sv` (never throws, unlike substr).
+constexpr std::string_view head(const std::string_view sv, const std::size_t n) {
+    return {sv.data(), std::min(n, sv.size())};
+}
+
 /// Option `index` of a Select entry whose options are separated by ';'.
 constexpr std::string_view select_option(const menu::Entry& e, const int32_t index) {
     const std::string_view all = view_of(e.text);
@@ -257,7 +262,7 @@ constexpr void push_text(format::Text<24>& t, const std::string_view sv) {
 constexpr void draw_row(display::Framebuffer& fb, const std::size_t slot, const bool selected, const std::string_view name,
                         const std::string_view value) {
     const std::size_t max_name = value.empty() ? 19 : std::max<std::size_t>(20 - std::min<std::size_t>(value.size(), 15) - 1, 5);
-    widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, name.substr(0, max_name), value, {0});
+    widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, head(name, max_name), value, {0});
 }
 
 constexpr format::Text<24> select_text(const menu::Entry& e, const int32_t index, const bool edit) {
@@ -265,7 +270,7 @@ constexpr format::Text<24> select_text(const menu::Entry& e, const int32_t index
     // Long options lose their trailing "(...)" detail first.
     const std::size_t paren = opt.find('(');
     if (paren != std::string_view::npos && paren > 0 && (edit || view_of(e.name).size() + opt.size() > 18)) {
-        opt = opt.substr(0, paren);
+        opt = head(opt, paren);
     }
     while (!opt.empty() && opt.back() == ' ') {
         opt.remove_suffix(1);
@@ -274,7 +279,7 @@ constexpr format::Text<24> select_text(const menu::Entry& e, const int32_t index
     if (edit) {
         push_text(t, "< ");
     }
-    push_text(t, opt.substr(0, edit ? 18 : 22));
+    push_text(t, head(opt, edit ? 18 : 22));
     if (edit) {
         push_text(t, " >");
     }
@@ -289,7 +294,7 @@ constexpr format::Text<24> number_text(const menu::Entry& e, const int32_t v, co
     push_int(t, v);
     if (e.text.len > 0) {
         t.push(' ');
-        push_text(t, view_of(e.text).substr(0, 6));
+        push_text(t, head(view_of(e.text), 6));
     }
     if (edit) {
         push_text(t, " >");
@@ -304,7 +309,7 @@ constexpr void draw_param(display::Framebuffer& fb, const State& s, const menu::
     const std::string_view name = view_of(e.name);
     switch (e.type) {
         case menu::Type::Folder:
-            draw_row(fb, slot, selected, name.substr(0, 18), ">");
+            draw_row(fb, slot, selected, head(name, 18), ">");
             break;
         case menu::Type::Select: {
             const auto t = select_text(e, edit ? s.edit_val : e.value, edit);
@@ -328,7 +333,7 @@ constexpr void draw_param(display::Framebuffer& fb, const State& s, const menu::
             }
             format::Text<24> t;
             t.push('[');
-            push_text(t, text.substr(0, 18));
+            push_text(t, head(text, 18));
             t.push(']');
             draw_row(fb, slot, selected, t.view(), {});
             break;
@@ -342,8 +347,8 @@ constexpr void draw_param(display::Framebuffer& fb, const State& s, const menu::
                 const std::size_t len = std::min<std::size_t>(info.size(), 15);
                 const int val_x = 124 - static_cast<int>(len) * 4;
                 const std::size_t max_name = static_cast<std::size_t>(std::max((val_x - 6) / 6, 4));
-                draw_row(fb, slot, selected, name.substr(0, max_name), {});
-                fb.draw_str_4x6({val_x, 14 + static_cast<int>(slot) * 9 + 2}, info.substr(0, len), selected);
+                draw_row(fb, slot, selected, head(name, max_name), {});
+                fb.draw_str_4x6({val_x, 14 + static_cast<int>(slot) * 9 + 2}, head(info, len), selected);
             } else {
                 draw_row(fb, slot, selected, name, info);
             }
@@ -361,7 +366,7 @@ constexpr void draw_confirm(display::Framebuffer& fb, const menu::Loader& l, con
     format::Text<24> q;
     push_text(q, "Run: [");
     if (id < menu::kMaxParams && l.entries[id]) {
-        push_text(q, view_of(l.entries[id]->name).substr(0, 8));
+        push_text(q, head(view_of(l.entries[id]->name), 8));
     }
     push_text(q, "]?");
     const int x = 10 + std::max((108 - static_cast<int>(q.len) * 6) / 2, 0);
@@ -389,7 +394,7 @@ constexpr void render(display::Framebuffer& fb, const State& s, const menu::Load
     }
 
     if (s.folder > 0 && s.folder < menu::kMaxParams && l->entries[s.folder]) {
-        widgets::draw_header(fb, view_of(l->entries[s.folder]->name).substr(0, 20));
+        widgets::draw_header(fb, head(view_of(l->entries[s.folder]->name), 20));
     } else {
         widgets::draw_header(fb, "CRSF CONFIG");
     }
