@@ -34,7 +34,7 @@ Firmware (clang + arm-none-eabi-gcc for Cortex-M0, MinSizeRel = -Oz):
     cmake -S . -B build-fw -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi-clang.cmake -DCMAKE_BUILD_TYPE=MinSizeRel
     cmake --build build-fw --target i6s_fw
 
-`USE_USB` (default ON) sets `FERROX_USE_USB`, so USB code can be left out to save flash: `-DUSE_USB=OFF`.
+`USE_USB` (default ON) sets `WM_USE_USB`, so USB code can be left out to save flash: `-DUSE_USB=OFF`.
 
 Host tests (clang with C++26 support):
 
@@ -44,11 +44,11 @@ Host tests (clang with C++26 support):
 
 ## Layout
 
-- `src/ferrox/arch/`: CMSIS include, critical section
-- `src/ferrox/chip/`: clock, reset, DFU, watchdog
-- `src/ferrox/hw/`: drivers (GPIO, ADC, UART, LCD, RF, buzzer, trainer, EEPROM)
-- `src/ferrox/time/`: SysTick millis
-- `src/ferrox/logic/`, `src/ferrox/util/`: pure logic (host-testable)
+- `src/wm/arch/`: CMSIS include, critical section
+- `src/wm/chip/`: clock, reset, DFU, watchdog
+- `src/wm/hw/`: drivers (GPIO, ADC, UART, LCD, RF, buzzer, trainer, EEPROM)
+- `src/wm/time/`: SysTick millis
+- `src/wm/logic/`, `src/wm/util/`: pure logic (host-testable)
 - `tests/host/`: host logic tests
 - `third_party/cmsis/`: ARM CMSIS_5 and ST device files (Apache-2.0)
 

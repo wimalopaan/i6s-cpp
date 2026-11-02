@@ -4,41 +4,41 @@
 #include <span>
 #include <string_view>
 
-#include "ferrox/chip/mcu.hpp"
-#include "ferrox/chip/watchdog.hpp"
-#include "ferrox/hw/adc.hpp"
-#include "ferrox/hw/buzzer.hpp"
-#include "ferrox/hw/crsf.hpp"
-#include "ferrox/hw/eeprom.hpp"
-#include "ferrox/hw/gpio.hpp"
-#include "ferrox/hw/keys.hpp"
-#include "ferrox/hw/rf.hpp"
-#include "ferrox/hw/st7567.hpp"
-#include "ferrox/hw/trainer.hpp"
-#include "ferrox/logic/dashboard.hpp"
-#include "ferrox/logic/auto_select.hpp"
-#include "ferrox/logic/bind.hpp"
-#include "ferrox/logic/brr.hpp"
-#include "ferrox/logic/buzzer.hpp"
-#include "ferrox/logic/buzzer_inputs.hpp"
-#include "ferrox/logic/calib.hpp"
-#include "ferrox/logic/flight.hpp"
-#include "ferrox/logic/framebuffer.hpp"
-#include "ferrox/logic/input.hpp"
-#include "ferrox/logic/menu.hpp"
-#include "ferrox/logic/mixer.hpp"
-#include "ferrox/logic/model_copy.hpp"
-#include "ferrox/logic/power.hpp"
-#include "ferrox/logic/protocol.hpp"
-#include "ferrox/logic/safety.hpp"
-#include "ferrox/logic/storage.hpp"
-#include "ferrox/logic/sysinfo.hpp"
-#include "ferrox/logic/flight_timer.hpp"
-#include "ferrox/logic/trainer.hpp"
-#include "ferrox/logic/trim.hpp"
-#include "ferrox/time/systick.hpp"
-#if FERROX_USE_USB
-#include "ferrox/hw/usb.hpp"
+#include "wm/chip/mcu.hpp"
+#include "wm/chip/watchdog.hpp"
+#include "wm/hw/adc.hpp"
+#include "wm/hw/buzzer.hpp"
+#include "wm/hw/crsf.hpp"
+#include "wm/hw/eeprom.hpp"
+#include "wm/hw/gpio.hpp"
+#include "wm/hw/keys.hpp"
+#include "wm/hw/rf.hpp"
+#include "wm/hw/st7567.hpp"
+#include "wm/hw/trainer.hpp"
+#include "wm/logic/dashboard.hpp"
+#include "wm/logic/auto_select.hpp"
+#include "wm/logic/bind.hpp"
+#include "wm/logic/brr.hpp"
+#include "wm/logic/buzzer.hpp"
+#include "wm/logic/buzzer_inputs.hpp"
+#include "wm/logic/calib.hpp"
+#include "wm/logic/flight.hpp"
+#include "wm/logic/framebuffer.hpp"
+#include "wm/logic/input.hpp"
+#include "wm/logic/menu.hpp"
+#include "wm/logic/mixer.hpp"
+#include "wm/logic/model_copy.hpp"
+#include "wm/logic/power.hpp"
+#include "wm/logic/protocol.hpp"
+#include "wm/logic/safety.hpp"
+#include "wm/logic/storage.hpp"
+#include "wm/logic/sysinfo.hpp"
+#include "wm/logic/flight_timer.hpp"
+#include "wm/logic/trainer.hpp"
+#include "wm/logic/trim.hpp"
+#include "wm/time/systick.hpp"
+#if WM_USE_USB
+#include "wm/hw/usb.hpp"
 #endif
 
 namespace {
@@ -46,76 +46,76 @@ namespace {
 // Latest measurements, updated by the main loop (read by later UI/RF code).
 volatile uint16_t g_battery_mv = 0;
 volatile uint16_t g_keys = 0;
-ferrox::logic::auto_select::Tracker g_auto_select{};
+wm::logic::auto_select::Tracker g_auto_select{};
 
 // Radio and active model settings loaded from the external EEPROM.
-ferrox::logic::storage::RadioStorage g_storage{};
+wm::logic::storage::RadioStorage g_storage{};
 
 // Calibration and filter state derived from g_storage.radio.
-ferrox::logic::input::Calibration g_calib{};
+wm::logic::input::Calibration g_calib{};
 
 // Stick and pot endpoint capture, started from the main menu.
-ferrox::logic::calib::Wizard g_calib_wizard{};
+wm::logic::calib::Wizard g_calib_wizard{};
 
 // Display content is rendered into this buffer and flushed to the ST7567.
-ferrox::logic::display::Framebuffer g_fb{};
+wm::logic::display::Framebuffer g_fb{};
 
 // RF radio init result, and whether the A7105 is currently silenced (starts silenced, as in hw::rf).
 bool g_rf_ok = false;
-ferrox::logic::dashboard::SessionStats g_rf_stats{};
+wm::logic::dashboard::SessionStats g_rf_stats{};
 bool g_rf_silenced = true;
-#if FERROX_USE_USB
+#if WM_USE_USB
 // USB sim mode as last applied to the RF link, CRSF UART and PPM out.
 bool g_sim_mode = false;
 #endif
 // Protocol the CRSF UART and A7105 mute were last applied for. Lets the loop follow edits to the active model.
-ferrox::logic::protocol::Protocol g_link_protocol{};
+wm::logic::protocol::Protocol g_link_protocol{};
 // Trainer safety handover between the instructor sticks and the student frame.
-ferrox::logic::trainer::Handover g_handover{};
+wm::logic::trainer::Handover g_handover{};
 
-ferrox::logic::input::BoardSwitches read_board_switches() {
-    using ferrox::hw::Pin;
-    using ferrox::hw::Port;
+wm::logic::input::BoardSwitches read_board_switches() {
+    using wm::hw::Pin;
+    using wm::hw::Port;
     return {.se_high = Pin<Port::C, 12>::read(), .sf_high = Pin<Port::C, 15>::read()};
 }
 
-ferrox::logic::input::InputState sample_inputs() {
-    return ferrox::logic::input::process(ferrox::hw::adc::read_raw(), read_board_switches(), g_calib);
+wm::logic::input::InputState sample_inputs() {
+    return wm::logic::input::process(wm::hw::adc::read_raw(), read_board_switches(), g_calib);
 }
 
 // Holding OK this long on the dashboard opens the menu.
 constexpr uint32_t kMenuHoldMs = 1200;
 
 // Model names shown in the model list, filled from EEPROM when the list is opened.
-ferrox::logic::menu::ModelNames g_model_names{};
+wm::logic::menu::ModelNames g_model_names{};
 
 // EEPROM probe and boot-read result for diagnostics page 4; write_err is refreshed at render time.
-ferrox::logic::storage::EepromStatus g_eeprom{};
+wm::logic::storage::EepromStatus g_eeprom{};
 
 // Version and git hash for the system info screen, passed in by CMake.
-constexpr ferrox::logic::sysinfo::Build kBuild{{FERROX_FW_VERSION}, {FERROX_GIT_HASH}};
+constexpr wm::logic::sysinfo::Build kBuild{{WM_FW_VERSION}, {WM_GIT_HASH}};
 
 // Buzzer playback logic and the PWM output that follows it.
-ferrox::logic::buzzer::Player g_buzzer{};
-ferrox::hw::buzzer::Output g_buzzer_out{};
+wm::logic::buzzer::Player g_buzzer{};
+wm::hw::buzzer::Output g_buzzer_out{};
 
 // Battery and RSSI alarm cadences. Only stepped while the dashboard is shown, as in Rust.
-ferrox::logic::buzzer::BatteryWarnTimer g_battery_warn{};
-ferrox::logic::buzzer::RssiWarnTimer g_rssi_warn{};
+wm::logic::buzzer::BatteryWarnTimer g_battery_warn{};
+wm::logic::buzzer::RssiWarnTimer g_rssi_warn{};
 
 // Trim key state machine. Values come from the active model; throttle_enabled from the radio setup.
-ferrox::logic::trim::Controller g_trims{};
+wm::logic::trim::Controller g_trims{};
 // Trim auto-save trigger; decides when g_trims is written to the active model's EEPROM slot.
-ferrox::logic::trim::AutoSave g_trim_save{};
+wm::logic::trim::AutoSave g_trim_save{};
 // Rising edge of an InstantTrim aux switch; tracked even while a menu is open, as in Rust.
-ferrox::logic::trim::InstantEdge g_instant_edge{};
+wm::logic::trim::InstantEdge g_instant_edge{};
 
 // Flight timer state machine; runs on the active model and resets when the model changes.
-ferrox::logic::flight_timer::State g_flight_timer{};
+wm::logic::flight_timer::State g_flight_timer{};
 // BIND key hold timer; starts and stops AFHDS 2A binding on the dashboard.
-ferrox::logic::bind::Controller g_bind{};
+wm::logic::bind::Controller g_bind{};
 
-ferrox::logic::flight_timer::Config timer_config(const ferrox::logic::storage::ModelConfig& m) {
+wm::logic::flight_timer::Config timer_config(const wm::logic::storage::ModelConfig& m) {
     return {.limit = {m.timer_secs}, .source = {m.timer_source}, .arm = {m.arm_switch}};
 }
 
@@ -131,27 +131,27 @@ void store_trims_in_model() {
 }
 
 // Plays a cue in the stored tone style. Cue::None is a no-op.
-void play_buzzer_cue(const ferrox::logic::buzzer::Cue cue) {
-    g_buzzer.play_cue(cue, ferrox::logic::buzzer::tone_style_from_u8(g_storage.radio.tone_style));
+void play_buzzer_cue(const wm::logic::buzzer::Cue cue) {
+    g_buzzer.play_cue(cue, wm::logic::buzzer::tone_style_from_u8(g_storage.radio.tone_style));
 }
 
 // Advances the buzzer and its output during the blocking boot screens, where the main loop does not run.
 void pump_buzzer(uint32_t& last_ms) {
-    const uint32_t now = ferrox::time::millis();
-    g_buzzer.tick(ferrox::logic::buzzer::Millis{static_cast<uint16_t>(std::min<uint32_t>(now - last_ms, 20))});
+    const uint32_t now = wm::time::millis();
+    g_buzzer.tick(wm::logic::buzzer::Millis{static_cast<uint16_t>(std::min<uint32_t>(now - last_ms, 20))});
     last_ms = now;
     g_buzzer_out.sync(g_buzzer.output());
 }
 
 // TX ID is the XOR of the three 32-bit words of the MCU UID, as in the Rust firmware.
-ferrox::logic::afhds2a::TxId tx_id_from_uid() {
-    using namespace ferrox;
+wm::logic::afhds2a::TxId tx_id_from_uid() {
+    using namespace wm;
     const auto uid = chip::read_uid(chip::kProfile);
     auto word = [&uid](const std::size_t i) {
         return static_cast<uint32_t>(uid[i]) | (static_cast<uint32_t>(uid[i + 1]) << 8) |
                (static_cast<uint32_t>(uid[i + 2]) << 16) | (static_cast<uint32_t>(uid[i + 3]) << 24);
     };
-    return ferrox::logic::afhds2a::TxId{word(0) ^ word(4) ^ word(8)};
+    return wm::logic::afhds2a::TxId{word(0) ^ word(4) ^ word(8)};
 }
 
 // Silences the A7105 for CRSF models. Only changes state when the protocol changes.
@@ -159,14 +159,14 @@ void set_rf_silenced(const bool silenced) {
     if (!g_rf_ok || silenced == g_rf_silenced) {
         return;
     }
-    ferrox::hw::rf::set_silenced(silenced);
+    wm::hw::rf::set_silenced(silenced);
     g_rf_silenced = silenced;
 }
 
 // Rust `is_sim_mode`: the joystick is connected. Always false without USB.
 bool usb_sim_active() {
-#if FERROX_USE_USB
-    return ferrox::hw::usb::is_sim_mode();
+#if WM_USE_USB
+    return wm::hw::usb::is_sim_mode();
 #else
     return false;
 #endif
@@ -174,7 +174,7 @@ bool usb_sim_active() {
 
 // Sim state last applied to the RF link. Constant false without USB, so the no-USB build keeps its code.
 bool sim_applied() {
-#if FERROX_USE_USB
+#if WM_USE_USB
     return g_sim_mode;
 #else
     return false;
@@ -182,7 +182,7 @@ bool sim_applied() {
 }
 
 void set_sim_applied(const bool sim) {
-#if FERROX_USE_USB
+#if WM_USE_USB
     g_sim_mode = sim;
 #else
     (void)sim;
@@ -192,7 +192,7 @@ void set_sim_applied(const bool sim) {
 // Applies power, RX output settings and the silence state of the active model. Keeps the RX ID.
 // Sim mode also silences the A7105 (Rust `rf::set_silenced(sim_mode)`).
 void apply_rf_link() {
-    using namespace ferrox;
+    using namespace wm;
     if (!g_rf_ok) {
         return;
     }
@@ -208,14 +208,14 @@ void apply_rf_model() {
     if (!g_rf_ok) {
         return;
     }
-    ferrox::hw::rf::set_rx_id(ferrox::logic::afhds2a::RxId{g_storage.active_model.rx_id});
+    wm::hw::rf::set_rx_id(wm::logic::afhds2a::RxId{g_storage.active_model.rx_id});
     apply_rf_link();
 }
 
 // Applies the RF protocol of the active model and the USB sim state: CRSF UART on or off, and the A7105 mute.
 // Idempotent. Sim mode keeps the CRSF UART off (Rust `crsf::set_enabled(!sim_mode)`).
 void apply_protocol_link() {
-    using namespace ferrox;
+    using namespace wm;
     const auto& model = g_storage.active_model;
     const auto protocol = logic::protocol::from_raw(model.rf_protocol);
     g_link_protocol = protocol;
@@ -232,7 +232,7 @@ void apply_protocol_link() {
 }
 
 void refresh_model_names() {
-    using namespace ferrox;
+    using namespace wm;
     for (std::size_t i = 0; i < logic::storage::kNumModels; ++i) {
         g_model_names[i].fill(' ');
         logic::storage::ModelConfig model{};
@@ -245,22 +245,22 @@ void refresh_model_names() {
 }
 
 // Applies the stored LCD backlight level and contrast.
-void apply_lcd_settings(const ferrox::logic::storage::RadioConfig& r) {
-    ferrox::hw::lcd::set_backlight_level(static_cast<uint8_t>(r.backlight_brightness * 10));
-    ferrox::hw::lcd::set_contrast(r.lcd_contrast);
+void apply_lcd_settings(const wm::logic::storage::RadioConfig& r) {
+    wm::hw::lcd::set_backlight_level(static_cast<uint8_t>(r.backlight_brightness * 10));
+    wm::hw::lcd::set_contrast(r.lcd_contrast);
 }
 
 // Starts or stops the trainer PPM in and out from the stored radio config.
-void apply_trainer_config(const ferrox::logic::storage::RadioConfig& r) {
-    using namespace ferrox::logic::menu;
-    ferrox::hw::trainer::set_enabled((r.trainer_config & kTrainerPpmIn) != 0,
+void apply_trainer_config(const wm::logic::storage::RadioConfig& r) {
+    using namespace wm::logic::menu;
+    wm::hw::trainer::set_enabled((r.trainer_config & kTrainerPpmIn) != 0,
                                      (r.trainer_config & kTrainerPpmOut) != 0);
 }
 
 // Stores the current model, then loads the model at `index` as the active one.
 void switch_model(const uint8_t index) {
-    using namespace ferrox::logic::storage;
-    using Dev = ferrox::hw::I2c2Eeprom;
+    using namespace wm::logic::storage;
+    using Dev = wm::hw::I2c2Eeprom;
     store_trims_in_model();
     save_active_model<Dev>(g_storage);
     g_storage.radio.active_model = index;
@@ -270,8 +270,8 @@ void switch_model(const uint8_t index) {
 }
 
 // Blocks until sticks and switches are safe (or the cancel key is pressed), sending failsafe pulses meanwhile.
-void run_preflight(const ferrox::logic::storage::ModelConfig& model) {
-    using namespace ferrox;
+void run_preflight(const wm::logic::storage::ModelConfig& model) {
+    using namespace wm;
     using namespace logic;
     std::array<safety::ChannelCalibration, 4> cals{};
     for (std::size_t i = 0; i < cals.size(); ++i) {
@@ -299,8 +299,8 @@ void run_preflight(const ferrox::logic::storage::ModelConfig& model) {
         warning.unsafe();
 
         hw::crsf::update_channels(time::millis(), safety::kSafeIdleChannels,
-                                  ferrox::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
-                                  ferrox::logic::crsf::ArmedState{false});
+                                  wm::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
+                                  wm::logic::crsf::ArmedState{false});
         hw::crsf::poll_telemetry(time::millis());
         if (preflight.step(buzzer::Millis{time::millis()})) {
             play_buzzer_cue(buzzer::Cue::WarnPreflight);
@@ -313,7 +313,7 @@ void run_preflight(const ferrox::logic::storage::ModelConfig& model) {
 }  // namespace
 
 int main() {
-    using namespace ferrox;
+    using namespace wm;
 
     chip::watchdog::feed();
 
@@ -369,7 +369,7 @@ int main() {
 
     hw::lcd::init();
     apply_lcd_settings(g_storage.radio);
-#if FERROX_USE_USB
+#if WM_USE_USB
     if (const auto usb_mode = logic::usb::mode_from_stored(g_storage.radio.usb_mode);
         usb_mode != logic::usb::UsbMode::Off) {
         hw::usb::start(usb_mode);
@@ -507,7 +507,7 @@ int main() {
                     apply_trainer_config(g_storage.radio);
                     hw::uart::set_power_polarity(g_storage.radio.ext_module_pwr == 0);
                     g_trims.throttle_enabled = g_storage.radio.throttle_trim != 0;
-#if FERROX_USE_USB
+#if WM_USE_USB
                     hw::usb::set_mode(logic::usb::mode_from_stored(g_storage.radio.usb_mode));
 #endif
                     break;
@@ -618,13 +618,13 @@ int main() {
             hw::trainer::publish_out(channels);
         }
         const bool crsf = model.rf_protocol == 1;
-#if FERROX_USE_USB
+#if WM_USE_USB
         hw::usb::poll(logic::usb::Millis{now}, channels, input.switches, input.battery_mv);
 #endif
         if (crsf) {
             if (!sim) {
-                hw::crsf::update_channels(now, channels, ferrox::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
-                                          ferrox::logic::crsf::ArmedState{armed});
+                hw::crsf::update_channels(now, channels, wm::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
+                                          wm::logic::crsf::ArmedState{armed});
             }
         } else if (afhds && !sim) {
             hw::rf::publish_channels(channels);

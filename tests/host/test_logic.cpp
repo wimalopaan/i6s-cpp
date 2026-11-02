@@ -7,39 +7,39 @@
 #include <string_view>
 #include <vector>
 
-#include "ferrox/logic/a7105.hpp"
-#include "ferrox/logic/usb.hpp"
-#include "ferrox/logic/bind.hpp"
-#include "ferrox/logic/afhds2a.hpp"
-#include "ferrox/logic/afhds2a_radio.hpp"
-#include "ferrox/logic/buzzer_inputs.hpp"
-#include "ferrox/logic/brr.hpp"
-#include "ferrox/logic/calib.hpp"
-#include "ferrox/logic/crsf.hpp"
-#include "ferrox/logic/crsf_menu.hpp"
-#include "ferrox/logic/dashboard.hpp"
-#include "ferrox/logic/flight.hpp"
-#include "ferrox/logic/format.hpp"
-#include "ferrox/logic/framebuffer.hpp"
-#include "ferrox/logic/glyphs.hpp"
-#include "ferrox/logic/input.hpp"
-#include "ferrox/logic/labels.hpp"
-#include "ferrox/logic/menu.hpp"
-#include "ferrox/logic/mixer.hpp"
-#include "ferrox/logic/model_copy.hpp"
-#include "ferrox/logic/protocol.hpp"
-#include "ferrox/logic/power.hpp"
-#include "ferrox/logic/safety.hpp"
-#include "ferrox/logic/storage.hpp"
-#include "ferrox/logic/switches.hpp"
-#include "ferrox/logic/telemetry.hpp"
-#include "ferrox/logic/trim.hpp"
-#include "ferrox/logic/trainer.hpp"
-#include "ferrox/logic/vario.hpp"
-#include "ferrox/logic/widgets.hpp"
-#include "ferrox/util/ring.hpp"
+#include "wm/logic/a7105.hpp"
+#include "wm/logic/usb.hpp"
+#include "wm/logic/bind.hpp"
+#include "wm/logic/afhds2a.hpp"
+#include "wm/logic/afhds2a_radio.hpp"
+#include "wm/logic/buzzer_inputs.hpp"
+#include "wm/logic/brr.hpp"
+#include "wm/logic/calib.hpp"
+#include "wm/logic/crsf.hpp"
+#include "wm/logic/crsf_menu.hpp"
+#include "wm/logic/dashboard.hpp"
+#include "wm/logic/flight.hpp"
+#include "wm/logic/format.hpp"
+#include "wm/logic/framebuffer.hpp"
+#include "wm/logic/glyphs.hpp"
+#include "wm/logic/input.hpp"
+#include "wm/logic/labels.hpp"
+#include "wm/logic/menu.hpp"
+#include "wm/logic/mixer.hpp"
+#include "wm/logic/model_copy.hpp"
+#include "wm/logic/protocol.hpp"
+#include "wm/logic/power.hpp"
+#include "wm/logic/safety.hpp"
+#include "wm/logic/storage.hpp"
+#include "wm/logic/switches.hpp"
+#include "wm/logic/telemetry.hpp"
+#include "wm/logic/trim.hpp"
+#include "wm/logic/trainer.hpp"
+#include "wm/logic/vario.hpp"
+#include "wm/logic/widgets.hpp"
+#include "wm/util/ring.hpp"
 
-using namespace ferrox;
+using namespace wm;
 
 namespace test_eeprom {
 
@@ -704,7 +704,7 @@ void safety_test() {
     check(thr_ch[2] > 1500 && thr_ch[2] <= 2012, "throttle stick up raises throttle");
 }
 
-int lit_pixels(const ferrox::logic::display::Framebuffer& fb) {
+int lit_pixels(const wm::logic::display::Framebuffer& fb) {
     int n = 0;
     for (uint8_t b : fb.data()) {
         for (int i = 0; i < 8; ++i) {
@@ -715,8 +715,8 @@ int lit_pixels(const ferrox::logic::display::Framebuffer& fb) {
 }
 
 void display_test() {
-    using ferrox::logic::display::Framebuffer;
-    using namespace ferrox::logic;
+    using wm::logic::display::Framebuffer;
+    using namespace wm::logic;
 
     Framebuffer fb;
     fb.set_pixel({5, 9}, true);
@@ -1218,7 +1218,7 @@ void menu_test() {
 }
 
 void calib_test() {
-    using namespace ferrox::logic;
+    using namespace wm::logic;
     using calib::Input;
     using calib::Wizard;
     using calib::Step;
@@ -2592,8 +2592,8 @@ void telemetry_test() {
 }
 
 void buzzer_test() {
-    using namespace ferrox::logic;
-    using namespace ferrox::logic::buzzer;
+    using namespace wm::logic;
+    using namespace wm::logic::buzzer;
 
     static_assert(pwm_timing(FreqHz{100}) == PwmTiming{9999, 5000});
     static_assert(trim_note(TrimStep{25}).freq == FreqHz{2500});
@@ -2828,7 +2828,7 @@ void buzzer_test() {
     calib::update(cw, calib::Input{calib::kKeyCancel, calib::kKeyCancel, center, 10}, radio);
     check(cw.cue == Cue::Click, "buzzer: cancel in limits clicks");
 
-    using namespace ferrox::logic::buzzer_inputs;
+    using namespace wm::logic::buzzer_inputs;
     const input::Raw idle_raw{};
     Switches sw_idle{};
     ActivityTracker act{};
@@ -3322,7 +3322,7 @@ void bind_test() {
     check(logic::bind::update(c, make(kLinked, kBind, kBind, 500)).action == Action::None, "bind: no start at 500 ms");
     check(logic::bind::update(c, make(kLinked, kBind, 0, 499)).action == Action::None, "bind: no start at 999 ms");
     const auto started = logic::bind::update(c, make(kLinked, kBind, 0, 1));
-    check(started.action == Action::Start && started.cue == ferrox::logic::buzzer::Cue::BindHold,
+    check(started.action == Action::Start && started.cue == wm::logic::buzzer::Cue::BindHold,
           "bind: starts at 1000 ms hold with the bind hold chirp");
     check(logic::bind::update(c, make(kLinked, kBind, 0, 300)).action == Action::None, "bind: start not repeated");
     logic::bind::update(c, make(kLinked, 0, 0, 10));
@@ -3866,7 +3866,7 @@ void vario_setup_test() {
 }
 
 void trainer_test() {
-    namespace tr = ferrox::logic::trainer;
+    namespace tr = wm::logic::trainer;
     using tr::PulseUs;
 
     constexpr uint32_t kTotal = [] {
@@ -4155,12 +4155,12 @@ void telem_slots_test() {
 }
 
 void wiring_cues_test() {
-    namespace mn = ferrox::logic::menu;
-    using ferrox::logic::buzzer::Cue;
-    using ferrox::logic::buzzer::pattern_for;
-    using ferrox::logic::buzzer::PreflightWarning;
-    using ferrox::logic::buzzer::Repeats;
-    using ferrox::logic::buzzer::ToneStyle;
+    namespace mn = wm::logic::menu;
+    using wm::logic::buzzer::Cue;
+    using wm::logic::buzzer::pattern_for;
+    using wm::logic::buzzer::PreflightWarning;
+    using wm::logic::buzzer::Repeats;
+    using wm::logic::buzzer::ToneStyle;
 
     const auto simple_bind = pattern_for(Cue::BindHold, ToneStyle::Simple);
     check(simple_bind.notes.size() == 1 && simple_bind.notes[0].freq.value == 2400 &&
@@ -4184,7 +4184,7 @@ void wiring_cues_test() {
     warning.unsafe();
     check(warning.exit_cue() == Cue::PreflightExit, "wiring: preflight exit chirp after a warning");
 
-    ferrox::logic::buzzer_inputs::PotCenterTracker<6> pots{};
+    wm::logic::buzzer_inputs::PotCenterTracker<6> pots{};
     const std::array<int16_t, 2> far{{100, -100}};
     const std::array<int16_t, 2> near{{0, 10}};
     check(!pots.step(far), "wiring: pots starting away from centre do not click");
@@ -4192,7 +4192,7 @@ void wiring_cues_test() {
     check(!pots.step(near), "wiring: no repeat click while inside the deadband");
     check(!pots.step(std::array<int16_t, 2>{{30, 10}}), "wiring: moving out of the deadband does not click");
 
-    auto st = ferrox::logic::storage::default_storage();
+    auto st = wm::logic::storage::default_storage();
     mn::State menu{};
     menu.screen = mn::Screen::Main;
     mn::update(menu, mn::Input{mn::kKeyDown, mn::kKeyDown, 0}, st);
@@ -4202,7 +4202,7 @@ void wiring_cues_test() {
 }
 
 void usb_logic_test() {
-    namespace u = ferrox::logic::usb;
+    namespace u = wm::logic::usb;
     using M = u::UsbMode;
     const auto le16 = [](std::span<const uint8_t> d, const std::size_t i) {
         return static_cast<unsigned>(d[i] | (d[i + 1] << 8));
@@ -4296,9 +4296,9 @@ void usb_logic_test() {
     }
 
     {
-        std::array<uint16_t, ferrox::logic::kNumChannels> chs{};
+        std::array<uint16_t, wm::logic::kNumChannels> chs{};
         chs.fill(1500);
-        ferrox::logic::Switches sw{};
+        wm::logic::Switches sw{};
         auto r = u::build_gamepad_report(chs, sw);
         check(r[0] == 0 && r[1] == 0 && r[2] == 0x00 && r[3] == 0x04 && r[16] == 0x00 && r[17] == 0x04,
               "usb: centred channels give zero buttons and axis 1024");
@@ -4312,10 +4312,10 @@ void usb_logic_test() {
               "usb: axes clamp to 0..2047");
         chs.fill(1500);
         chs[13] = 1800;
-        sw.sa = ferrox::logic::SwitchPos::Down;
-        sw.sb = ferrox::logic::SwitchPos::Mid;
-        sw.se = ferrox::logic::SwitchPos::Down;
-        sw.sh = ferrox::logic::SwitchPos::Down;
+        sw.sa = wm::logic::SwitchPos::Down;
+        sw.sb = wm::logic::SwitchPos::Mid;
+        sw.se = wm::logic::SwitchPos::Down;
+        sw.sh = wm::logic::SwitchPos::Down;
         r = u::build_gamepad_report(chs, sw);
         check(r[0] == (9731 & 0xFF) && r[1] == (9731 >> 8), "usb: switches and CH14 aux map to the expected buttons");
     }
