@@ -19,7 +19,8 @@ inline constexpr uint32_t kPowerPin = 13;
 // PD5: USART2_TX, PA15: USART2_RX.
 inline constexpr uint32_t kTxPin = 5;
 inline constexpr uint32_t kRxPin = 15;
-// DMA1 channel 6 carries USART2 RX (circular ring), channel 7 carries USART2 TX (fixed mapping on STM32F072).
+// DMA1 channel 6 carries USART2 RX (circular ring), channel 7 carries USART2 TX. On STM32F07x this is not the
+// default (channels 5/4): it needs SYSCFG_CFGR1.USART2_DMA_RMP, set in set_uart_enabled().
 inline constexpr std::size_t kRxBufSize = 256;
 inline constexpr std::size_t kTxBufSize = 64;
 static_assert((kRxBufSize & (kRxBufSize - 1)) == 0, "RX ring size must be a power of two");
@@ -109,6 +110,8 @@ inline void set_uart_enabled(const bool enabled, const uint8_t baud_index, const
         USART2->ICR = 0xFFFF'FFFFu;
 
         RCC->AHBENR |= RCC_AHBENR_DMAEN;
+        RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+        SYSCFG->CFGR1 |= SYSCFG_CFGR1_USART2_DMA_RMP;
         DMA1_Channel6->CCR = 0;
         DMA1_Channel6->CPAR = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&USART2->RDR));
         DMA1_Channel6->CMAR = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_rx_buf));
