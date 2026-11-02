@@ -58,6 +58,9 @@ wm::logic::input::Calibration g_calib{};
 // Stick and pot endpoint capture, started from the main menu.
 wm::logic::calib::Wizard g_calib_wizard{};
 
+// Whether the ADC currently scans the four extra AD12-15 channels (Radio Setup "Ext ADC").
+bool g_p7_enabled = false;
+
 // Display content is rendered into this buffer and flushed to the ST7567.
 wm::logic::display::Framebuffer g_fb{};
 
@@ -341,7 +344,8 @@ int main() {
 
     hw::buzzer::init();
 
-    hw::adc::init(g_storage.radio.ext_adc != 0);
+    g_p7_enabled = g_storage.radio.ext_adc != 0;
+    hw::adc::init(g_p7_enabled);
     chip::watchdog::feed();
 
     hw::adc::wait_first_conversion();
@@ -408,7 +412,6 @@ int main() {
         run_preflight(model);
     }
 
-    const auto stick_mode = logic::safety::stick_mode_from(g_storage.radio.stick_mode);
     uint32_t last_draw_ms = 0;
     uint16_t prev_keys = calib_on_boot ? boot_keys : 0;  // the held OK must not step the wizard
     logic::menu::State menu_state{};
@@ -428,6 +431,7 @@ int main() {
         chip::watchdog::feed();
 
         const auto input = sample_inputs();
+        const auto stick_mode = logic::safety::stick_mode_from(g_storage.radio.stick_mode);
         const auto auto_changes = g_auto_select.step({input.switches, input.pots.vr1, input.pots.vr2});
         g_battery_mv = input.battery_mv;
         g_keys = hw::keys::scan_keys();
@@ -505,6 +509,11 @@ int main() {
                     break;
                 case logic::menu::Action::SaveRadioConfig:
                     logic::storage::save_radio_config<hw::I2c2Eeprom>(g_storage);
+                    logic::input::apply_calibration(g_storage.radio, g_calib);
+                    if ((g_storage.radio.ext_adc != 0) != g_p7_enabled) {
+                        g_p7_enabled = g_storage.radio.ext_adc != 0;
+                        hw::adc::set_p7_enabled(g_p7_enabled);
+                    }
                     apply_lcd_settings(g_storage.radio);
                     apply_trainer_config(g_storage.radio);
                     hw::uart::set_power_polarity(g_storage.radio.ext_module_pwr == 0);

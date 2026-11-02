@@ -1846,6 +1846,14 @@ void radio_setup_test() {
     check(thr.action == Action::SaveRadioConfig && st.radio.throttle_trim == 1,
           "radio: throttle trim must cycle and request a save");
 
+    st.radio.gimbal_type = 0;
+    check(mn::radio_value(st.radio, 12).view() == "POT", "radio: gimbal type 0 must read POT");
+    ms.radio.selected = 12;
+    const Event gimbal = tap(mn::kKeyOk);
+    check(gimbal.action == Action::SaveRadioConfig && st.radio.gimbal_type == 1 &&
+              mn::radio_value(st.radio, 12).view() == "HALL",
+          "radio: OK on Gimbals must switch to HALL and request a save");
+
     ms.radio.selected = 4;
     tap(mn::kKeyOk);
     check(st.radio.backlight_brightness == 1, "radio: brightness must wrap from 10 to 1");

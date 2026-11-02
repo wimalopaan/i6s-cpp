@@ -2067,7 +2067,7 @@ constexpr format::Text<12> radio_value(const storage::RadioConfig& r, const std:
             put(kStickModes[r.stick_mode % 4]);
             break;
         }
-        case 12: put(r.gimbal_type != 0 ? "POT" : "HALL"); break;
+        case 12: put(r.gimbal_type == 1 ? "HALL" : "POT"); break;
         case 13: put(">"); break;
         case 14: put((r.trainer_config & kTrainerPpmOut) != 0 ? "ON (PF10)" : "OFF"); break;
         case 15: put((r.trainer_config & kTrainerPpmIn) != 0 ? "ON (SD DN)" : "OFF"); break;
