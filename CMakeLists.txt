@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(FERROX_BUILD_TESTS "Build host-side logic tests" ON)
+option(WM_BUILD_TESTS "Build host-side logic tests" ON)
 option(USE_USB "Include the USB device stack (removing it saves flash)" ON)
 
 if(CMAKE_CROSSCOMPILING)
@@ -15,26 +15,26 @@ if(CMAKE_CROSSCOMPILING)
     execute_process(
         COMMAND git rev-parse --short HEAD
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        OUTPUT_VARIABLE FERROX_GIT_HASH
+        OUTPUT_VARIABLE WM_GIT_HASH
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
-        RESULT_VARIABLE FERROX_GIT_RESULT
+        RESULT_VARIABLE WM_GIT_RESULT
     )
-    if(NOT FERROX_GIT_RESULT EQUAL 0 OR FERROX_GIT_HASH STREQUAL "")
-        set(FERROX_GIT_HASH "unknown")
+    if(NOT WM_GIT_RESULT EQUAL 0 OR WM_GIT_HASH STREQUAL "")
+        set(WM_GIT_HASH "unknown")
     endif()
     if(EXISTS ${CMAKE_SOURCE_DIR}/.git/logs/HEAD)
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/.git/logs/HEAD)
     endif()
 
-    set(FERROX_SOURCES
+    set(WM_SOURCES
         src/main.cpp
         src/isr.cpp
         src/system.cpp
         third_party/cmsis/Startup/startup_stm32f072xb.s
     )
 
-    add_executable(i6s_fw ${FERROX_SOURCES})
+    add_executable(i6s_fw ${WM_SOURCES})
     # The assembler gets no optimisation or NDEBUG flags from the MinSizeRel defaults; clang warns that they are unused.
     set(CMAKE_ASM_FLAGS_MINSIZEREL "")
     # -Oz instead of the CMake default -Os for MinSizeRel: about 14 % smaller.
@@ -48,8 +48,8 @@ if(CMAKE_CROSSCOMPILING)
     # C++-only flags: the assembler step would otherwise warn about them as unused.
     target_compile_definitions(i6s_fw PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:STM32F072xB>
-        "$<$<COMPILE_LANGUAGE:CXX>:FERROX_FW_VERSION=\"${PROJECT_VERSION}\";FERROX_GIT_HASH=\"${FERROX_GIT_HASH}\">"
-        $<$<AND:$<BOOL:${USE_USB}>,$<COMPILE_LANGUAGE:CXX>>:FERROX_USE_USB=1>)
+        "$<$<COMPILE_LANGUAGE:CXX>:WM_FW_VERSION=\"${PROJECT_VERSION}\";WM_GIT_HASH=\"${WM_GIT_HASH}\">"
+        $<$<AND:$<BOOL:${USE_USB}>,$<COMPILE_LANGUAGE:CXX>>:WM_USE_USB=1>)
     target_compile_options(i6s_fw PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
@@ -77,11 +77,11 @@ if(CMAKE_CROSSCOMPILING)
         COMMAND ${CMAKE_SIZE} $<TARGET_FILE:i6s_fw>
         VERBATIM
     )
-elseif(FERROX_BUILD_TESTS)
+elseif(WM_BUILD_TESTS)
     enable_testing()
     add_executable(host_logic_tests tests/host/test_logic.cpp)
     target_include_directories(host_logic_tests PRIVATE src)
-    target_compile_definitions(host_logic_tests PRIVATE $<$<BOOL:${USE_USB}>:FERROX_USE_USB=1>)
+    target_compile_definitions(host_logic_tests PRIVATE $<$<BOOL:${USE_USB}>:WM_USE_USB=1>)
     target_compile_options(host_logic_tests PRIVATE -Wall -Wextra -fno-exceptions -fno-rtti)
     add_test(NAME host_logic_tests COMMAND host_logic_tests)
 endif()
