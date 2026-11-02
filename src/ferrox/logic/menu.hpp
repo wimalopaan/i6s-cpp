@@ -135,6 +135,7 @@ struct Live {
     sysinfo::Build build{};
     const crsf::menu::Loader* crsf_loader{nullptr};
     const crsf::menu::Command* crsf_command{nullptr};
+    const crsf::config::DeviceList* crsf_devices{nullptr};
 };
 
 enum class Action : uint8_t {
@@ -162,6 +163,7 @@ struct Input {
     auto_select::Changes changes{};  // switch and pot movement since the previous tick
     const crsf::menu::Loader* crsf_loader{nullptr};
     const crsf::menu::Command* crsf_command{nullptr};
+    const crsf::config::DeviceList* crsf_devices{nullptr};
 };
 
 struct ListPos {
@@ -632,7 +634,8 @@ constexpr Event update_protocol(State& s, const Nav& n, storage::ModelConfig& m)
 
 // Configure Module screen. The caller performs `s.crsf_req` when the event asks for it.
 constexpr Event update_crsf_setup(State& s, const Nav& n, const Input& in) {
-    const auto r = crsf::config::update(s.crsf, {n.up, n.down, n.ok, n.cancel}, in.crsf_loader, in.crsf_command);
+    const auto r = crsf::config::update(s.crsf, {n.up, n.down, n.ok, n.cancel}, in.crsf_loader, in.crsf_command,
+                                     in.crsf_devices);
     s.nav_tick = r.nav_tick;
     if (r.click) {
         s.cue = buzzer::Cue::Click;
@@ -2307,7 +2310,7 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::RadioSetup: render_radio_setup(fb, s, st.radio); break;
         case Screen::InputSetup: render_input_setup(fb, s, st.radio); break;
         case Screen::ProtocolSetup: render_protocol(fb, s, st.active_model); break;
-        case Screen::CrsfSetup: crsf::config::render(fb, s.crsf, live.crsf_loader, live.crsf_command); break;
+        case Screen::CrsfSetup: crsf::config::render(fb, s.crsf, live.crsf_loader, live.crsf_command, live.crsf_devices); break;
         case Screen::VarioSetup: render_vario(fb, s, st.active_model); break;
         case Screen::TelemSetup: render_telem(fb, s, st.active_model); break;
         case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;

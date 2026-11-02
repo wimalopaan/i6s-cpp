@@ -20,12 +20,117 @@ inline constexpr std::size_t kMaxDepth = 4;
 
 /// What the caller has to do on the CRSF link after an update.
 struct Request {
-    enum class Kind : uint8_t { None, Restart, Write, EnterFolder, StartCommand, ConfirmCommand, CancelCommand };
+    enum class Kind : uint8_t {
+        None,
+        Restart,       // clear the device list and scan again
+        SelectDevice,  // param = index in the device list
+        BackToList,    // drop the loaded device, keep the list
+        Write,
+        EnterFolder,
+        StartCommand,
+        ConfirmCommand,
+        CancelCommand,
+    };
 
     Kind kind{Kind::None};
     uint8_t param{0};
     int32_t value{0};
 };
+
+inline constexpr std::size_t kMaxDevices = 8;
+inline constexpr uint32_t kDeviceTimeoutMs = 3000;
+
+/// A device that answered the 1 Hz ping.
+struct Device {
+    uint8_t address{0};
+    uint8_t param_count{0};
+    uint8_t name_len{0};
+    std::array<char, 16> name{};
+    uint32_t last_seen_ms{0};
+};
+
+/// Devices seen on the bus while no device is loaded.
+struct DeviceList {
+    std::array<Device, kMaxDevices> items{};
+    uint8_t count{0};
+
+    constexpr void clear() { count = 0; }
+
+    constexpr void observe(const uint8_t address, const std::string_view name, const uint8_t param_count,
+                           const uint32_t now) {
+        std::size_t slot = count;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (items[i].address == address) {
+                slot = i;
+                break;
+            }
+        }
+        if (slot == count) {
+            if (count >= kMaxDevices) {
+                return;
+            }
+            ++count;
+        }
+        Device& d = items[slot];
+        d.address = address;
+        d.param_count = param_count;
+        d.name_len = static_cast<uint8_t>(std::min(name.size(), d.name.size()));
+        for (std::size_t i = 0; i < d.name_len; ++i) {
+            d.name[i] = name[i];
+        }
+        d.last_seen_ms = now;
+    }
+
+    /// Drops devices that missed three pings.
+    constexpr void prune(const uint32_t now) {
+        std::size_t kept = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (static_cast<uint32_t>(now - items[i].last_seen_ms) <= kDeviceTimeoutMs) {
+                items[kept++] = items[i];
+            }
+        }
+        count = static_cast<uint8_t>(kept);
+    }
+
+    /// Marks every device as just seen (after returning from a device).
+    constexpr void touch(const uint32_t now) {
+        for (std::size_t i = 0; i < count; ++i) {
+            items[i].last_seen_ms = now;
+        }
+    }
+};
+
+/// Short role tag for standard CRSF addresses, empty otherwise.
+constexpr std::string_view role_tag(const uint8_t addr) {
+    switch (addr) {
+        case 0xEE: return "TX";
+        case 0xEC: return "RX";
+        case 0xC8: return "FC";
+        case 0xCE: return "VTX";
+        case 0x14: return "VRX";
+        case 0x80: return "OSD";
+        case 0xC2: return "GPS";
+        case 0xC0: return "PWR";
+        case 0xC4: return "BOX";
+        case 0x12: return "WIFI";
+        case 0x13: return "WIRX";
+        case 0x10: return "USB";
+        case 0x0E: return "NET";
+        case 0xCC: return "TAG";
+        case 0xEA: return "RC";
+        case 0xEB: return "RPRX";
+        case 0xED: return "RPTX";
+        case 0x90: return "ESC1";
+        case 0x91: return "ESC2";
+        case 0x92: return "ESC3";
+        case 0x93: return "ESC4";
+        case 0x94: return "ESC5";
+        case 0x95: return "ESC6";
+        case 0x96: return "ESC7";
+        case 0x97: return "ESC8";
+        default: return {};
+    }
+}
 
 struct State {
     uint8_t selected{0};
@@ -142,7 +247,8 @@ constexpr void edit_step(State& s, const menu::Entry& e, const Keys& k, Result& 
     }
 }
 
-constexpr Result update(State& s, const Keys& k, const menu::Loader* l, const menu::Command* c) {
+constexpr Result update(State& s, const Keys& k, const menu::Loader* l, const menu::Command* c,
+                        const DeviceList* d = nullptr) {
     Result r;
     const auto cmd = c ? c->kind : menu::Command::Kind::Idle;
     using Kind = menu::Command::Kind;
@@ -164,12 +270,43 @@ constexpr Result update(State& s, const Keys& k, const menu::Loader* l, const me
         return r;
     }
 
-    if (l == nullptr || l->state != menu::Loader::State::Ready) {
-        if (k.ok && (l == nullptr || l->state == menu::Loader::State::Idle)) {
-            r.req.kind = Request::Kind::Restart;
+    if (l == nullptr || l->state == menu::Loader::State::Idle) {
+        const std::size_t n = d ? d->count : 0;
+        if (n == 0) {
+            s.selected = 0;
+            s.scroll = 0;
+            if (k.ok) {
+                r.req.kind = Request::Kind::Restart;
+                r.click = true;
+            } else if (k.cancel) {
+                r.leave = true;
+            }
+            return r;
+        }
+        if (s.selected >= n) {
+            s.selected = static_cast<uint8_t>(n - 1);
+        }
+        if (s.scroll > s.selected || s.scroll + kVisible <= s.selected) {
+            s.scroll = static_cast<uint8_t>(s.selected >= kVisible ? s.selected - kVisible + 1 : 0);
+        }
+        if (k.up != k.down) {
+            step(s, n, k.down);
+            r.nav_tick = true;
+        }
+        if (k.ok) {
+            r.req = {Request::Kind::SelectDevice, s.selected, 0};
+            s = State{};
             r.click = true;
         } else if (k.cancel) {
             r.leave = true;
+        }
+        return r;
+    }
+    if (l->state == menu::Loader::State::Loading) {
+        if (k.cancel) {
+            r.req.kind = Request::Kind::BackToList;
+            s = State{};
+            r.click = true;
         }
         return r;
     }
@@ -229,7 +366,8 @@ constexpr Result update(State& s, const Keys& k, const menu::Loader* l, const me
             s.scroll = 0;
             r.req = {Request::Kind::EnterFolder, s.folder, 0};
         } else {
-            r.leave = true;
+            r.req.kind = Request::Kind::BackToList;
+            s = State{};
         }
     }
     return r;
@@ -375,21 +513,63 @@ constexpr void draw_confirm(display::Framebuffer& fb, const menu::Loader& l, con
     widgets::draw_footer(fb, "[OK] Confirm   [ESC] Cancel");
 }
 
-}  // namespace detail
-
-constexpr void render(display::Framebuffer& fb, const State& s, const menu::Loader* l, const menu::Command* c) {
-    using Kind = menu::Command::Kind;
-    if (l == nullptr || l->state == menu::Loader::State::Idle) {
-        widgets::draw_header(fb, "CRSF CONFIG");
-        fb.draw_str_6x10({4, 19}, "Searching module...", false);
+constexpr void render_devices(display::Framebuffer& fb, const State& s, const DeviceList* d) {
+    widgets::draw_header(fb, "CRSF DEVICES");
+    const std::size_t n = d ? d->count : 0;
+    if (n == 0) {
+        fb.draw_str_6x10({4, 19}, "Searching devices...", false);
         fb.draw_str_4x6({4, 33}, "Listening for pings (1Hz)", false);
         widgets::draw_footer(fb, "[OK] Scan   [ESC] Back");
+        return;
+    }
+    const bool has_scroll = n > kVisible;
+    const int row_w = has_scroll ? 121 : 124;
+    for (std::size_t slot = 0; slot < kVisible; ++slot) {
+        const std::size_t index = s.scroll + slot;
+        if (index >= n) {
+            break;
+        }
+        const Device& dev = d->items[index];
+        const bool selected = index == s.selected;
+        const int y = 14 + static_cast<int>(slot) * 9;
+        if (selected) {
+            fb.fill_rect({{2, y}, {row_w, 9}}, true);
+        }
+        fb.draw_str_6x10({4, y}, std::string_view{dev.name.data(), dev.name_len}, selected);
+
+        format::Text<24> tag;
+        tag.push('[');
+        const std::string_view role = role_tag(dev.address);
+        if (!role.empty()) {
+            push_text(tag, head(role, 4));
+        } else {
+            constexpr std::string_view hex = "0123456789ABCDEF";
+            push_text(tag, "0x");
+            tag.push(hex[dev.address >> 4]);
+            tag.push(hex[dev.address & 0x0F]);
+        }
+        tag.push(']');
+        fb.draw_str_4x6({row_w - static_cast<int>(tag.len) * 4, y + 2}, tag.view(), selected);
+    }
+    if (has_scroll) {
+        widgets::draw_scrollbar(fb, {static_cast<int>(s.selected)}, {static_cast<int>(n)}, {14, 36});
+    }
+    widgets::draw_footer(fb, "[OK] Select   [ESC] Back");
+}
+
+}  // namespace detail
+
+constexpr void render(display::Framebuffer& fb, const State& s, const menu::Loader* l, const menu::Command* c,
+                      const DeviceList* d = nullptr) {
+    using Kind = menu::Command::Kind;
+    if (l == nullptr || l->state == menu::Loader::State::Idle) {
+        detail::render_devices(fb, s, d);
         return;
     }
     if (l->state == menu::Loader::State::Loading) {
         widgets::draw_header(fb, "CRSF CONFIG");
         fb.draw_str_6x10({12, 21}, "Loading...", false);
-        widgets::draw_footer(fb, "Please wait...  [ESC] Abort");
+        widgets::draw_footer(fb, "Please wait...  [ESC] Devices");
         return;
     }
 
@@ -402,7 +582,7 @@ constexpr void render(display::Framebuffer& fb, const State& s, const menu::Load
     const Items items = items_in_folder(*l, s.folder);
     if (items.count == 0) {
         fb.draw_str_6x10({12, 21}, "No parameters", false);
-        widgets::draw_footer(fb, s.depth > 0 ? "[ESC] Up" : "[ESC] Back");
+        widgets::draw_footer(fb, s.depth > 0 ? "[ESC] Up" : "[ESC] Devices");
         return;
     }
 
@@ -422,7 +602,7 @@ constexpr void render(display::Framebuffer& fb, const State& s, const menu::Load
         widgets::draw_footer(fb, "[OK] Confirm   [ESC] Cancel");
     } else {
         const auto& e = *l->entries[sel_id];
-        const std::string_view back = s.depth > 0 ? "[ESC] Up" : "[ESC] Back";
+        const std::string_view back = s.depth > 0 ? "[ESC] Up" : "[ESC] Devices";
         if (e.type == menu::Type::Folder) {
             widgets::draw_footer_split(fb, "[OK] Enter", back);
         } else if (is_editable(e.type)) {

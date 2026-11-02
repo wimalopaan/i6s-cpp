@@ -462,7 +462,8 @@ int main() {
         } else {
             const auto ev = logic::menu::update(menu_state,
                                                 logic::menu::Input{pressed, g_keys, now, auto_changes,
-                                                                   &hw::crsf::menu_loader(), &hw::crsf::menu_command()},
+                                                                   &hw::crsf::menu_loader(), &hw::crsf::menu_command(),
+                                                                   &hw::crsf::menu_devices()},
                                                 g_storage);
             if (menu_state.nav_tick) {
                 play_buzzer_cue(logic::buzzer::Cue::NavStep);
@@ -636,7 +637,7 @@ int main() {
                 logic::menu::render(g_fb, menu_state, g_model_names, g_storage,
                                     logic::menu::Live{channels, input.raw, input.switches, eeprom,
                                                       chip::kProfile.name, kBuild, &hw::crsf::menu_loader(),
-                                                      &hw::crsf::menu_command()});
+                                                      &hw::crsf::menu_command(), &hw::crsf::menu_devices()});
             }
             hw::lcd::flush(g_fb);
             last_draw_ms = now;

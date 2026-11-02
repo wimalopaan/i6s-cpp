@@ -3538,11 +3538,12 @@ void crsf_protocol_setup_test() {
     rs.active_model.rf_protocol = 1;
     cm::Loader loader{};
     cm::Command command{};
+    cc::DeviceList devices{};
     mn::State s{};
     s.screen = mn::Screen::ProtocolSetup;
     auto press = [&](const uint16_t key, const uint32_t now) {
-        const mn::Event e = mn::update(s, mn::Input{key, key, now, {}, &loader, &command}, rs);
-        mn::update(s, mn::Input{0, 0, now + 1, {}, &loader, &command}, rs);
+        const mn::Event e = mn::update(s, mn::Input{key, key, now, {}, &loader, &command, &devices}, rs);
+        mn::update(s, mn::Input{0, 0, now + 1, {}, &loader, &command, &devices}, rs);
         return e;
     };
 
@@ -3590,6 +3591,42 @@ void crsf_protocol_setup_test() {
     press(mn::kKeyCancel, 140);
     check(s.screen == mn::Screen::ProtocolSetup && s.protocol.selected == 4,
           "ESC while no device is found must return to the protocol screen");
+
+    // Device list: OK scans when empty, otherwise selects; stale devices are pruned.
+    s.screen = mn::Screen::CrsfSetup;
+    s.crsf = {};
+    const mn::Event scan = press(mn::kKeyOk, 141);
+    check(scan.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::Restart,
+          "OK on an empty device list must rescan");
+    devices.observe(0xEE, "ELRS TX", 3, 1000);
+    devices.observe(0xEC, "ELRS RX", 40, 1000);
+    devices.observe(0xEE, "ELRS TX2", 4, 2000);
+    check(devices.count == 2 && devices.items[0].param_count == 4 && devices.items[0].name_len == 8,
+          "a device seen again must be updated, not duplicated");
+    check(cc::role_tag(0xEE) == "TX" && cc::role_tag(0x55).empty(), "role tags follow the CRSF address table");
+    press(mn::kKeyDown, 142);
+    check(s.crsf.selected == 1, "DOWN must move through the device list");
+    const mn::Event pick = press(mn::kKeyOk, 143);
+    check(pick.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::SelectDevice &&
+              s.crsf_req.param == 1 && s.crsf.selected == 0,
+          "OK must select the highlighted device");
+    {
+        mn::ModelNames names{};
+        logic::display::Framebuffer fb{};
+        mn::render(fb, s, names, rs, mn::Live{.crsf_loader = &loader, .crsf_command = &command, .crsf_devices = &devices});
+    }
+    devices.prune(2000 + cc::kDeviceTimeoutMs);
+    check(devices.count == 1 && devices.items[0].address == 0xEE, "devices missing for 3 s must be pruned");
+    loader.state = cm::Loader::State::Loading;
+    const mn::Event abort_load = press(mn::kKeyCancel, 144);
+    check(abort_load.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::BackToList &&
+              s.screen == mn::Screen::CrsfSetup,
+          "ESC while loading must return to the device list");
+    loader.state = cm::Loader::State::Idle;
+    press(mn::kKeyCancel, 145);
+    check(s.screen == mn::Screen::ProtocolSetup, "ESC in the device list must leave the screen");
+    s.screen = mn::Screen::CrsfSetup;
+    s.crsf = {};
 
     // Browser with a loaded device: a select in the root and a folder with an integer.
     loader.state = cm::Loader::State::Ready;
@@ -3652,6 +3689,11 @@ void crsf_protocol_setup_test() {
               s.crsf_req.param == 0 && s.crsf.folder == 0 && s.screen == mn::Screen::CrsfSetup,
           "ESC in a folder must request the parent folder");
 
+    const mn::Event back = press(mn::kKeyCancel, 245);
+    check(back.action == Action::CrsfRequest && s.crsf_req.kind == cc::Request::Kind::BackToList &&
+              s.screen == mn::Screen::CrsfSetup,
+          "ESC in the root folder must go back to the device list");
+
     // Command confirmation dialog takes over the keys.
     command.kind = cm::Command::Kind::WaitingConfirm;
     command.param = 6;
@@ -3665,7 +3707,7 @@ void crsf_protocol_setup_test() {
 
     // Rendering must not crash and must draw something for every state.
     mn::ModelNames names{};
-    const mn::Live live{.crsf_loader = &loader, .crsf_command = &command};
+    const mn::Live live{.crsf_loader = &loader, .crsf_command = &command, .crsf_devices = &devices};
     logic::display::Framebuffer fb{};
     mn::render(fb, s, names, rs, live);
     s.screen = mn::Screen::ProtocolSetup;

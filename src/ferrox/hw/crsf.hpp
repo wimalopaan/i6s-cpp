@@ -23,6 +23,7 @@ inline constinit logic::crsf::Framer g_framer{};
 inline constinit logic::crsf::Telemetry g_telemetry{};
 inline constinit logic::crsf::menu::Loader g_menu{};
 inline constinit logic::crsf::menu::Command g_command{};
+inline constinit logic::crsf::config::DeviceList g_devices{};
 
 inline constexpr uint32_t kTxPeriodMs = 10;
 inline constexpr uint32_t kTelemetryTimeoutMs = 1000;
@@ -92,15 +93,15 @@ inline void perform(const MenuAction& a) {
 }
 
 /// Device info (0x29): payload is [dest, origin, name\0, serial(4), hw(4), fw(4), param_count, ...].
+/// Answers to the discovery ping are collected in the device list; loading starts when one is selected.
 inline void on_device_info(std::span<const uint8_t> p, const uint32_t now_ms) {
     if (p.size() < 3 || g_menu.state != logic::crsf::menu::Loader::State::Idle) {
         return;
     }
-    const std::size_t count_idx = logic::crsf::menu::find_nul(p, 2) + 1 + 12;
-    if (count_idx >= p.size()) {
-        return;
-    }
-    perform(g_menu.start(logic::crsf::DeviceAddr{p[1]}, logic::crsf::menu::ParamCount{p[count_idx]}, now_ms));
+    const std::size_t name_end = logic::crsf::menu::find_nul(p, 2);
+    const std::size_t count_idx = name_end + 1 + 12;
+    const uint8_t param_count = count_idx < p.size() ? p[count_idx] : static_cast<uint8_t>(logic::crsf::menu::kMaxParams);
+    g_devices.observe(p[1], {reinterpret_cast<const char*>(p.data()) + 2, name_end - 2}, param_count, now_ms);
 }
 
 /// Parameter entry (0x2B): payload is [dest, origin, param, chunks_remain, chunk...].
@@ -169,6 +170,7 @@ inline void poll_telemetry(const uint32_t now_ms) {
     if (g_menu.state == logic::crsf::menu::Loader::State::Idle &&
         static_cast<uint32_t>(now_ms - g_last_ping_ms) >= kPingPeriodMs) {
         g_last_ping_ms = now_ms;
+        g_devices.prune(now_ms);
         std::array<uint8_t, 6> ping{};
         const std::size_t n = logic::crsf::build_ping(ping);
         uart::write_bytes(std::span<const uint8_t>(ping.data(), n));
@@ -234,10 +236,30 @@ inline void menu_cancel_command() {
     detail::perform(g_command.cancel());
 }
 
-/// Drops the loaded device so that discovery (1 Hz ping) starts over.
-inline void menu_restart() {
+/// Drops the loaded device and the device list so that discovery (1 Hz ping) starts over.
+inline void menu_restart(const uint32_t now_ms) {
     g_menu.stop();
     g_command = logic::crsf::menu::Command{};
+    g_devices.clear();
+    g_last_ping_ms = now_ms - kPingPeriodMs;
+}
+
+/// Starts loading the parameters of device `index` of the device list.
+inline void menu_select_device(const uint8_t index, const uint32_t now_ms) {
+    if (index >= g_devices.count) {
+        return;
+    }
+    const auto& d = g_devices.items[index];
+    g_command = logic::crsf::menu::Command{};
+    detail::perform(g_menu.start(logic::crsf::DeviceAddr{d.address}, logic::crsf::menu::ParamCount{d.param_count}, now_ms));
+}
+
+/// Leaves the loaded device but keeps the device list.
+inline void menu_back_to_list(const uint32_t now_ms) {
+    g_menu.stop();
+    g_command = logic::crsf::menu::Command{};
+    g_devices.touch(now_ms);
+    g_last_ping_ms = now_ms - kPingPeriodMs;
 }
 
 inline const logic::crsf::menu::Loader& menu_loader() {
@@ -248,11 +270,17 @@ inline const logic::crsf::menu::Command& menu_command() {
     return g_command;
 }
 
+inline const logic::crsf::config::DeviceList& menu_devices() {
+    return g_devices;
+}
+
 /// Performs a request of the Configure Module screen.
 inline void menu_apply(const logic::crsf::config::Request& r, const uint32_t now_ms) {
     using Kind = logic::crsf::config::Request::Kind;
     switch (r.kind) {
-        case Kind::Restart: menu_restart(); break;
+        case Kind::Restart: menu_restart(now_ms); break;
+        case Kind::SelectDevice: menu_select_device(r.param, now_ms); break;
+        case Kind::BackToList: menu_back_to_list(now_ms); break;
         case Kind::Write: menu_set_value(r.param, r.value); break;
         case Kind::EnterFolder: menu_enter_folder(r.param, now_ms); break;
         case Kind::StartCommand: menu_start_command(r.param, now_ms); break;
