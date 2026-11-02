@@ -855,7 +855,28 @@ void dashboard_test() {
         check(logic::dashboard::rf_status_fixed(link_view).empty(), "dashboard shows RSSI when linked");
         check(logic::dashboard::rf_status_fixed(down_view) == "NO RF", "dashboard shows NO RF without radio");
         check(logic::dashboard::rf_status_fixed(crsf_view) == "CRSF", "dashboard shows CRSF for CRSF models");
-        check(logic::dashboard::afhds_link_line(link_view) == "AFHDS2A: CONNECTED", "model page shows link state");
+        check(logic::dashboard::model_link_text(link_view).view() == "RSSI: 87%", "model page shows AFHDS RSSI");
+        check(logic::dashboard::model_rx_voltage_text(link_view).view() == "4.95V", "model page shows fresh RX voltage");
+        check(logic::dashboard::model_rx_voltage_text(stale_view).view() == "4.95V*", "model page marks stale RX voltage");
+        check(logic::dashboard::rssi_status_text(87).view() == "R:87%", "status bar RSSI text");
+        check(logic::dashboard::rssi_status_text(5).view() == "R:05%", "status bar RSSI zero-padded like Rust");
+        check(logic::dashboard::rssi_status_text(120).view() == "R:100", "status bar RSSI capped at 100");
+
+        logic::crsf::Telemetry ct{};
+        ct.connected = true;
+        ct.uplink_link_quality = 42;
+        ct.rx_battery_mv = 8100;
+        ct.last_vbat_ms = 1400;
+        ct.baro_alt_dm = 123;
+        ct.vspeed_cms = -55;
+        ct.has_vspeed = true;
+        const auto mapped = logic::telemetry::from_crsf(ct);
+        check(mapped.connected && mapped.rssi == 42 && mapped.rx_voltage_mv == 8100 && mapped.last_rx_voltage_ms == 1400 &&
+                  mapped.alt_dm == 123 && mapped.vspeed_cms == -55 && mapped.has_vspeed && mapped.packets_received == 0,
+              "CRSF telemetry maps to link telemetry (LQ as rssi)");
+        const View crsf_link_view{in, st, trims, chs, true, mapped, false, false, false, 1500};
+        check(logic::dashboard::rf_status_fixed(crsf_link_view).empty(), "dashboard shows LQ for a connected CRSF link");
+        check(logic::dashboard::model_link_text(crsf_link_view).view() == "LQ: 42%", "model page shows CRSF LQ");
         check(logic::dashboard::sensor_fresh(link_view, linked.last_rx_voltage_ms), "fresh telemetry is not stale");
         check(!logic::dashboard::sensor_fresh(stale_view, linked.last_rx_voltage_ms), "telemetry older than 2.5 s is stale");
 

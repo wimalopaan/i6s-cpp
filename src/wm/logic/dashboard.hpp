@@ -87,7 +87,7 @@ struct View {
     const trim::Controller& trims;
     const std::array<uint16_t, kNumChannels>& rf_chs;
     bool crsf;
-    // AFHDS 2A link state, only meaningful when !crsf.
+    // Link telemetry of the active protocol; for CRSF mapped by telemetry::from_crsf (rssi = link quality).
     afhds2a::Telemetry telem{};
     // Radio is binding, already gated by bind::binding_shown (AFHDS 2A only). Drives the BIND status and footer.
     bool binding = false;
@@ -130,7 +130,7 @@ constexpr std::string_view rf_status_fixed(const View& v) {
     if (v.binding) {
         return "BIND";
     }
-    if (!v.crsf && v.telem.connected) {
+    if (v.telem.connected) {
         return {};
     }
     if (v.crsf) {
@@ -139,33 +139,66 @@ constexpr std::string_view rf_status_fixed(const View& v) {
     return v.bound ? "RF:OK" : "NO RF";
 }
 
+// "R:85%" / "R:100", same as Rust status_bar.rs.
+constexpr format::Text<5> rssi_status_text(const uint8_t rssi) {
+    format::Text<5> t;
+    t.push('R');
+    t.push(':');
+    const auto r = std::min<unsigned>(rssi, 100u);
+    if (r >= 100u) {
+        for (const char c : std::string_view{"100"}) {
+            t.push(c);
+        }
+        return t;
+    }
+    for (const char c : format::format_dec2(r).view()) {
+        t.push(c);
+    }
+    t.push('%');
+    return t;
+}
+
 constexpr void draw_rf_status(Framebuffer& fb, const View& v) {
     const auto fixed = rf_status_fixed(v);
     if (!fixed.empty()) {
         fb.draw_str_4x6({64, 3}, fixed, false);
         return;
     }
-    const auto r = std::min<unsigned>(v.telem.rssi, 100u);
-    if (r >= 100u) {
-        fb.draw_str_4x6({64, 3}, "R:100", false);
-        return;
-    }
-    const auto digits = format::format_dec2(r);
-    format::Text<5> t;
-    t.push('R');
-    t.push(':');
-    for (const char c : digits.view()) {
-        t.push(c);
-    }
-    fb.draw_str_4x6({64, 3}, t.view(), false);
+    fb.draw_str_4x6({64, 3}, rssi_status_text(v.telem.rssi).view(), false);
 }
 
 
-constexpr std::string_view afhds_link_line(const View& v) {
-    if (v.binding) {
-        return "AFHDS2A: BINDING";
+// Model page line 4, as in Rust pages/model.rs: RX voltage ('*' when older than 2.5 s) and
+// "LQ:xxx%" for CRSF or "RSSI:xxx%" for AFHDS 2A while connected.
+constexpr format::Text<8> model_rx_voltage_text(const View& v) {
+    format::Text<8> t;
+    if (v.telem.rx_voltage_mv == 0) {
+        for (const char c : std::string_view{"----"}) {
+            t.push(c);
+        }
+        return t;
     }
-    return v.telem.connected ? "AFHDS2A: CONNECTED" : "AFHDS2A: NO LINK";
+    for (const char c : format::format_vbat(v.telem.rx_voltage_mv).view()) {
+        t.push(c);
+    }
+    const uint32_t last = v.telem.last_rx_voltage_ms;
+    if (last == 0 || v.now_ms - last >= 2500u) {
+        t.push('*');
+    }
+    return t;
+}
+
+constexpr format::Text<12> model_link_text(const View& v) {
+    format::Text<12> t;
+    for (const char c : v.crsf ? std::string_view{"LQ:"} : std::string_view{"RSSI:"}) {
+        t.push(c);
+    }
+    const auto pct = format::format_fixed(
+        {.value = static_cast<int32_t>(std::min<unsigned>(v.telem.rssi, 100u)), .pad_digits = 3, .suffix = "%"});
+    for (const char c : pct.view()) {
+        t.push(c);
+    }
+    return t;
 }
 
 // Telemetry older than 2.5 s counts as stale, as in Rust `check_sensor_status`.
@@ -537,8 +570,14 @@ constexpr void draw_model_page(Framebuffer& fb, const View& v) {
     fb.draw_str_6x10({74, 34}, m.thr_curve_smooth != 0 ? std::string_view("SMOOTH") : std::string_view("LINEAR"),
                      false);
 
-    // CRSF telemetry is not ported yet, so its line always shows DISCONNECTED.
-    fb.draw_str_6x10({2, 44}, v.crsf ? std::string_view("CRSF: DISCONNECTED") : afhds_link_line(v), false);
+    if (v.telem.connected) {
+        fb.draw_str_6x10({2, 44}, "RX:", false);
+        fb.draw_str_6x10({22, 44}, model_rx_voltage_text(v).view(), false);
+        fb.draw_str_6x10({v.crsf ? 70 : 64, 44}, model_link_text(v).view(), false);
+    } else {
+        fb.draw_str_6x10({2, 44}, v.crsf ? std::string_view("CRSF: DISCONNECTED") : std::string_view("AFHDS2A: DISCONNECTED"),
+                         false);
+    }
 
     draw_page_footer(fb, v, "P4/5", "MODEL DASHBOARD");
 }
