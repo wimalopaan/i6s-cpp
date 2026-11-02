@@ -29,7 +29,7 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 
 ## Build
 
-Firmware (clang + arm-none-eabi-gcc for Cortex-M0, MinSizeRel):
+Firmware (clang + arm-none-eabi-gcc for Cortex-M0, MinSizeRel = -Oz):
 
     cmake -S . -B build-fw -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi-clang.cmake -DCMAKE_BUILD_TYPE=MinSizeRel
     cmake --build build-fw --target i6s_fw
