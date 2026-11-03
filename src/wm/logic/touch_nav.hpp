@@ -7,6 +7,9 @@
 #include <optional>
 
 #include "wm/logic/input.hpp"
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+#include "wm/logic/multiswitch.hpp"
+#endif
 
 // FS-i6S touch navigation and digital trims (Rust `hw::touch::nav` + FT6236 packet decoding).
 //
@@ -33,6 +36,9 @@ inline constexpr uint16_t kKeyNavOk = 1u << 10;
 inline constexpr uint16_t kKeyNavCancel = 1u << 11;
 inline constexpr uint16_t kKeyBind = 1u << 12;
 inline constexpr uint16_t kKeyMenuOpen = 1u << 13;
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+inline constexpr uint16_t kKeyTouchActivity = 1u << 14;
+#endif
 
 /// Release timeout: an active touch without packets for this long is treated as lifted.
 inline constexpr uint32_t kReleaseTimeoutMs = 40;
@@ -108,6 +114,10 @@ struct SwipeTracker {
     int8_t scroll_dir = 0;  // 0 = neutral, 1 = down, -1 = up
     bool active = false;
     bool swiped = false;
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+    bool tap_cancelled = false;
+    std::optional<uint8_t> tapped_switch{};
+#endif
     uint32_t last_packet_ms = 0;
     uint32_t last_scroll_ms = 0;
     uint32_t last_move_ms = 0;
@@ -123,6 +133,9 @@ struct SwipeTracker {
         scroll_dir = 0;
         active = true;
         swiped = false;
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+        tap_cancelled = false;
+#endif
         last_scroll_ms = 0;
         last_move_ms = 0;
     }
@@ -354,6 +367,72 @@ constexpr uint8_t sat_add(const uint8_t a, const uint8_t b) {
     return keys;
 }
 
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+// P6 owns the content area: taps switch only on release, drags navigate, footer holds open the menu.
+[[nodiscard]] constexpr uint16_t multiswitch_touch_keys(const std::optional<TouchSample>& sample,
+                                                       SwipeTracker& tracker, const uint32_t now_ms) {
+    uint16_t keys = 0;
+    const auto release = [&] {
+        if (tracker.active && !tracker.swiped && !tracker.tap_cancelled) {
+            tracker.tapped_switch = multiswitch::switch_at(tracker.start_x, tracker.start_y);
+            if (tracker.start_y < 14) {
+                keys |= kKeyNavDown;
+            }
+        }
+        tracker.clear();
+    };
+
+    if (!sample) {
+        if (tracker.active && now_ms - tracker.last_packet_ms >= kReleaseTimeoutMs) {
+            release();
+        }
+        return keys;
+    }
+    tracker.last_packet_ms = now_ms;
+    if (sample->point && sample->point->event == TouchEventKind::PressDown) {
+        tracker.reset_at(sample->point->x, sample->point->y);
+    }
+    if (!tracker.swiped) {
+        switch (sample->gesture) {
+            case Gesture::SwipeUp:
+            case Gesture::SwipeRight: keys |= kKeyNavUp; break;
+            case Gesture::SwipeDown:
+            case Gesture::SwipeLeft: keys |= kKeyNavDown; break;
+            case Gesture::None: break;
+        }
+        if (keys != 0) {
+            tracker.swiped = true;
+        }
+    }
+    if (sample->point && tracker.active) {
+        const auto pt = *sample->point;
+        const int dx = static_cast<int>(pt.x) - tracker.start_x;
+        const int dy = static_cast<int>(pt.y) - tracker.start_y;
+        if (dx <= -6 || dx >= 6 || dy <= -6 || dy >= 6) {
+            tracker.tap_cancelled = true;
+        }
+        if (!tracker.swiped) {
+            if (dx <= -14 || dy >= 14) {
+                keys |= kKeyNavDown;
+                tracker.swiped = true;
+            } else if (dx >= 14 || dy <= -14) {
+                keys |= kKeyNavUp;
+                tracker.swiped = true;
+            }
+        }
+        keys |= kKeyTouchActivity;
+        if (!tracker.tap_cancelled && !tracker.swiped && tracker.start_y >= 52 &&
+            pt.event != TouchEventKind::LiftUp) {
+            keys |= kKeyMenuOpen;
+        }
+    }
+    if (!sample->point || sample->point->event == TouchEventKind::LiftUp) {
+        release();
+    }
+    return keys;
+}
+#endif
+
 /// Result of modifier trim evaluation (Rust tuple `(trim_keys, suppress_left, suppress_right)`).
 struct ModifierTrims {
     uint16_t keys = 0;
@@ -431,8 +510,15 @@ inline constexpr uint8_t kRearFuncTrimModifier = 2;
                                                const input::Gimbals& sticks, const bool menu_active,
                                                const uint8_t rear_left_func, const uint8_t rear_right_func,
                                                const bool throttle_trim_enabled, const FrontButtons buttons,
-                                               SwipeTracker& tracker, const uint32_t now_ms) {
+                                               SwipeTracker& tracker, const uint32_t now_ms
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+                                               , const bool multiswitch_page = false
+#endif
+                                               ) {
     uint16_t combined = 0;
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+    tracker.tapped_switch.reset();
+#endif
 
     if (menu_active) {
         // In menus and wizards the front buttons always navigate.
@@ -453,6 +539,11 @@ inline constexpr uint8_t kRearFuncTrimModifier = 2;
     }
 
     uint16_t touch_keys = 0;
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+    if (multiswitch_page && !menu_active) {
+        touch_keys = multiswitch_touch_keys(touch_sample, tracker, now_ms);
+    } else
+#endif
     if (touch_sample) {
         touch_keys = touch_to_nav_keys(*touch_sample, menu_active, tracker, now_ms);
     } else if (tracker.active && now_ms - tracker.last_packet_ms >= kReleaseTimeoutMs) {

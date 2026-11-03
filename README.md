@@ -16,6 +16,12 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 - USB sim mode (trainer): joystick mode with a host connected mutes the RF link, stops CRSF and PPM out
 - Mixer, input, RC output, safety/preflight, calibration, trim, flight timer, vario, bind
 - Dashboard pages P1–P5 (P5: AFHDS 2A or CRSF diagnostics, or the custom 2×2 telemetry slot page)
+- FS-i6S with `USE_MULTISWITCH=ON`: MultiSwitch dashboard P6, eight touch toggles (OFF/ON), CRSF SET4 (realm `0xa1`, command `0x07`).
+  Set the module address (0–255, default 0) under Model Setup → MS Addr; it is saved per model in a previously
+  reserved EEPROM byte, without changing the model layout. States start OFF at boot, model change or address
+  change and are not saved. SET4 is sent on changes and repeated every 100 ms while CRSF is active, including on
+  other pages and in menus; USB simulator mode suppresses transmission. P6 header taps/swipes change pages;
+  hold the footer to open the menu. Touch fields do not change trims or open the menu.
 - FS-i6S (`PCB=I6S`): power latch and shutdown (PB15/PB14, LEDs PD10/PD11), FT6236 touch navigation (long centre tap
   opens the menu), rear pots VRA/VRB as menu jog wheels, rear buttons PA9/PA10 (SE/SF, timer reset, instant trim or
   trim modifier), J4 buttons PA13/PA14 as SG/SH, ext ADC PC1..PC5 (VRC..VRG / SWI..SWM), CRSF on USART1 PB6/PB7 with
@@ -46,6 +52,9 @@ Firmware (clang + arm-none-eabi-gcc for Cortex-M0, MinSizeRel = -Oz):
     cmake --build build-fw
 
 `USE_USB` (default ON) sets `WM_USE_USB`, so USB code can be left out to save flash: `-DUSE_USB=OFF`. Without USB the "USB Mode" row is also removed from Radio Setup.
+
+`USE_MULTISWITCH` (default OFF) enables P6, the model's "MS Addr" setting and CRSF SET4 transmission only with
+`PCB=I6S`: add `-DPCB=I6S -DUSE_MULTISWITCH=ON` to the firmware or host-test CMake configuration.
 
 `PCB` selects the board: `-DPCB=I6X` (default, also when unset) or `-DPCB=I6S`. It sets `WM_PCB_I6S` for firmware and
 host tests; board constants live in `src/wm/board.hpp`. The firmware target and its output files are named after the

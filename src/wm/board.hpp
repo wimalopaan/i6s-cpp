@@ -7,6 +7,9 @@
 #ifndef WM_PCB_I6S
 #define WM_PCB_I6S 0
 #endif
+#ifndef WM_USE_MULTISWITCH
+#define WM_USE_MULTISWITCH 0
+#endif
 
 namespace wm::board {
 
@@ -14,6 +17,7 @@ enum class Pcb : uint8_t { I6X, I6S };
 
 inline constexpr Pcb kPcb = WM_PCB_I6S ? Pcb::I6S : Pcb::I6X;
 inline constexpr bool kIsI6S = kPcb == Pcb::I6S;
+inline constexpr bool kHasMultiSwitch = kIsI6S && WM_USE_MULTISWITCH;
 
 /// Auxiliary analog channels: SA..SD, VRA..VRB and the external ADC (I6X: VRC..VRF on P7, I6S: VRC..VRG on PC1..PC5).
 inline constexpr std::size_t kAuxCount = kIsI6S ? 11 : 10;

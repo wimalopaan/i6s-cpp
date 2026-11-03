@@ -10,6 +10,9 @@
 #include "wm/logic/crsf.hpp"
 #include "wm/logic/crsf_config.hpp"
 #include "wm/logic/crsf_menu.hpp"
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+#include "wm/logic/multiswitch.hpp"
+#endif
 
 namespace wm::hw::crsf {
 
@@ -75,6 +78,19 @@ inline void update_channels(const uint32_t now_ms, const std::array<uint16_t, N>
     const std::size_t len = logic::crsf::build_rc_frame(channels, arm_mode_switch, armed, frame);
     uart::write_bytes(std::span<const uint8_t>(frame.data(), len));
 }
+
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+inline void update_multiswitch(const uint32_t now_ms, const uint8_t address, logic::multiswitch::State& state) {
+    // RC frames have priority; retry on the next loop instead of waiting for their DMA transfer.
+    if (!g_enabled || uart::g_tx_busy || !state.due(now_ms)) {
+        return;
+    }
+    const auto frame = logic::multiswitch::build_set4(address, state.switches);
+    if (uart::write_bytes(frame) == frame.size()) {
+        state.sent(now_ms);
+    }
+}
+#endif
 
 namespace detail {
 

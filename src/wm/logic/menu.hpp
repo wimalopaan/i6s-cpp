@@ -56,8 +56,13 @@ inline constexpr std::size_t kItemModelSelect = 0;
 inline constexpr std::size_t kItemModelSetup = 1;
 
 // Rows of the model setup screen. Each row maps to one slot of the 4-row view.
-enum class SetupRow : uint8_t { Name = 0, Type, ArmSwitch, Timer, Trigger, Copy, Vario, Telemetry, Protocol, Reset };
-inline constexpr std::size_t kSetupRows = 10;
+enum class SetupRow : uint8_t {
+    Name = 0, Type, ArmSwitch, Timer, Trigger, Copy, Vario, Telemetry, Protocol, Reset,
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+    MultiSwitch,
+#endif
+};
+inline constexpr std::size_t kSetupRows = board::kHasMultiSwitch ? 11 : 10;
 inline constexpr std::size_t kItemVarioRow = static_cast<std::size_t>(SetupRow::Vario);
 inline constexpr std::size_t kItemTelemRow = static_cast<std::size_t>(SetupRow::Telemetry);
 inline constexpr uint8_t kNameLen = 10;
@@ -573,6 +578,9 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
                 case SetupRow::ArmSwitch:
                 case SetupRow::Timer:
                 case SetupRow::Trigger:
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+                case SetupRow::MultiSwitch:
+#endif
                     s.editing = true;
                     break;
                 case SetupRow::Copy:
@@ -679,6 +687,22 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
             break;
         case SetupRow::Type:
             break;
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+        case SetupRow::MultiSwitch:
+            if (n.up != n.down) {
+                const uint8_t previous = m.multiswitch_address;
+                m.multiswitch_address = static_cast<uint8_t>(
+                    std::clamp(static_cast<int>(m.multiswitch_address) + (n.up ? 1 : -1), 0, 255));
+                if (m.multiswitch_address != previous) {
+                    s.cue = buzzer::Cue::ValueStep;
+                }
+            }
+            if (n.ok || n.cancel) {
+                s.editing = false;
+                return save;
+            }
+            break;
+#endif
         case SetupRow::Copy:
             switch (model_copy::update(s.copy, model_copy::Keys{n.up, n.down, n.ok, n.cancel})) {
                 case model_copy::Outcome::Choosing: break;
@@ -1878,6 +1902,12 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
             case SetupRow::Reset:
                 widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Reset: [OK Defaults]", {}, {0});
                 break;
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+            case SetupRow::MultiSwitch:
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "MS Addr:",
+                                       format::format_int(m.multiswitch_address).view(), {64});
+                break;
+#endif
         }
     }
 
