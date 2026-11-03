@@ -38,7 +38,7 @@ constexpr FlightControls flight_controls(const input::Gimbals& g, const safety::
 
 /// Armed when no arm switch is configured or the configured switch is active (same rule as compute_channels).
 constexpr bool is_armed(const uint8_t arm_switch, const Switches& sw) {
-    return arm_switch == 0 || arm_switch > 22 || mixer::eval_arm_switch(arm_switch, sw);
+    return arm_switch == 0 || arm_switch > board::kMaxSwitchCond || mixer::eval_arm_switch(arm_switch, sw);
 }
 
 /// Mixer output for one model: 18 channels in µs, ready for the RF output.
@@ -52,7 +52,7 @@ constexpr std::array<uint16_t, kNumChannels> rf_channels(const input::InputState
     const auto thr_in = static_cast<uint16_t>(std::clamp<int32_t>((c.throttle + kMixerMax) / 2, 0, kMixerMax));
     const uint16_t thr = curve::evaluate(thr_in, model.thr_curve_pts, model.thr_curve_smooth != 0, model.thr_curve);
     return mixer::compute_channels({c.aileron, c.elevator, thr, c.rudder},
-                                   std::span<const int16_t>(in.aux_pots).subspan<4, 6>(), in.switches, model,
+                                   std::span<const int16_t>(in.aux_pots).subspan<4, input::kAuxCount - 4>(), in.switches, model,
                                    trims, throttle_trim_mode);
 }
 

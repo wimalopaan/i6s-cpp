@@ -125,13 +125,21 @@ constexpr bool is_switch_active(const uint8_t condition, const Switches& s) {
         case 20: return s.swi == SwitchPos::Down;
         case 21: return s.swj == SwitchPos::Up;
         case 22: return s.swj == SwitchPos::Down;
+#if WM_PCB_I6S
+        case 23: return s.swk == SwitchPos::Up;
+        case 24: return s.swk == SwitchPos::Down;
+        case 25: return s.swl == SwitchPos::Up;
+        case 26: return s.swl == SwitchPos::Down;
+        case 27: return s.swm == SwitchPos::Up;
+        case 28: return s.swm == SwitchPos::Down;
+#endif
         default: return true;
     }
 }
 
-/// Arm switch is valid only for condition codes 1..=22; 0 or out-of-range means not armed.
+/// Arm switch is valid only for condition codes 1..=kMaxSwitchCond; 0 or out-of-range means not armed.
 constexpr bool eval_arm_switch(const uint8_t arm_switch, const Switches& s) {
-    return arm_switch > 0 && arm_switch <= 22 && is_switch_active(arm_switch, s);
+    return arm_switch > 0 && arm_switch <= board::kMaxSwitchCond && is_switch_active(arm_switch, s);
 }
 
 /// True for high rates, false for low rates.
@@ -202,12 +210,18 @@ constexpr int32_t evaluate_source(const uint8_t src, const Sticks& sticks, std::
         case 38: return pot_at(pots, 3);
         case 39: return pot_at(pots, 4);
         case 40: return pot_at(pots, 5);
+#if WM_PCB_I6S
+        case 41: return pot_at(pots, 6);  // VRG
+        case 42: return three_pos_value(s.swk);
+        case 43: return three_pos_value(s.swl);
+        case 44: return three_pos_value(s.swm);
+#endif
         default:
             if (src >= 12 && src <= 29) {
                 return channels[src - 12];
             }
-            if (src >= 41 && src <= 45) {
-                return std::clamp<int32_t>(gvars[src - 41], kMixerMin, kMixerMax);
+            if (src >= board::kSourceGv1 && src < board::kSourceCount) {
+                return std::clamp<int32_t>(gvars[src - board::kSourceGv1], kMixerMin, kMixerMax);
             }
             return kMixerCenter;
     }
@@ -330,7 +344,7 @@ constexpr std::array<uint16_t, kNumChannels> compute_channels(
     // Safety: heli throttle hold (SA Down) and disarmed models pin the throttle to idle.
     const bool is_heli_hold = static_cast<ModelType>(model.model_type) == ModelType::Heli &&
                               sw.sa == SwitchPos::Down;
-    const bool is_disarmed = model.arm_switch > 0 && model.arm_switch <= 22 &&
+    const bool is_disarmed = model.arm_switch > 0 && model.arm_switch <= board::kMaxSwitchCond &&
                              !eval_arm_switch(model.arm_switch, sw);
     if (is_heli_hold || is_disarmed) {
         rf[2] = kChannelMinUs;

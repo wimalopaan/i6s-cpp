@@ -7,7 +7,9 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 
+#include "wm/board.hpp"
 #include "wm/logic/afhds2a.hpp"
 #include "wm/logic/channels.hpp"
 #include "wm/logic/flight.hpp"
@@ -302,6 +304,26 @@ constexpr void draw_fixed_switch_slot(Framebuffer& fb, const Point label_pos, co
 
 constexpr void draw_default_layout(Framebuffer& fb, const input::InputState& in, const storage::RadioStorage& st) {
     const auto& s = in.switches;
+    if constexpr (board::kIsI6S) {
+        const std::array<std::pair<std::string_view, SwitchPos>, 8> sw_list{{
+            {"A", s.sa}, {"B", s.sb}, {"C", s.sc}, {"D", s.sd}, {"E", s.se}, {"F", s.sf}, {"G", s.sg}, {"H", s.sh}}};
+        const bool sg_sh = st.radio.j4_sg_sh_en != 0;
+        const std::size_t count = sg_sh ? 8 : 6;
+        const int arrow_dx = sg_sh ? 5 : 6;
+        const int step = sg_sh ? 12 : 14;
+        int x = 2;
+        for (std::size_t i = 0; i < count; ++i) {
+            draw_fixed_switch_slot(fb, {x, 47}, {x + arrow_dx, 46}, sw_list[i].first, sw_list[i].second);
+            x += step;
+        }
+        if (sg_sh) {
+            widgets::draw_split_pot_bar(fb, {100, 46}, 26, {in.pots.vr1}, {in.pots.vr2});
+        } else {
+            fb.draw_str_4x6({86, 47}, "VR", false);
+            widgets::draw_split_pot_bar(fb, {96, 46}, 30, {in.pots.vr1}, {in.pots.vr2});
+        }
+        return;
+    }
     if (st.radio.ext_switches != 0) {
         draw_fixed_switch_slot(fb, {2, 47}, {7, 46}, "A", s.sa);
         draw_fixed_switch_slot(fb, {13, 47}, {18, 46}, "B", s.sb);
@@ -329,11 +351,16 @@ struct SwitchSlot {
 struct AdaptiveLayout {
     std::array<SwitchSlot, 16> switches{};
     std::size_t switch_count{0};
-    std::array<int16_t, 10> pots{};
+    std::array<int16_t, input::kAuxCount> pots{};
     std::size_t pot_count{0};
 };
 
-constexpr std::array<std::string_view, 10> kAdaptiveNames{"A", "B", "C", "D", "1", "2", "3", "4", "5", "6"};
+#if WM_PCB_I6S
+constexpr std::array<std::string_view, input::kAuxCount> kAdaptiveNames{"A", "B", "C", "D", "1", "2",
+                                                                       "I", "J", "K", "L", "M"};
+#else
+constexpr std::array<std::string_view, input::kAuxCount> kAdaptiveNames{"A", "B", "C", "D", "1", "2", "3", "4", "5", "6"};
+#endif
 
 constexpr void push_switch(AdaptiveLayout& l, const SwitchSlot& s) {
     if (l.switch_count < l.switches.size()) {
@@ -359,6 +386,9 @@ constexpr SwitchPos switch_for_channel(const input::InputState& in, const std::s
         case 7: return s.swj;
         case 8: return s.swk;
         case 9: return s.swl;
+#if WM_PCB_I6S
+        case 10: return s.swm;
+#endif
         default: {
             const int16_t p = in.aux_pots[ch];
             if (p < -333) {
@@ -371,7 +401,7 @@ constexpr SwitchPos switch_for_channel(const input::InputState& in, const std::s
 
 constexpr AdaptiveLayout build_adaptive_layout(const input::InputState& in, const storage::RadioStorage& st) {
     AdaptiveLayout out{};
-    const std::size_t max_aux = st.radio.ext_adc != 0 ? 10 : 6;
+    const std::size_t max_aux = st.radio.ext_adc != 0 ? input::kAuxCount : 6;
     for (std::size_t ch = 0; ch < max_aux; ++ch) {
         const auto mode = input::resolve_mode(ch, st.radio.adc_modes[ch]);
         switch (mode) {
@@ -390,10 +420,18 @@ constexpr AdaptiveLayout build_adaptive_layout(const input::InputState& in, cons
                 push_pot(out, in.aux_pots[ch]);
                 break;
             case input::AdcMode::Default:
+            case input::AdcMode::Off:
                 break;
         }
     }
-    if (st.radio.ext_switches != 0) {
+    if constexpr (board::kIsI6S) {
+        push_switch(out, {"E", in.switches.se, false, 0});
+        push_switch(out, {"F", in.switches.sf, false, 0});
+        if (st.radio.j4_sg_sh_en != 0) {
+            push_switch(out, {"G", in.switches.sg, false, 0});
+            push_switch(out, {"H", in.switches.sh, false, 0});
+        }
+    } else if (st.radio.ext_switches != 0) {
         push_switch(out, {"E", in.switches.se, false, 0});
         push_switch(out, {"F", in.switches.sf, false, 0});
     }
@@ -763,7 +801,7 @@ constexpr void draw_splash(Framebuffer& fb) {
     fb.clear();
     glyphs::draw_logo(fb, {46, 1});
     fb.draw_str_6x10({34, 41}, "wimalopaan", false);
-    fb.draw_str_4x6({44, 53}, "wm-i6x-cpp", false);
+    fb.draw_str_4x6({44, 53}, board::kIsI6S ? "wm-i6s-cpp" : "wm-i6x-cpp", false);
 }
 
 }  // namespace wm::logic::dashboard

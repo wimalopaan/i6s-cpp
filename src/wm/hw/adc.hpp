@@ -2,15 +2,17 @@
 
 #include <array>
 #include <cstddef>
+#include <bit>
 #include <cstdint>
 
 #include "wm/arch/regs.hpp"
+#include "wm/board.hpp"
 #include "wm/hw/gpio.hpp"
 
 namespace wm::hw::adc {
 
 inline constexpr std::size_t kStdChannels = 11;
-inline constexpr std::size_t kChannels = 15;
+inline constexpr std::size_t kChannels = board::kRawCount;
 inline constexpr uint16_t kAdcMin = 0;
 inline constexpr uint16_t kAdcCenter = 2048;
 inline constexpr uint16_t kAdcMax = 4095;
@@ -20,7 +22,14 @@ using Samples = std::array<uint16_t, kChannels>;
 namespace detail {
 
 inline constexpr uint32_t kChselrStd = 0x07FF;  // CH0..CH10
+#if WM_PCB_I6S
+inline constexpr uint32_t kChselrP7 = 0xFFFF;  // CH0..CH10 + CH11..CH15 (PC1..PC5)
+inline constexpr uint32_t kPortCAnalog = 0x003F;  // PC0..PC5
+#else
 inline constexpr uint32_t kChselrP7 = 0xF7FF;   // CH0..CH10 + CH12..CH15
+inline constexpr uint32_t kPortCAnalog = 0x003D;  // PC0, PC2..PC5
+#endif
+static_assert(std::popcount(kChselrP7) == kChannels);
 // DMA CCR: MINC | PSIZE=16 bit | MSIZE=16 bit | PL=High | EN
 inline constexpr uint32_t kDmaCcr = (1u << 7) | (1u << 8) | (1u << 10) | (2u << 12) | 1u;
 
@@ -64,8 +73,8 @@ inline void rearm() {
 
 }  // namespace detail
 
-/// Configures PA0..PA7, PB0..PB1, PC0 and PC2..PC5 as analog inputs, ADC1 and DMA1 channel 1
-/// for a continuous scan (11 channels, or 15 with the P7 header).
+/// Configures PA0..PA7, PB0..PB1, PC0 and PC2..PC5 (FS-i6S: PC1..PC5) as analog inputs, ADC1 and DMA1
+/// channel 1 for a continuous scan (11 channels, or 15 / 16 with the extension inputs).
 inline void init(const bool p7_enabled) {
     detail::g_scan_count = detail::count_for(p7_enabled);
 
@@ -76,8 +85,8 @@ inline void init(const bool p7_enabled) {
     set_pull_mask<Port::A>(0x00FF, Pull::None);
     set_mode_mask<Port::B>(0x0003, Mode::Analog);
     set_pull_mask<Port::B>(0x0003, Pull::None);
-    set_mode_mask<Port::C>(0x003D, Mode::Analog);  // PC0, PC2..PC5
-    set_pull_mask<Port::C>(0x003D, Pull::None);
+    set_mode_mask<Port::C>(detail::kPortCAnalog, Mode::Analog);
+    set_pull_mask<Port::C>(detail::kPortCAnalog, Pull::None);
 
     ADC1->CFGR2 = 2u << 30;  // CKMODE = PCLK/4 (synchronous)
 
@@ -99,7 +108,7 @@ inline void init(const bool p7_enabled) {
     ADC1->CR |= ADC_CR_ADSTART;
 }
 
-/// Switches between 11 and 15 scanned channels at runtime.
+/// Switches between 11 and kChannels scanned channels at runtime.
 inline void set_p7_enabled(const bool enabled) {
     detail::g_scan_count = detail::count_for(enabled);
 

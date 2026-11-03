@@ -12,6 +12,7 @@
 #include <span>
 
 #include "vario.hpp"
+#include "wm/board.hpp"
 
 namespace wm::logic::buzzer {
 
@@ -121,6 +122,8 @@ enum class Cue : uint8_t {
     WatchdogRecover,
     ValueStep,
     ValueSelect,
+    PowerOff,    // I6S: power button held for shutdown
+    SwitchBeep,  // I6S: "Sw Sound" on a switch change outside the menu
 };
 
 namespace tables {
@@ -199,6 +202,8 @@ inline constexpr std::array<Note, 1> kPreflightExit{{{FreqHz{2200}, DurationMs{4
 inline constexpr std::array<Note, 1> kWatchdogRecover{{{FreqHz{2600}, DurationMs{60}, PauseMs{40}}}};
 inline constexpr std::array<Note, 1> kValueStep{{{FreqHz{2200}, DurationMs{20}, PauseMs{0}}}};
 inline constexpr std::array<Note, 1> kValueSelect{{{FreqHz{2400}, DurationMs{40}, PauseMs{0}}}};
+inline constexpr std::array<Note, 1> kPowerOff{{{FreqHz{1800}, DurationMs{80}, PauseMs{40}}}};
+inline constexpr std::array<Note, 1> kSwitchBeep{{{FreqHz{2200}, DurationMs{20}, PauseMs{0}}}};
 
 }  // namespace tables
 
@@ -239,6 +244,9 @@ constexpr Pattern pattern_for(const Cue cue, const ToneStyle style) {
         case Cue::WatchdogRecover: return Pattern{tables::kWatchdogRecover, Repeats{3}};
         case Cue::ValueStep: return single(tables::kValueStep);
         case Cue::ValueSelect: return single(tables::kValueSelect);
+        // Raw tone patterns in Rust, independent of the tone style.
+        case Cue::PowerOff: return Pattern{tables::kPowerOff, Repeats{2}};
+        case Cue::SwitchBeep: return single(tables::kSwitchBeep);
     }
     return {};
 }
@@ -558,7 +566,7 @@ struct ArmEdge {
 
 // The arm chime fires on a real arm-state change, and not while a menu is open.
 constexpr Cue arm_cue(const ArmEdge edge) {
-    const bool armable = edge.arm_switch.value >= 1 && edge.arm_switch.value <= 22;
+    const bool armable = edge.arm_switch.value >= 1 && edge.arm_switch.value <= board::kMaxSwitchCond;
     if (!armable || edge.menu_active || edge.is_armed == edge.was_armed) {
         return Cue::None;
     }

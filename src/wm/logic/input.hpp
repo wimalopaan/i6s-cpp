@@ -6,14 +6,15 @@
 #include <cstdint>
 #include <cstdlib>
 
+#include "wm/board.hpp"
 #include "wm/logic/power.hpp"
 #include "wm/logic/storage.hpp"
 #include "wm/logic/switches.hpp"
 
 namespace wm::logic::input {
 
-inline constexpr std::size_t kAuxCount = 10;
-inline constexpr std::size_t kRawCount = 15;
+inline constexpr std::size_t kAuxCount = board::kAuxCount;
+inline constexpr std::size_t kRawCount = board::kRawCount;
 inline constexpr uint16_t kDetentDeadband = 16;
 inline constexpr uint16_t kHallDeadband = 3;
 inline constexpr uint16_t kBatteryRawIndex = 10;  // PC0
@@ -38,7 +39,7 @@ struct Gimbals {
     int16_t lh = 0;
 };
 
-/// Normalized potentiometers VRA..VRF (-1000..+1000).
+/// Normalized potentiometers VRA..VRF, VRG on I6S (-1000..+1000).
 struct Pots {
     int16_t vr1 = 0;
     int16_t vr2 = 0;
@@ -46,6 +47,7 @@ struct Pots {
     int16_t vr4 = 0;
     int16_t vr5 = 0;
     int16_t vr6 = 0;
+    int16_t vr7 = 0;
 };
 
 struct InputState {
@@ -57,21 +59,18 @@ struct InputState {
     Raw raw{};
 };
 
-enum class AdcMode : uint8_t { Default = 0, TwoPos, ThreePos, SixPos, Pot, PotDetent, InstantTrim };
+// Stored values: the I6S inserts "Off" at 1; on the I6X Off is never stored.
+#if WM_PCB_I6S
+enum class AdcMode : uint8_t { Default = 0, Off, TwoPos, ThreePos, SixPos, Pot, PotDetent, InstantTrim };
+#else
+enum class AdcMode : uint8_t { Default = 0, TwoPos, ThreePos, SixPos, Pot, PotDetent, InstantTrim, Off = 0xFF };
+#endif
 
 constexpr AdcMode mode_from_u8(const uint8_t val) {
-    switch (val) {
-        case 1: return AdcMode::TwoPos;
-        case 2: return AdcMode::ThreePos;
-        case 3: return AdcMode::SixPos;
-        case 4: return AdcMode::Pot;
-        case 5: return AdcMode::PotDetent;
-        case 6: return AdcMode::InstantTrim;
-        default: return AdcMode::Default;
-    }
+    return val <= board::kMaxAdcMode ? static_cast<AdcMode>(val) : AdcMode::Default;
 }
 
-/// Effective mode for aux index 0..9 (0..3: SA..SD, 4..5: VRA..VRB, 6..9: VRC..VRF).
+/// Effective mode for aux index 0..kAuxCount-1 (0..3: SA..SD, 4..5: VRA..VRB, 6..: VRC..VRF/VRG).
 constexpr AdcMode resolve_mode(const std::size_t idx, const uint8_t val) {
     const AdcMode mode = mode_from_u8(val);
     if (mode != AdcMode::Default) {
@@ -79,14 +78,14 @@ constexpr AdcMode resolve_mode(const std::size_t idx, const uint8_t val) {
     }
     switch (idx) {
         case 0: return AdcMode::TwoPos;     // SA
-        case 1: return AdcMode::TwoPos;     // SB (i6X default)
+        case 1: return board::kIsI6S ? AdcMode::ThreePos : AdcMode::TwoPos;  // SB
         case 2: return AdcMode::ThreePos;   // SC
         case 3: return AdcMode::TwoPos;     // SD
         default: return AdcMode::Pot;
     }
 }
 
-/// Raw ADC index for aux index 0..9.
+/// Raw ADC index for aux index 0..kAuxCount-1.
 constexpr std::size_t aux_index_to_raw(const std::size_t ch) {
     switch (ch) {
         case 0: return 4;   // SA: PA4
@@ -98,7 +97,8 @@ constexpr std::size_t aux_index_to_raw(const std::size_t ch) {
         case 6: return 11;  // VRC: ext ADC 1
         case 7: return 12;  // VRD: ext ADC 2
         case 8: return 13;  // VRE: ext ADC 3
-        default: return 14; // VRF: ext ADC 4
+        case 9: return 14;  // VRF: ext ADC 4
+        default: return board::kIsI6S ? 15 : 14;  // VRG: PC5 (I6S ext ADC 5)
     }
 }
 
@@ -199,10 +199,13 @@ private:
     }
 };
 
-/// Board switches SE..SWL. SE/SF are the PC12/PC15 pin levels (low = Down).
+/// GPIO switch levels (low = Down). I6X: SE/SF on PC12/PC15. I6S: SE/SF are the rear buttons and SG/SH the
+/// J4 buttons, already gated by their configuration (hw::board_switches).
 struct BoardSwitches {
     bool se_high = true;
     bool sf_high = true;
+    bool sg_high = true;
+    bool sh_high = true;
 };
 
 struct Calibration {
@@ -263,9 +266,15 @@ constexpr Switches decode_switches(const Raw& raw, const BoardSwitches& board, c
     s.sc = mode(2) == AdcMode::TwoPos ? decode_switch_2pos(raw[8]) : decode_switch_3pos(raw[8]);
     s.sd = mode(3) == AdcMode::ThreePos ? decode_switch_3pos(raw[9]) : decode_switch_2pos(raw[9]);
 
-    if (c.ext_switches) {
-        s.se = board.se_high ? SwitchPos::Up : SwitchPos::Down;
-        s.sf = board.sf_high ? SwitchPos::Up : SwitchPos::Down;
+    const auto level = [](const bool high) { return high ? SwitchPos::Up : SwitchPos::Down; };
+    if constexpr (board::kIsI6S) {
+        s.se = level(board.se_high);
+        s.sf = level(board.sf_high);
+        s.sg = level(board.sg_high);
+        s.sh = level(board.sh_high);
+    } else if (c.ext_switches) {
+        s.se = level(board.se_high);
+        s.sf = level(board.sf_high);
     }
 
     if (c.ext_adc) {
@@ -278,6 +287,9 @@ constexpr Switches decode_switches(const Raw& raw, const BoardSwitches& board, c
         s.swj = ext(7);
         s.swk = ext(8);
         s.swl = ext(9);
+        if constexpr (board::kIsI6S) {
+            s.swm = ext(10);
+        }
     }
     return s;
 }
@@ -300,6 +312,7 @@ constexpr InputState process(const Raw& raw, const BoardSwitches& board, Calibra
         const AdcMode mode = resolve_mode(i, c.adc_modes[i]);
         int16_t v = 0;
         switch (mode) {
+            case AdcMode::Off: v = 0; break;
             case AdcMode::PotDetent: v = c.aux[i].normalize_detent({r}, {kDetentDeadband}); break;
             case AdcMode::TwoPos:
             case AdcMode::InstantTrim: v = r < 2048 ? -1000 : 1000; break;
@@ -323,6 +336,9 @@ constexpr InputState process(const Raw& raw, const BoardSwitches& board, Calibra
         .vr5 = st.aux_pots[8],
         .vr6 = st.aux_pots[9],
     };
+    if constexpr (board::kIsI6S) {
+        st.pots.vr7 = st.aux_pots[10];
+    }
 
     st.switches = decode_switches(raw, board, c);
 

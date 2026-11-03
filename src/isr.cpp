@@ -13,7 +13,11 @@ void SysTick_Handler() {
     wm::time::on_tick();
 }
 
+#if WM_PCB_I6S
+void USART1_IRQHandler() {
+#else
 void USART2_IRQHandler() {
+#endif
     wm::hw::uart::on_irq();
 }
 

@@ -30,7 +30,7 @@ constexpr std::string_view label(const Protocol p) {
 
 /// Hardware state that follows the protocol.
 struct Link {
-    bool crsf_uart{false};   // CRSF on USART2 and its module power
+    bool crsf_uart{false};   // CRSF on the CRSF USART and its module power
     bool rf_silenced{false}; // A7105 muted, so it does not transmit AFHDS2A frames
     friend constexpr bool operator==(const Link&, const Link&) = default;
 };

@@ -34,7 +34,7 @@ inline constexpr uint32_t kTelemetryTimeoutMs = 1000;
 inline constexpr uint32_t kPingPeriodMs = 1000;
 inline constexpr std::size_t kMaxRxBytesPerPoll = 128;
 
-/// Enables or disables CRSF on USART2 and the module power switch.
+/// Enables or disables CRSF on the CRSF USART (USART2 / USART1 on the FS-i6S) and the module power switch.
 inline void set_enabled(const bool enabled, const uint8_t baud_idx, const uart::Duplex duplex) {
     const bool half_duplex = duplex == uart::Duplex::Half;
     if (enabled == g_enabled &&
@@ -130,7 +130,7 @@ inline void on_param_entry(std::span<const uint8_t> p, const uint32_t now_ms) {
 
 }  // namespace detail
 
-/// Drains USART2 RX, updates telemetry and the parameter menu. Call regularly from the main loop.
+/// Drains the CRSF USART RX, updates telemetry and the parameter menu. Call regularly from the main loop.
 inline void poll_telemetry(const uint32_t now_ms) {
     if (!g_enabled) {
         return;

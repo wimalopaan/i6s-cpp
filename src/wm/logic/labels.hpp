@@ -23,9 +23,12 @@ constexpr std::string_view model_type_label(const uint8_t type) {
 }
 
 // Index matches the switch condition codes used by mixer::is_switch_active (0 = always on).
-inline constexpr std::array<std::string_view, 23> kSwitchCondNames{
+inline constexpr std::array<std::string_view, board::kMaxSwitchCond + 1> kSwitchCondNames{
     "ON",  "SA^", "SAv", "SB^", "SB-", "SBv", "SC^", "SC-", "SCv", "SD^", "SDv", "SE^",
     "SEv", "SF^", "SFv", "SG^", "SGv", "SH^", "SHv", "SWI^", "SWIv", "SWJ^", "SWJv",
+#if WM_PCB_I6S
+    "SWK^", "SWKv", "SWL^", "SWLv", "SWM^", "SWMv",
+#endif
 };
 
 constexpr std::string_view switch_cond_label(const uint8_t cond) {
@@ -77,11 +80,15 @@ inline constexpr std::array<std::string_view, 42> kWeightSrcNames{
 };
 
 // Source names indexed by the aux channel source code (0 = None).
-inline constexpr std::array<std::string_view, 46> kSourceNames{
+inline constexpr std::array<std::string_view, board::kSourceCount> kSourceNames{
     "None", "Roll", "Pitch", "Thr", "Yaw", "VRA", "VRB", "SA", "SB", "SC", "SD", "MAX", "CH1",
     "CH2", "CH3", "CH4", "CH5", "CH6", "CH7", "CH8", "CH9", "CH10", "CH11", "CH12", "CH13", "CH14",
     "CH15", "CH16", "CH17", "CH18", "Thr+", "SE", "SF", "SG", "SH", "SWI", "SWJ", "VRC", "VRD",
-    "VRE", "VRF", "GV1", "GV2", "GV3", "GV4", "GV5",
+    "VRE", "VRF",
+#if WM_PCB_I6S
+    "VRG", "SWK", "SWL", "SWM",
+#endif
+    "GV1", "GV2", "GV3", "GV4", "GV5",
 };
 
 // Channel function name. Wing/tail mix replaces the stick names on channels 1, 2, 4 and 6.

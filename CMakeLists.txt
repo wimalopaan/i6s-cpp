@@ -9,6 +9,23 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(WM_BUILD_TESTS "Build host-side logic tests" ON)
 option(USE_USB "Include the USB device stack (removing it saves flash)" ON)
 
+# Target board: I6X (FlySky FS-i6X, default) or I6S (FlySky FS-i6S: touch screen, rear buttons, power latch).
+set(PCB "I6X" CACHE STRING "Target board (I6X or I6S)")
+set_property(CACHE PCB PROPERTY STRINGS I6X I6S)
+if(PCB STREQUAL "")
+    set(PCB "I6X")
+endif()
+string(TOUPPER "${PCB}" PCB)
+if(NOT PCB MATCHES "^(I6X|I6S)$")
+    message(FATAL_ERROR "PCB must be I6X or I6S, got '${PCB}'")
+endif()
+if(PCB STREQUAL "I6S")
+    set(WM_PCB_I6S 1)
+else()
+    set(WM_PCB_I6S 0)
+endif()
+message(STATUS "Target board: ${PCB}")
+
 if(CMAKE_CROSSCOMPILING)
     # Short commit hash for the system info screen, as the Rust build.rs does. The reflog changes on every commit, so
     # re-configuring picks up the new hash.
@@ -49,6 +66,7 @@ if(CMAKE_CROSSCOMPILING)
     target_compile_definitions(i6s_fw PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:STM32F072xB>
         "$<$<COMPILE_LANGUAGE:CXX>:WM_FW_VERSION=\"${PROJECT_VERSION}\";WM_GIT_HASH=\"${WM_GIT_HASH}\">"
+        $<$<COMPILE_LANGUAGE:CXX>:WM_PCB_I6S=${WM_PCB_I6S}>
         $<$<AND:$<BOOL:${USE_USB}>,$<COMPILE_LANGUAGE:CXX>>:WM_USE_USB=1>)
     target_compile_options(i6s_fw PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
@@ -81,7 +99,7 @@ elseif(WM_BUILD_TESTS)
     enable_testing()
     add_executable(host_logic_tests tests/host/test_logic.cpp)
     target_include_directories(host_logic_tests PRIVATE src)
-    target_compile_definitions(host_logic_tests PRIVATE $<$<BOOL:${USE_USB}>:WM_USE_USB=1>)
+    target_compile_definitions(host_logic_tests PRIVATE WM_PCB_I6S=${WM_PCB_I6S} $<$<BOOL:${USE_USB}>:WM_USE_USB=1>)
     target_compile_options(host_logic_tests PRIVATE -Wall -Wextra -fno-exceptions -fno-rtti)
     add_test(NAME host_logic_tests COMMAND host_logic_tests)
 endif()

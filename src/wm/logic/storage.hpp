@@ -9,6 +9,8 @@
 #include <span>
 #include <type_traits>
 
+#include "wm/board.hpp"
+
 namespace wm::logic::storage {
 
 // Layout of the external I2C EEPROM (FT24C128A, 16 KB, 64-byte pages):
@@ -36,6 +38,15 @@ inline constexpr std::size_t kModelSlotSize = 768;
 inline constexpr std::size_t kLegacyModelV1Size = 128;
 inline constexpr std::size_t kMaxLegacyModelSize = 364;
 
+/// Older ModelConfig payload lengths that are upgraded by copying them over the defaults.
+constexpr bool is_legacy_prefix_len(const std::size_t len) {
+    if constexpr (board::kIsI6S) {
+        return len == 348 || len == kMaxLegacyModelSize;
+    } else {
+        return len == 348 || len == 352 || len == 360 || len == kMaxLegacyModelSize;
+    }
+}
+
 // Raw ADC calibration limits (same values as hw/adc.hpp).
 inline constexpr uint16_t kAdcMin = 0;
 inline constexpr uint16_t kAdcCenter = 2048;
@@ -50,12 +61,13 @@ enum class Status : uint8_t {
     CrcMismatch,
 };
 
-/// External EEPROM health shown on diagnostics page 4 (Rust `EepromStatus`; the bus is always I2C2).
+/// External EEPROM health shown on diagnostics page 4 (Rust `EepromStatus`).
 struct EepromStatus {
     uint8_t addr{0x50};    // 7-bit address of the device that answered the probe
     bool detected{false};
     bool read_ok{false};   // radio config was read from EEPROM at boot
     bool write_err{false}; // the most recent write failed
+    uint8_t bus{2};        // 2 = I2C2 (PB10/PB11), 1 = I2C1 fallback (I6S, PB8/PB9)
     friend constexpr bool operator==(const EepromStatus&, const EepromStatus&) = default;
 };
 
@@ -99,7 +111,7 @@ struct RadioConfig {
     uint8_t lcd_contrast;
     uint8_t usb_mode;
     std::array<ChannelCalib, 4> sticks;
-    std::array<PotCalib, 10> aux_pots;
+    std::array<PotCalib, board::kAuxCount> aux_pots;
     uint8_t ext_module_pwr;
     uint8_t tone_style;
     uint16_t servo_rate_hz;
@@ -107,7 +119,7 @@ struct RadioConfig {
     uint8_t rx_serial_proto;
     uint8_t ext_switches;
     uint8_t ext_adc;
-    std::array<uint8_t, 10> adc_modes;
+    std::array<uint8_t, board::kAuxCount> adc_modes;
     uint8_t stick_mode;
     std::array<uint8_t, 4> reserved_telem;
     uint8_t trainer_config;
@@ -118,14 +130,26 @@ struct RadioConfig {
     uint8_t switch_beep;
     uint8_t gimbal_type;
     uint8_t stick_invert_mask;
+#if WM_PCB_I6S
+    std::array<uint8_t, 2> pad_align;
+#else
     uint8_t pad_align;
+#endif
 };
-static_assert(sizeof(RadioConfig) == 140);
 static_assert(offsetof(RadioConfig, sticks) == 16);
 static_assert(offsetof(RadioConfig, aux_pots) == 48);
+#if WM_PCB_I6S
+static_assert(sizeof(RadioConfig) == 148);
+static_assert(offsetof(RadioConfig, servo_rate_hz) == 116);
+static_assert(offsetof(RadioConfig, adc_modes) == 122);
+static_assert(offsetof(RadioConfig, trainer_config) == 138);
+static_assert(offsetof(RadioConfig, pad_align) == 146);
+#else
+static_assert(sizeof(RadioConfig) == 140);
 static_assert(offsetof(RadioConfig, servo_rate_hz) == 110);
 static_assert(offsetof(RadioConfig, adc_modes) == 116);
 static_assert(offsetof(RadioConfig, pad_align) == 139);
+#endif
 
 struct MixLine {
     uint8_t target_ch;
@@ -173,6 +197,18 @@ struct ModelConfig {
     uint16_t servo_rate_hz;
     uint8_t rx_serial_proto;
     uint8_t crsf_half_duplex;
+#if WM_PCB_I6S
+    // flysky-i6s-rs tail layout: vario block before crsf_arm_mode, gvars and telem_slots.
+    uint8_t vario_switch;
+    uint8_t vario_climb_deadband;
+    uint8_t vario_sink_deadband;
+    uint8_t vario_sink_mode;
+    uint8_t vario_motor_mute;
+    uint8_t crsf_arm_mode;
+    std::array<int16_t, 5> gvars;
+    std::array<uint8_t, 4> telem_slots;
+    std::array<uint8_t, 2> pad_gvar;
+#else
     uint8_t crsf_arm_mode;
     uint8_t pad_end;
     std::array<int16_t, 5> gvars;
@@ -183,13 +219,21 @@ struct ModelConfig {
     uint8_t vario_motor_mute;
     uint8_t pad_vario;
     std::array<uint8_t, 4> telem_slots;
+#endif
 };
 static_assert(sizeof(ModelConfig) == 368);
 static_assert(offsetof(ModelConfig, rx_id) == 12);
 static_assert(offsetof(ModelConfig, timer_secs) == 58);
 static_assert(offsetof(ModelConfig, mixes) == 80);
+#if WM_PCB_I6S
+static_assert(offsetof(ModelConfig, vario_switch) == 346);
+static_assert(offsetof(ModelConfig, crsf_arm_mode) == 351);
+static_assert(offsetof(ModelConfig, gvars) == 352);
+static_assert(offsetof(ModelConfig, telem_slots) == 362);
+#else
 static_assert(offsetof(ModelConfig, gvars) == 348);
 static_assert(offsetof(ModelConfig, telem_slots) == 364);
+#endif
 
 /// ModelConfig v1 (128 bytes) as written by earlier firmware releases.
 struct LegacyMixLineV1 {
@@ -241,7 +285,7 @@ struct RadioStorage {
     RadioConfig radio;
     ModelConfig active_model;
 };
-static_assert(sizeof(RadioStorage) == 508);
+static_assert(sizeof(RadioStorage) == (board::kIsI6S ? 516 : 508));
 
 struct SlotHeader {
     uint16_t magic;
@@ -353,7 +397,7 @@ constexpr RadioConfig default_radio_config() {
         .lcd_contrast = 37,
         .usb_mode = 0,
         .sticks = filled<ChannelCalib, 4>(ChannelCalib{kAdcMin, kAdcCenter, kAdcMax, 0}),
-        .aux_pots = filled<PotCalib, 10>(PotCalib{kAdcMin, kAdcCenter, kAdcMax}),
+        .aux_pots = filled<PotCalib, board::kAuxCount>(PotCalib{kAdcMin, kAdcCenter, kAdcMax}),
         .ext_module_pwr = 0,
         .tone_style = 1,
         .servo_rate_hz = 50,
@@ -372,7 +416,7 @@ constexpr RadioConfig default_radio_config() {
         .switch_beep = 1,
         .gimbal_type = 0,
         .stick_invert_mask = 0x03,
-        .pad_align = 0,
+        .pad_align = {},
     };
 }
 
@@ -414,6 +458,17 @@ constexpr ModelConfig default_model_config(const std::size_t index) {
         .servo_rate_hz = 50,
         .rx_serial_proto = 0,
         .crsf_half_duplex = 0,
+#if WM_PCB_I6S
+        .vario_switch = 0,
+        .vario_climb_deadband = 2,
+        .vario_sink_deadband = 5,
+        .vario_sink_mode = 1,
+        .vario_motor_mute = 1,
+        .crsf_arm_mode = 0,
+        .gvars = {},
+        .telem_slots = {0, 1, 2, 3},
+        .pad_gvar = {},
+#else
         .crsf_arm_mode = 0,
         .pad_end = 0,
         .gvars = {},
@@ -424,6 +479,7 @@ constexpr ModelConfig default_model_config(const std::size_t index) {
         .vario_motor_mute = 1,
         .pad_vario = 0,
         .telem_slots = {0, 1, 2, 3},
+#endif
     };
 }
 
@@ -538,14 +594,15 @@ constexpr void sanitize_model(ModelConfig& m, const uint8_t active_model) {
         m.aux_channels[3] == 0 && m.aux_channels[4] == 0 && m.aux_channels[5] == 0) {
         m.aux_channels = {7, 8, 5, 6, 9, 10, 0, 0, 0, 0, 0, 0, 0, 0};
     }
+    // Aux sources end before GV1 (I6S: VRG and SWK..SWM are 41..44, which flysky-i6s-rs still clears as > 40).
     for (auto& src : m.aux_channels) {
-        if (src > 40) {
+        if (src >= board::kSourceGv1) {
             src = 0;
         }
     }
     for (auto& mix : m.mixes) {
-        if (mix.target_ch > 18 || mix.source > 45 || mix.weight_src > 41 || mix.mode > 2 ||
-            mix.switch_sel > 22) {
+        if (mix.target_ch > 18 || mix.source >= board::kSourceCount || mix.weight_src > 41 || mix.mode > 2 ||
+            mix.switch_sel > board::kMaxSwitchCond) {
             mix = disabled_mix();
         }
     }
@@ -560,7 +617,7 @@ constexpr void sanitize_model(ModelConfig& m, const uint8_t active_model) {
         m.thr_curve_pts = 5;
         m.thr_curve = kDefaultThrCurve;
     }
-    if (m.arm_switch > 22) {
+    if (m.arm_switch > board::kMaxSwitchCond) {
         m.arm_switch = 0;
     }
     if (m.timer_source > 17) {
@@ -584,7 +641,7 @@ constexpr void sanitize_model(ModelConfig& m, const uint8_t active_model) {
     if (m.name[0] == 0 || m.name[0] == 0xFF) {
         m.name = default_name(active_model);
     }
-    if (m.vario_switch > 23) {
+    if (m.vario_switch > board::kMaxSwitchCond + 1) {
         m.vario_switch = 0;
     }
     for (auto& slot : m.telem_slots) {
@@ -678,7 +735,7 @@ constexpr void sanitize(RadioStorage& s) {
         sanitize_calib(pot);
     }
     for (auto& mode : r.adc_modes) {
-        if (mode > 6) {
+        if (mode > board::kMaxAdcMode) {
             mode = 0;
         }
     }
@@ -740,8 +797,7 @@ Status load_slot(const uint16_t addr, T& dst) {
             save_slot<Dev>(addr, upgraded);
             return Status::Ok;
         }
-        if (hdr.magic == kSlotMagic && hdr.flags == kFlagValid &&
-            (hdr.len == 348 || hdr.len == 352 || hdr.len == 360 || hdr.len == kMaxLegacyModelSize)) {
+        if (hdr.magic == kSlotMagic && hdr.flags == kFlagValid && is_legacy_prefix_len(hdr.len)) {
             std::array<uint8_t, kMaxLegacyModelSize> prev{};
             const auto prefix = std::span<uint8_t>(prev).first(hdr.len);
             if (const Status s = Dev::read(payload_addr, prefix); s != Status::Ok) {
@@ -755,7 +811,10 @@ Status load_slot(const uint16_t addr, T& dst) {
             for (std::size_t i = 0; i < hdr.len; ++i) {
                 image[i] = prev[i];
             }
-            const auto upgraded = from_bytes<ModelConfig>(image);
+            auto upgraded = from_bytes<ModelConfig>(image);
+            if constexpr (board::kIsI6S) {
+                upgraded.telem_slots = {0, 1, 2, 3};
+            }
             dst = upgraded;
             save_slot<Dev>(addr, upgraded);
             return Status::Ok;
@@ -779,8 +838,7 @@ Status load_slot(const uint16_t addr, T& dst) {
 /// Header lengths load_slot accepts for a model slot: the current layout and every legacy one.
 /// All of them start with the 10-byte name.
 constexpr bool is_model_slot_len(const uint16_t len) {
-    return len == sizeof(ModelConfig) || len == kLegacyModelV1Size || len == 348 || len == 352 || len == 360 ||
-           len == kMaxLegacyModelSize;
+    return len == sizeof(ModelConfig) || len == kLegacyModelV1Size || is_legacy_prefix_len(len);
 }
 
 /// Reads only the header and the name of a model slot (Rust `peek_model_name`). Nothing for an empty,

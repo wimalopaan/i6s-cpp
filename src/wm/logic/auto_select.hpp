@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 
+#include "wm/board.hpp"
 #include "wm/logic/input.hpp"
 #include "wm/logic/switches.hpp"
 
@@ -20,7 +21,7 @@ struct Sample {
     int16_t vr2{0};
 };
 
-// What moved since the previous tick. `sw_cond` is a condition code 1..26 (Rust `sw_change`),
+// What moved since the previous tick. `sw_cond` is a condition code 1..board::kMaxSwitchCond (Rust `sw_change`),
 // `dr_switch` is a dual-rate switch code 1..6 (Rust `dr_change`).
 struct Changes {
     std::optional<uint8_t> sw_cond{};
@@ -29,14 +30,24 @@ struct Changes {
     bool vr2{false};
 };
 
-inline constexpr std::size_t kTwoPosFieldCount = 12;  // SA..SWL in Rust detection order
+// SA..SWL (SWM on the I6S) in Rust detection order
+inline constexpr std::size_t kTwoPosFieldCount = board::kIsI6S ? 13 : 12;
 inline constexpr std::size_t kDrFieldCount = 6;       // SA..SF
+#if WM_PCB_I6S
+inline constexpr std::array<SwitchPos Switches::*, kTwoPosFieldCount> kFields{
+    &Switches::sa,  &Switches::sb,  &Switches::sc,  &Switches::sd,  &Switches::se,  &Switches::sf, &Switches::sg,
+    &Switches::sh,  &Switches::swi, &Switches::swj, &Switches::swk, &Switches::swl, &Switches::swm};
+
+// First condition code of each field. SB and SC are 3-pos (Up, Mid, Down); the others are 2-pos.
+inline constexpr std::array<uint8_t, kTwoPosFieldCount> kCondBase{1, 3, 6, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27};
+#else
 inline constexpr std::array<SwitchPos Switches::*, kTwoPosFieldCount> kFields{
     &Switches::sa,  &Switches::sb,  &Switches::sc,  &Switches::sd,  &Switches::se,  &Switches::sf,
     &Switches::sg,  &Switches::sh,  &Switches::swi, &Switches::swj, &Switches::swk, &Switches::swl};
 
 // First condition code of each field. SB and SC are 3-pos (Up, Mid, Down); the others are 2-pos.
 inline constexpr std::array<uint8_t, kTwoPosFieldCount> kCondBase{1, 3, 6, 9, 11, 13, 15, 17, 19, 21, 23, 25};
+#endif
 
 constexpr std::optional<uint8_t> condition_change(const Switches& now, const Switches& prev) {
     for (std::size_t i = 0; i < kFields.size(); ++i) {
@@ -90,6 +101,9 @@ static_assert(condition_change(Switches{.sb = SwitchPos::Mid}, Switches{}) == 4)
 static_assert(condition_change(Switches{.sb = SwitchPos::Down}, Switches{}) == 5);
 static_assert(condition_change(Switches{.swl = SwitchPos::Down}, Switches{}) == 26);
 static_assert(condition_change(Switches{}, Switches{}) == std::nullopt);
+#if WM_PCB_I6S
+static_assert(condition_change(Switches{.swm = SwitchPos::Down}, Switches{}) == 28);
+#endif
 static_assert(dr_switch_change(Switches{.sf = SwitchPos::Down}, Switches{}) == 6);
 static_assert(dr_switch_change(Switches{.swi = SwitchPos::Down}, Switches{}) == std::nullopt);
 static_assert(pot_moved(300, 0) && pot_moved(-300, 0) && !pot_moved(299, 0));

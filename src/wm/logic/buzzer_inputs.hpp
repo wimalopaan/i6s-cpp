@@ -39,12 +39,12 @@ struct ActivityTracker {
     }
 };
 
-// Vario setting: 0 is off, 1 is always on, and 2..=23 select arm condition 1..=22 (as in Rust).
+// Vario setting: 0 is off, 1 is always on, and 2..=kMaxSwitchCond+1 select arm condition 1..=kMaxSwitchCond (as in Rust).
 constexpr bool vario_switch_active(const uint8_t setting, const Switches& sw) {
     if (setting == 1) {
         return true;
     }
-    if (setting >= 2 && setting <= 23) {
+    if (setting >= 2 && setting <= board::kMaxSwitchCond + 1) {
         return mixer::eval_arm_switch(static_cast<uint8_t>(setting - 1), sw);
     }
     return false;

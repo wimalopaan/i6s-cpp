@@ -10,6 +10,7 @@
 #include <span>
 #include <string_view>
 
+#include "wm/board.hpp"
 #include "wm/logic/channels.hpp"
 #include "wm/logic/switches.hpp"
 
@@ -100,14 +101,17 @@ struct DeviceIdentity {
 constexpr DeviceIdentity identity(const UsbMode m) {
     switch (m) {
         case UsbMode::Serial:
-            return {VendorId{0x0483}, ProductId{0x5740}, "FS-i6X Serial", "FS-I6X-VCP"};
+            return {VendorId{0x0483}, ProductId{0x5740}, board::kIsI6S ? "FS-i6S Serial" : "FS-i6X Serial",
+                    board::kIsI6S ? "FS-I6S-VCP" : "FS-I6X-VCP"};
         case UsbMode::Composite:
-            return {VendorId{0x1209}, ProductId{0x4968}, "FS-i6X Radio", "FS-I6X-COMP"};
+            return {VendorId{0x1209}, ProductId{0x4968}, board::kIsI6S ? "FS-i6S Radio" : "FS-i6X Radio",
+                    board::kIsI6S ? "FS-I6S-COMP" : "FS-I6X-COMP"};
         case UsbMode::Joystick:
         case UsbMode::Off:
             break;
     }
-    return {VendorId{0x1209}, ProductId{0x4F54}, "FS-i6X Joystick", "FS-I6X-SIM"};
+    return {VendorId{0x1209}, ProductId{0x4F54}, board::kIsI6S ? "FS-i6S Joystick" : "FS-i6X Joystick",
+            board::kIsI6S ? "FS-I6S-SIM" : "FS-I6X-SIM"};
 }
 
 // Interface numbers in the configuration. HID goes first in composite mode, then the CDC pair.
@@ -408,7 +412,7 @@ constexpr std::size_t format_telemetry_json(const uint16_t battery_mv, std::span
     return w.ok ? w.pos : 0;
 }
 
-inline constexpr std::string_view kCliPrompt = "i6x> ";
+inline constexpr std::string_view kCliPrompt = board::kIsI6S ? "i6s> " : "i6x> ";
 inline constexpr std::string_view kHelpText =
     "Commands:\r\n"
     "  help      - Show this help\r\n"

@@ -69,6 +69,7 @@ struct Input {
     bool was_armed = false;
     bool menu_active = false;
     bool cancel_held = false;
+    bool reset_clicked = false;  // I6S rear button set to TIMER RESET was clicked
     int16_t throttle = 0;
     Switches switches{};
     vario::Millis dt{};
@@ -154,7 +155,10 @@ constexpr buzzer::Cue update(State& s, const Input& in) {
         s.cancel_waiting_release = false;
     }
 
-    if (!in.menu_active && in.cancel_held && !s.cancel_waiting_release && s.cooldown_ms == 0) {
+    if (in.reset_clicked && s.cooldown_ms == 0) {
+        manual_reset(s, in.config.limit);
+        cue = buzzer::Cue::TimerReset;
+    } else if (!in.menu_active && in.cancel_held && !s.cancel_waiting_release && s.cooldown_ms == 0) {
         s.cancel_hold_ms += dt;
         if (s.cancel_hold_ms >= kCancelHoldMs) {
             manual_reset(s, in.config.limit);

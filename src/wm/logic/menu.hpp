@@ -6,8 +6,10 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <utility>
 
 #include "wm/logic/auto_select.hpp"
+#include "wm/logic/jog.hpp"
 #include "wm/logic/buzzer.hpp"
 #include "wm/logic/channels.hpp"
 #include "wm/logic/crsf_config.hpp"
@@ -60,12 +62,12 @@ inline constexpr std::size_t kItemVarioRow = static_cast<std::size_t>(SetupRow::
 inline constexpr std::size_t kItemTelemRow = static_cast<std::size_t>(SetupRow::Telemetry);
 inline constexpr uint8_t kNameLen = 10;
 inline constexpr uint8_t kModelTypeCount = 5;
-inline constexpr uint8_t kArmSwitchCount = 23;
+inline constexpr uint8_t kArmSwitchCount = board::kMaxSwitchCond + 1;
 inline constexpr uint16_t kTimerStepSecs = 30;
 inline constexpr uint16_t kTimerMaxSecs = 3600;
 inline constexpr uint8_t kTimerSourceCount = 18;
-// Vario switch codes: 0 OFF, 1 ON, 2..23 arm conditions 1..22.
-inline constexpr uint8_t kVarioSwitchCount = 24;
+// Vario switch codes: 0 OFF, 1 ON, 2.. arm conditions 1..kMaxSwitchCond.
+inline constexpr uint8_t kVarioSwitchCount = board::kMaxSwitchCond + 2;
 inline constexpr uint8_t kVarioClimbMaxTenths = 10;
 inline constexpr uint8_t kVarioSinkMaxTenths = 20;
 inline constexpr std::size_t kVarioRows = 5;
@@ -100,27 +102,94 @@ inline constexpr std::size_t kItemWingMixer = 4;
 inline constexpr std::size_t kItemAuxChannels = 5;
 inline constexpr std::size_t kItemChannelReverse = 6;
 inline constexpr std::size_t kAuxChannelCount = 14;  // CH5..CH18
-// Aux source IDs offered by the Rust AUX_SOURCES list (None, sticks, VRA/VRB, SA..SD, SE, SF, SWI, SWJ, VRC, VRD).
+// Aux source IDs offered by the Rust AUX_SOURCES list (None, sticks, VRA/VRB, SA..SD, SE, SF, SWI, SWJ, VRC, VRD;
+// the I6S adds SG, SH, VRE..VRG and SWK..SWM).
+#if WM_PCB_I6S
+inline constexpr std::array<uint8_t, 25> kAuxSources{0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 31, 32,
+                                                     33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44};
+#else
 inline constexpr std::array<uint8_t, 17> kAuxSources{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 31, 32, 35, 36, 37, 38};
+#endif
 inline constexpr std::size_t kItemChannelMonitor = 8;
 inline constexpr std::size_t kItemCalibration = 9;
 inline constexpr std::size_t kItemDiagAnalog = 10;
 inline constexpr std::size_t kItemSystemInfo = 11;
 inline constexpr std::size_t kItemRadioSetup = 7;
-inline constexpr std::size_t kRadioRows = 16;
-inline constexpr std::size_t kRadioInputRow = 13;  // opens the Input Modes sub-screen
-inline constexpr std::size_t kRadioInputMaxRows = 10;
-inline constexpr std::size_t kAdcModeCount = 7;
+// Radio Setup row contents; the order per board is given by kRadioItems.
+enum class RadioItem : uint8_t {
+    ThrTrim, Beeper, Tones, BlTimer, BlLevel, Contrast, BatWarn, UsbMode, ModulePwr, ExtSwitches, ExtAdc,
+    StickMode, Gimbals, InputSetup, PpmOut, TrainerIn, J4Mode, RearLeft, RearRight, Touch, SwitchSound,
+};
+#if WM_PCB_I6S
+inline constexpr std::array<RadioItem, 20> kRadioItems{
+    RadioItem::ThrTrim,   RadioItem::Beeper,   RadioItem::Tones,     RadioItem::BlTimer,     RadioItem::BlLevel,
+    RadioItem::Contrast,  RadioItem::BatWarn,  RadioItem::UsbMode,   RadioItem::ModulePwr,   RadioItem::J4Mode,
+    RadioItem::RearLeft,  RadioItem::RearRight, RadioItem::Touch,    RadioItem::StickMode,   RadioItem::Gimbals,
+    RadioItem::SwitchSound, RadioItem::InputSetup, RadioItem::ExtAdc, RadioItem::PpmOut,     RadioItem::TrainerIn};
+#else
+inline constexpr std::array<RadioItem, 16> kRadioItems{
+    RadioItem::ThrTrim,   RadioItem::Beeper,  RadioItem::Tones,     RadioItem::BlTimer,    RadioItem::BlLevel,
+    RadioItem::Contrast,  RadioItem::BatWarn, RadioItem::UsbMode,   RadioItem::ModulePwr,  RadioItem::ExtSwitches,
+    RadioItem::ExtAdc,    RadioItem::StickMode, RadioItem::Gimbals, RadioItem::InputSetup, RadioItem::PpmOut,
+    RadioItem::TrainerIn};
+#endif
+inline constexpr std::size_t kRadioRows = kRadioItems.size();
+
+constexpr std::size_t radio_row_of(const RadioItem item) {
+    for (std::size_t i = 0; i < kRadioItems.size(); ++i) {
+        if (kRadioItems[i] == item) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+inline constexpr std::size_t kRadioInputRow = radio_row_of(RadioItem::InputSetup);  // opens the Input Modes sub-screen
+inline constexpr std::size_t kRadioInputMaxRows = board::kAuxCount;
+inline constexpr std::size_t kAdcModeCount = board::kMaxAdcMode + 1;
 inline constexpr uint8_t kTrainerPpmOut = 0x01;
 inline constexpr uint8_t kTrainerPpmIn = 0x02;
-inline constexpr std::array<std::string_view, kRadioRows> kRadioLabels{
-    "Thr Trim:", "Beeper:",   "Tones:",     "BL Timer:",  "BL Level:", "Contrast:", "Bat Warn:", "USB Mode:",
-    "PC13 Pwr:", "Ext Sw:",   "P7 Analog:", "Stick Mode:", "Gimbals:",  "Input Setup", "PPM Out:", "Trainer In:"};
+
+constexpr std::string_view radio_label(const RadioItem item) {
+    switch (item) {
+        case RadioItem::ThrTrim: return "Thr Trim:";
+        case RadioItem::Beeper: return "Beeper:";
+        case RadioItem::Tones: return "Tones:";
+        case RadioItem::BlTimer: return "BL Timer:";
+        case RadioItem::BlLevel: return "BL Level:";
+        case RadioItem::Contrast: return "Contrast:";
+        case RadioItem::BatWarn: return "Bat Warn:";
+        case RadioItem::UsbMode: return "USB Mode:";
+        case RadioItem::ModulePwr: return board::kIsI6S ? "H1 PF6 Pwr:" : "PC13 Pwr:";
+        case RadioItem::ExtSwitches: return "Ext Sw:";
+        case RadioItem::ExtAdc: return board::kIsI6S ? "Ext ADC (PC):" : "P7 Analog:";
+        case RadioItem::StickMode: return "Stick Mode:";
+        case RadioItem::Gimbals: return "Gimbals:";
+        case RadioItem::InputSetup: return board::kIsI6S ? "Inputs:" : "Input Setup";
+        case RadioItem::PpmOut: return "PPM Out:";
+        case RadioItem::TrainerIn: return "Trainer In:";
+        case RadioItem::J4Mode: return "J4 Mode:";
+        case RadioItem::RearLeft: return "Rear L:";
+        case RadioItem::RearRight: return "Rear R:";
+        case RadioItem::Touch: return "Touch:";
+        case RadioItem::SwitchSound: return "Sw Sound:";
+    }
+    return "";
+}
+
+#if WM_PCB_I6S
+inline constexpr std::array<std::string_view, kRadioInputMaxRows> kAuxInputNames{
+    "SA (PA4):", "SB (PA5):", "SC (PB0):", "SD (PB1):", "VRA (PA6):", "VRB (PA7):",
+    "VRC (PC1):", "VRD (PC2):", "VRE (PC3):", "VRF (PC4):", "VRG (PC5):"};
+inline constexpr std::array<std::string_view, kAdcModeCount> kAdcModeNames{
+    "DEFAULT", "OFF", "2-POS", "3-POS", "6-POS", "POT", "POT-D", "INST-TRIM"};
+#else
 inline constexpr std::array<std::string_view, kRadioInputMaxRows> kAuxInputNames{
     "SA (PA4):", "SB (PA5):", "SC (PB0):", "SD (PB1):", "VRA (PA6):",
     "VRB (PA7):", "VRC (PC2):", "VRD (PC3):", "VRE (PC4):", "VRF (PC5):"};
 inline constexpr std::array<std::string_view, kAdcModeCount> kAdcModeNames{
     "DEFAULT", "2-POS", "3-POS", "6-POS", "POT", "POT-D", "INST-TRIM"};
+#endif
 inline constexpr std::size_t kMonitorPages = 3;
 inline constexpr std::size_t kMonitorRows = 6;
 inline constexpr std::size_t kDiagPages = 5;
@@ -166,6 +235,8 @@ struct Input {
     const crsf::menu::Loader* crsf_loader{nullptr};
     const crsf::menu::Command* crsf_command{nullptr};
     const crsf::config::DeviceList* crsf_devices{nullptr};
+    int16_t vr1{0};  // rear pots, used as jog wheels on boards with board::kHasJogWheels
+    int16_t vr2{0};
 };
 
 struct ListPos {
@@ -209,6 +280,7 @@ struct State {
     model_copy::Picker copy{};  // destination chosen on the Copy row
     Repeat up{};
     Repeat down{};
+    jog::Wheel jog{};
 };
 
 struct Nav {
@@ -738,6 +810,16 @@ inline constexpr std::array<std::string_view, kDrFields> kDrLabels{
     "Switch:", "Channel:", "Hi Rate:", "Lo Rate:", "Hi Expo:", "Lo Expo:",
 };
 
+// SE/SF exist with the I6X external switch board, or on the I6S when the rear button acts as RC switch
+// (flysky-i6s-rs still checks ext_switches, which has no setup row there, so SE/SF could never be picked).
+constexpr bool has_switch_se(const storage::RadioConfig& r) {
+    return board::kIsI6S ? r.rear_left_func == 0 : r.ext_switches != 0;
+}
+
+constexpr bool has_switch_sf(const storage::RadioConfig& r) {
+    return board::kIsI6S ? r.rear_right_func == 0 : r.ext_switches != 0;
+}
+
 // Mirrors the firmware rules: SA..SD need a 2/3-position or instant-trim input, SE/SF need the external switch board.
 constexpr bool is_dr_switch_available(const uint8_t sw, const storage::RadioConfig& r) {
     if (sw == 0) {
@@ -748,8 +830,11 @@ constexpr bool is_dr_switch_available(const uint8_t sw, const storage::RadioConf
         return mode == input::AdcMode::TwoPos || mode == input::AdcMode::ThreePos ||
                mode == input::AdcMode::InstantTrim;
     }
-    if (sw <= 6) {
-        return r.ext_switches != 0;
+    if (sw == 5) {
+        return has_switch_se(r);
+    }
+    if (sw == 6) {
+        return has_switch_sf(r);
     }
     return false;
 }
@@ -971,8 +1056,11 @@ constexpr bool is_source_available(const uint8_t src, const storage::RadioConfig
     if (src == 30) {
         return true;  // Thr+
     }
-    if (src <= 32) {
-        return r.ext_switches != 0;  // SE, SF
+    if (src == 31) {
+        return has_switch_se(r);
+    }
+    if (src == 32) {
+        return has_switch_sf(r);
     }
     if (src <= 34) {
         return r.j4_sg_sh_en != 0;  // SG, SH
@@ -986,7 +1074,15 @@ constexpr bool is_source_available(const uint8_t src, const storage::RadioConfig
     if (src <= 40) {
         return ext_adc && is_pot_input(adc_mode_at(r, src - 31u));  // VRC..VRF
     }
-    return src <= 45;  // GV1..GV5
+    if constexpr (board::kIsI6S) {
+        if (src == 41) {
+            return ext_adc && is_pot_input(adc_mode_at(r, 10));  // VRG
+        }
+        if (src <= 44) {
+            return ext_adc && is_two_or_three_pos(adc_mode_at(r, src - 34u));  // SWK..SWM
+        }
+    }
+    return src < board::kSourceCount;  // GV1..GV5
 }
 
 constexpr bool is_weight_src_available(const uint8_t ws, const storage::ModelConfig& m) {
@@ -1016,9 +1112,9 @@ constexpr bool is_switch_cond_available(const uint8_t cond, const storage::Radio
         case 9:
         case 10: return is_switch_input(adc_mode_at(r, 3));
         case 11:
-        case 12:
+        case 12: return has_switch_se(r);
         case 13:
-        case 14: return r.ext_switches != 0;
+        case 14: return has_switch_sf(r);
         case 15:
         case 16:
         case 17:
@@ -1027,6 +1123,14 @@ constexpr bool is_switch_cond_available(const uint8_t cond, const storage::Radio
         case 20: return r.ext_adc != 0 && is_two_or_three_pos(adc_mode_at(r, 6));
         case 21:
         case 22: return r.ext_adc != 0 && is_two_or_three_pos(adc_mode_at(r, 7));
+#if WM_PCB_I6S
+        case 23:
+        case 24: return r.ext_adc != 0 && is_two_or_three_pos(adc_mode_at(r, 8));
+        case 25:
+        case 26: return r.ext_adc != 0 && is_two_or_three_pos(adc_mode_at(r, 9));
+        case 27:
+        case 28: return r.ext_adc != 0 && is_two_or_three_pos(adc_mode_at(r, 10));
+#endif
         default: return false;
     }
 }
@@ -1358,23 +1462,31 @@ constexpr void toggle_flag(uint8_t& v) {
 
 // Advances one Radio Setup row with the same cycle rules as the Rust menu.
 constexpr void cycle_radio_row(storage::RadioConfig& r, const std::size_t row) {
-    switch (row) {
-        case 0: r.throttle_trim = static_cast<uint8_t>((r.throttle_trim + 1) % 3); break;
-        case 1: toggle_flag(r.audio_enabled); break;
-        case 2: toggle_flag(r.tone_style); break;
-        case 3: r.backlight_timeout = static_cast<uint8_t>((r.backlight_timeout + 1) % 4); break;
-        case 4: r.backlight_brightness = r.backlight_brightness >= 10 ? 1 : static_cast<uint8_t>(r.backlight_brightness + 1); break;
-        case 5: r.lcd_contrast = r.lcd_contrast >= 50 ? 20 : static_cast<uint8_t>(std::min<unsigned>(r.lcd_contrast + 3u, 50u)); break;
-        case 6: r.vbat_warn_deci = r.vbat_warn_deci >= 50 ? 40 : static_cast<uint8_t>(r.vbat_warn_deci + 1); break;
-        case 7: r.usb_mode = static_cast<uint8_t>((r.usb_mode + 1) % 4); break;
-        case 8: toggle_flag(r.ext_module_pwr); break;
-        case 9: toggle_flag(r.ext_switches); break;
-        case 10: toggle_flag(r.ext_adc); break;
-        case 11: r.stick_mode = static_cast<uint8_t>((r.stick_mode + 1) % 4); break;
-        case 12: toggle_flag(r.gimbal_type); break;
-        case 14: r.trainer_config ^= kTrainerPpmOut; break;
-        case 15: r.trainer_config ^= kTrainerPpmIn; break;
-        default: break;
+    if (row >= kRadioRows) {
+        return;
+    }
+    switch (kRadioItems[row]) {
+        case RadioItem::ThrTrim: r.throttle_trim = static_cast<uint8_t>((r.throttle_trim + 1) % 3); break;
+        case RadioItem::Beeper: toggle_flag(r.audio_enabled); break;
+        case RadioItem::Tones: toggle_flag(r.tone_style); break;
+        case RadioItem::BlTimer: r.backlight_timeout = static_cast<uint8_t>((r.backlight_timeout + 1) % 4); break;
+        case RadioItem::BlLevel: r.backlight_brightness = r.backlight_brightness >= 10 ? 1 : static_cast<uint8_t>(r.backlight_brightness + 1); break;
+        case RadioItem::Contrast: r.lcd_contrast = r.lcd_contrast >= 50 ? 20 : static_cast<uint8_t>(std::min<unsigned>(r.lcd_contrast + 3u, 50u)); break;
+        case RadioItem::BatWarn: r.vbat_warn_deci = r.vbat_warn_deci >= 50 ? 40 : static_cast<uint8_t>(r.vbat_warn_deci + 1); break;
+        case RadioItem::UsbMode: r.usb_mode = static_cast<uint8_t>((r.usb_mode + 1) % 4); break;
+        case RadioItem::ModulePwr: toggle_flag(r.ext_module_pwr); break;
+        case RadioItem::ExtSwitches: toggle_flag(r.ext_switches); break;
+        case RadioItem::ExtAdc: toggle_flag(r.ext_adc); break;
+        case RadioItem::StickMode: r.stick_mode = static_cast<uint8_t>((r.stick_mode + 1) % 4); break;
+        case RadioItem::Gimbals: toggle_flag(r.gimbal_type); break;
+        case RadioItem::PpmOut: r.trainer_config ^= kTrainerPpmOut; break;
+        case RadioItem::TrainerIn: r.trainer_config ^= kTrainerPpmIn; break;
+        case RadioItem::J4Mode: toggle_flag(r.j4_sg_sh_en); break;
+        case RadioItem::RearLeft: r.rear_left_func = static_cast<uint8_t>((r.rear_left_func + 1) % 3); break;
+        case RadioItem::RearRight: r.rear_right_func = static_cast<uint8_t>((r.rear_right_func + 1) % 3); break;
+        case RadioItem::Touch: toggle_flag(r.touch_disabled); break;
+        case RadioItem::SwitchSound: toggle_flag(r.switch_beep); break;
+        case RadioItem::InputSetup: break;
     }
 }
 
@@ -1407,7 +1519,7 @@ constexpr Event update_input_setup(State& s, const Nav& n, storage::RadioConfig&
     if (n.cancel) {
         s.screen = Screen::RadioSetup;
         s.cue = buzzer::Cue::Click;
-        s.radio = ListPos{kRadioInputRow, 10};
+        s.radio = ListPos{kRadioInputRow, kRadioInputRow - 3};
         return {};
     }
     const std::size_t count = input_rows(r);
@@ -1480,6 +1592,11 @@ constexpr Event update_system(State& s, const Nav& n) {
 }
 
 // Advances the menu state for one tick. `st` is edited in place; the caller persists it when told to.
+// Value picking where a pot movement selects VRA/VRB (Rust `is_source_selection`).
+constexpr bool is_source_selection(const State& s) {
+    return s.editing && (s.screen == Screen::AuxChannels || (s.screen == Screen::MixerLine && s.mix_line.selected == 1));
+}
+
 constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
     s.nav_tick = false;
     s.cue = buzzer::Cue::None;
@@ -1504,6 +1621,18 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
     n.cancel = (in.pressed & kKeyCancel) != 0;
     n.bind = (in.pressed & kKeyBind) != 0;
     n.changes = in.changes;
+    if constexpr (board::kHasJogWheels) {
+        const auto raw_vra = input::mode_from_u8(st.radio.adc_modes[4]);
+        const auto raw_vrb = input::mode_from_u8(st.radio.adc_modes[5]);
+        const bool picking = is_source_selection(s);
+        if (picking) {
+            jog::prefer_deflected_pot(n.changes, raw_vra, in.vr1, raw_vrb, in.vr2);
+        }
+        const bool jog_active = !picking && s.screen != Screen::InputSetup;
+        const auto step = s.jog.update(jog_active, raw_vra, in.vr1, raw_vrb, in.vr2);
+        n.up = n.up || step == jog::Step::Up;
+        n.down = n.down || step == jog::Step::Down;
+    }
 
     switch (s.screen) {
         case Screen::Main: return update_main(s, n, st.radio.active_model);
@@ -1913,8 +2042,13 @@ constexpr void render_protocol(Framebuffer& fb, const State& s, const storage::M
 
 constexpr std::array<std::string_view, kMonitorPages> kMonitorTitles{"CHANNELS (1-6)", "CHANNELS (7-12)",
                                                                    "CHANNELS (13-18)"};
+#if WM_PCB_I6S
+constexpr std::array<std::string_view, kDiagPages> kDiagTitles{
+    "ANALOG (1-6)", "ANALOG (7-11)", "SWITCHES (E/F/G/H)", "EXT ANALOG (PC1-5)", "STORAGE (EEPROM)"};
+#else
 constexpr std::array<std::string_view, kDiagPages> kDiagTitles{
     "ANALOG (1-6)", "ANALOG (7-11)", "EXT SWITCHES (SE/SF)", "EXT ANALOG (P7)", "STORAGE (EEPROM)"};
+#endif
 // Raw ADC index of each row. Analog page 1 starts at raw index 6 (PA6).
 constexpr std::array<std::array<std::string_view, 6>, 2> kAnalogNames{{
     {"RH:AIL", "RV:ELE", "LV:THR", "LH:RUD", "SW:SA ", "SW:SB "},
@@ -2056,49 +2190,66 @@ constexpr format::Text<12> radio_value(const storage::RadioConfig& r, const std:
             t.push(c);
         }
     };
-    switch (row) {
-        case 0: put(r.throttle_trim == 1 ? "IDLE" : r.throttle_trim == 2 ? "LINEAR" : "OFF (Lock)"); break;
-        case 1: put(r.audio_enabled != 0 ? "ENABLED" : "MUTED"); break;
-        case 2: put(r.tone_style != 0 ? "RICH" : "SIMPLE"); break;
-        case 3:
+    if (row >= kRadioRows) {
+        return t;
+    }
+    switch (kRadioItems[row]) {
+        case RadioItem::ThrTrim: put(r.throttle_trim == 1 ? "IDLE" : r.throttle_trim == 2 ? "LINEAR" : "OFF (Lock)"); break;
+        case RadioItem::Beeper: put(r.audio_enabled != 0 ? "ENABLED" : "MUTED"); break;
+        case RadioItem::Tones: put(r.tone_style != 0 ? "RICH" : "SIMPLE"); break;
+        case RadioItem::BlTimer:
             put(r.backlight_timeout == 1   ? "15 SEC"
                 : r.backlight_timeout == 2 ? "30 SEC"
                 : r.backlight_timeout == 3 ? "60 SEC"
                                            : "ALWAYS ON");
             break;
-        case 4: {
+        case RadioItem::BlLevel: {
             format::detail::push_uint(t, std::min<unsigned>(r.backlight_brightness * 10u, 100u));
             t.push('%');
             break;
         }
-        case 5: {
+        case RadioItem::Contrast: {
             const auto num = format::format_dec2(std::min<unsigned>(r.lcd_contrast, 99u));
             put(num.view());
             break;
         }
-        case 6: {
+        case RadioItem::BatWarn: {
             format::detail::push_uint(t, r.vbat_warn_deci / 10u);
             t.push('.');
             t.push(static_cast<char>('0' + r.vbat_warn_deci % 10u));
             t.push('V');
             break;
         }
-        case 7:
+        case RadioItem::UsbMode:
             put(r.usb_mode == 1 ? "JOYSTICK" : r.usb_mode == 2 ? "SERIAL" : r.usb_mode == 3 ? "COMPOSITE" : "OFF");
             break;
-        case 8: put(r.ext_module_pwr == 0 ? "HIGH (N)" : "LOW (P)"); break;
-        case 9: put(r.ext_switches != 0 ? "PC12+PC15" : "OFF"); break;
-        case 10: put(r.ext_adc != 0 ? "AD12-15" : "OFF"); break;
-        case 11: {
+        case RadioItem::ModulePwr: put(r.ext_module_pwr == 0 ? "HIGH (N)" : "LOW (P)"); break;
+        case RadioItem::ExtSwitches: put(r.ext_switches != 0 ? "PC12+PC15" : "OFF"); break;
+        case RadioItem::ExtAdc:
+            put(board::kIsI6S ? (r.ext_adc != 0 ? "ENABLED" : "DISABLED") : (r.ext_adc != 0 ? "AD12-15" : "OFF"));
+            break;
+        case RadioItem::StickMode: {
             constexpr std::array<std::string_view, 4> kStickModes{"MODE 1", "MODE 2", "MODE 3", "MODE 4"};
             put(kStickModes[r.stick_mode % 4]);
             break;
         }
-        case 12: put(r.gimbal_type == 1 ? "HALL" : "POT"); break;
-        case 13: put(">"); break;
-        case 14: put((r.trainer_config & kTrainerPpmOut) != 0 ? "ON (PF10)" : "OFF"); break;
-        case 15: put((r.trainer_config & kTrainerPpmIn) != 0 ? "ON (SD DN)" : "OFF"); break;
-        default: break;
+        case RadioItem::Gimbals: put(r.gimbal_type == 1 ? "HALL" : "POT"); break;
+        case RadioItem::InputSetup: put(board::kIsI6S ? "[SETUP]" : ">"); break;
+        case RadioItem::PpmOut:
+            put((r.trainer_config & kTrainerPpmOut) != 0 ? (board::kIsI6S ? "ENABLED" : "ON (PF10)") : "OFF");
+            break;
+        case RadioItem::TrainerIn:
+            put((r.trainer_config & kTrainerPpmIn) != 0 ? (board::kIsI6S ? "ENABLED" : "ON (SD DN)") : "OFF");
+            break;
+        case RadioItem::J4Mode: put(r.j4_sg_sh_en != 0 ? "SG/SH BTN" : "SWD (DBG)"); break;
+        case RadioItem::RearLeft:
+            put(r.rear_left_func == 1 ? "TIMER RESET" : r.rear_left_func == 2 ? "TRIMS MOD" : "RC SW (SWE)");
+            break;
+        case RadioItem::RearRight:
+            put(r.rear_right_func == 1 ? "INSTANT TRIM" : r.rear_right_func == 2 ? "TRIMS MOD" : "RC SW (SWF)");
+            break;
+        case RadioItem::Touch: put(r.touch_disabled == 0 ? "ENABLED" : "DISABLED"); break;
+        case RadioItem::SwitchSound: put(r.switch_beep != 0 ? "ENABLED" : "MUTED"); break;
     }
     return t;
 }
@@ -2111,7 +2262,7 @@ constexpr void render_radio_setup(Framebuffer& fb, const State& s, const storage
             break;
         }
         const auto value = radio_value(r, idx);
-        widgets::draw_list_row(fb, {static_cast<int>(slot)}, idx == s.radio.selected, kRadioLabels[idx], value.view(), {0});
+        widgets::draw_list_row(fb, {static_cast<int>(slot)}, idx == s.radio.selected, radio_label(kRadioItems[idx]), value.view(), {0});
     }
     widgets::draw_scrollbar(fb, {s.radio.selected}, {static_cast<int>(kRadioRows)}, {14, 36});
     widgets::draw_footer(fb, "[OK] Toggle/Cycle   [ESC] Back");
@@ -2267,6 +2418,34 @@ constexpr void draw_ext_switches_page(Framebuffer& fb, const Switches& sw, const
     fb.draw_str_4x6(Point{2, 44}, "Active-LOW mod to GND", false);
 }
 
+// I6S page 2: rear buttons (SE/SF) and J4 buttons (SG/SH).
+constexpr void draw_board_switches_page(Framebuffer& fb, const Switches& sw) {
+    const std::array<std::pair<std::string_view, SwitchPos>, 4> items{{
+        {"SW:SE", sw.se}, {"SW:SF", sw.sf}, {"SW:SG", sw.sg}, {"SW:SH", sw.sh}}};
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        const int y = 13 + static_cast<int>(i) * 9;
+        fb.draw_str_4x6(Point{2, y}, items[i].first, false);
+        widgets::draw_bar_gauge(fb, {{32, y}, {30, 6}}, switch_fill(items[i].second));
+        fb.draw_str_4x6(Point{66, y}, switch_pos_label(items[i].second), false);
+    }
+}
+
+// I6S page 3: PC1..PC5 (raw 11..15); inputs in mode Off show " OFF".
+constexpr void draw_pc_adc_page(Framebuffer& fb, const input::Raw& adc, const storage::RadioConfig& radio) {
+    const bool enabled = radio.ext_adc != 0;
+    fb.draw_str_4x6(Point{2, 13}, enabled ? "PC ADC: ENABLED (16-CH)" : "PC ADC: DISABLED (OFF)", false);
+    constexpr std::array<std::string_view, 5> kNames{"VRC:PC1 ", "VRD:PC2 ", "VRE:PC3 ", "VRF:PC4 ", "VRG:PC5 "};
+    for (std::size_t i = 0; i < kNames.size(); ++i) {
+        const int y = 23 + static_cast<int>(i) * 8;
+        const uint16_t raw = std::min<uint16_t>(adc[kP7RawStart + i], kAdcFullScale);
+        const bool active = enabled && radio.adc_modes[6 + i] != static_cast<uint8_t>(input::AdcMode::Off);
+        fb.draw_str_4x6(Point{2, y}, kNames[i], false);
+        widgets::draw_bar_gauge(fb, {{44, y + 1}, {40, 5}}, active ? adc_fill(raw) : 0);
+        const format::Text<4> value = p7_value(raw, active);
+        fb.draw_str_4x6(Point{90, y}, value.view(), false);
+    }
+}
+
 constexpr void draw_ext_adc_page(Framebuffer& fb, const input::Raw& adc, const bool enabled) {
     fb.draw_str_4x6(Point{2, 13}, p7_config_label(enabled), false);
     for (std::size_t i = 0; i < kP7Names.size(); ++i) {
@@ -2288,7 +2467,7 @@ constexpr void draw_eeprom_page(Framebuffer& fb, const storage::EepromStatus& e)
         return;
     }
     const format::Text<27> addr = eeprom_addr_line(e.addr);
-    fb.draw_str_4x6(Point{2, 13}, "BUS: I2C2 (PB10/PB11 Fm+)", false);
+    fb.draw_str_4x6(Point{2, 13}, e.bus == 1 ? "BUS: I2C1 (PB8/PB9)" : "BUS: I2C2 (PB10/PB11 Fm+)", false);
     fb.draw_str_4x6(Point{2, 23}, addr.view(), false);
     fb.draw_str_4x6(Point{2, 33}, eeprom_state_label(e), false);
     fb.draw_str_4x6(Point{2, 43}, "SLOTS: 2xRadio  20xModels", false);
@@ -2299,8 +2478,13 @@ constexpr void render_diag(Framebuffer& fb, const State& s, const Live& live, co
     switch (s.page) {
         case 0:
         case 1: draw_analog_page(fb, s.page, live.adc); break;
+#if WM_PCB_I6S
+        case 2: draw_board_switches_page(fb, live.switches); break;
+        case 3: draw_pc_adc_page(fb, live.adc, radio); break;
+#else
         case 2: draw_ext_switches_page(fb, live.switches, radio.ext_switches != 0); break;
         case 3: draw_ext_adc_page(fb, live.adc, radio.ext_adc != 0); break;
+#endif
         default: draw_eeprom_page(fb, live.eeprom); break;
     }
     widgets::draw_footer(fb, "[UP/DN/OK] Page  [ESC] Back");

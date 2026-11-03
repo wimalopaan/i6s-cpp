@@ -115,10 +115,16 @@ static_assert(logic::usart_brr(921600) == 52);
 static_assert(logic::usart_brr(1875000) == 26);
 static_assert(logic::brr_for_baud_index(99) == logic::usart_brr(420000));
 
+#if WM_PCB_I6S
+static_assert(logic::battery_mv(2048) == 2048 * 977064 / 409500);
+static_assert(logic::is_dfu_requested(logic::kKeyOk | logic::kKeyCancel));
+static_assert(!logic::is_dfu_requested(logic::kKeyOk));
+#else
 static_assert(logic::battery_mv(2048) == 5060);
 
 static_assert(logic::is_dfu_requested(logic::kKeyRollLeft | logic::kKeyYawRight));
 static_assert(!logic::is_dfu_requested(logic::kKeyRollLeft));
+#endif
 
 namespace {
 
@@ -130,6 +136,15 @@ void check(const bool cond, const char* const what) {
         std::fputs(what, stderr);
         std::fputc('\n', stderr);
     }
+}
+
+constexpr uint8_t adc_mode(const logic::input::AdcMode m) { return static_cast<uint8_t>(m); }
+
+// Makes SE/SF usable or not: the I6X external switch board, or the I6S rear buttons as RC switches.
+void set_se_sf(logic::storage::RadioConfig& r, const bool on) {
+    r.ext_switches = on ? 1 : 0;
+    r.rear_left_func = on ? 0 : 1;
+    r.rear_right_func = on ? 0 : 1;
 }
 
 void ring_test() {
@@ -469,7 +484,7 @@ void mixer_test() {
           "SA conditions");
     check(mx::is_switch_active(4, sw) && !mx::is_switch_active(5, sw), "SB mid/down");
     check(mx::is_switch_active(8, sw) && !mx::is_switch_active(7, sw), "SC down/mid");
-    check(!mx::eval_arm_switch(0, sw) && !mx::eval_arm_switch(23, sw), "arm switch bounds");
+    check(!mx::eval_arm_switch(0, sw) && !mx::eval_arm_switch(board::kMaxSwitchCond + 1, sw), "arm switch bounds");
 
     // Centered and full-deflection output.
     ModelConfig base = default_model_config(0);
@@ -554,7 +569,7 @@ void mixer_test() {
     ModelConfig gv = base;
     gv.gvars[0] = 500;
     gv.gvars[1] = -800;
-    gv.mixes[0] = MixLine{.target_ch = 6, .source = 41, .weight_src = 0, .weight = 100, .offset = 0,
+    gv.mixes[0] = MixLine{.target_ch = 6, .source = board::kSourceGv1, .weight_src = 0, .weight = 100, .offset = 0,
                           .switch_sel = 0, .mode = 2, .reserved = 0};
     check(run(0, 0, 0, 0, pots0, sw_default, gv)[5] == 1756, "GV1 as source");
     gv.mixes[0] = MixLine{.target_ch = 6, .source = 1, .weight_src = 38, .weight = 100, .offset = 0,
@@ -667,10 +682,10 @@ void input_test() {
     // Extended ADC: 2-pos, 3-pos, 6-pos and pot on VRC..VRF.
     auto ext = storage::default_storage().radio;
     ext.ext_adc = 1;
-    ext.adc_modes[6] = 1;
-    ext.adc_modes[7] = 2;
-    ext.adc_modes[8] = 3;
-    ext.adc_modes[9] = 4;
+    ext.adc_modes[6] = adc_mode(in::AdcMode::TwoPos);
+    ext.adc_modes[7] = adc_mode(in::AdcMode::ThreePos);
+    ext.adc_modes[8] = adc_mode(in::AdcMode::SixPos);
+    ext.adc_modes[9] = adc_mode(in::AdcMode::Pot);
     in::Calibration ecal{};
     in::apply_calibration(ext, ecal);
     in::Raw adc_frame{};
@@ -696,7 +711,13 @@ void input_test() {
     in::Calibration off{};
     in::apply_calibration(storage::default_storage().radio, off);
     const auto off_st = in::process(in::Raw{}, in::BoardSwitches{.se_high = false, .sf_high = false}, off);
+#if WM_PCB_I6S
+    // I6S: SE/SF are the rear buttons, already gated by rear_*_func in hw::board_switches.
+    check(off_st.switches.se == SwitchPos::Down && off_st.switches.sf == SwitchPos::Down,
+          "SE/SF follow the board levels without ext_switches");
+#else
     check(off_st.switches.se == SwitchPos::Up && off_st.switches.sf == SwitchPos::Up, "SE/SF disabled");
+#endif
 }
 
 void preflight_screen_test() {
@@ -1241,7 +1262,7 @@ void menu_test() {
     // Arm switch stepping skips unavailable switches (Rust next/prev_available_arm_switch).
     {
         const auto radio_saved = st.radio;
-        st.radio.ext_switches = 0;
+        set_se_sf(st.radio, false);
         st.radio.j4_sg_sh_en = 0;
         st.radio.ext_adc = 0;
         mn::State arm{};
@@ -1564,7 +1585,7 @@ void calib_test() {
     for (const std::size_t count : {std::size_t{1}, std::size_t{3}, std::size_t{7}}) {
         storage::RadioConfig r = storage::default_storage().radio;
         r.ext_adc = count > 6 ? 1 : 0;
-        for (std::size_t ch = 0; ch < 10; ++ch) {
+        for (std::size_t ch = 0; ch < input::kAuxCount; ++ch) {
             r.adc_modes[ch] = static_cast<uint8_t>(ch < count ? input::AdcMode::Pot : input::AdcMode::TwoPos);
         }
         check(calib::configured_pots(r).count == count, "calib: configured pot count");
@@ -1595,8 +1616,9 @@ void dual_rate_test() {
     using mn::Screen;
 
     logic::storage::RadioStorage st = logic::storage::default_storage();
-    st.radio.ext_switches = 0;
-    st.radio.adc_modes = {3, 3, 3, 3, 0, 0, 0, 0, 0, 0};  // SixPos on SA..SD: not usable for dual rate
+    set_se_sf(st.radio, false);
+    st.radio.adc_modes = {};
+    std::fill_n(st.radio.adc_modes.begin(), 4, adc_mode(logic::input::AdcMode::SixPos));  // not usable for dual rate
     uint8_t two_pos_code = 0;
     for (unsigned v = 0; v < 256; ++v) {
         if (logic::input::resolve_mode(0, static_cast<uint8_t>(v)) == logic::input::AdcMode::TwoPos) {
@@ -1609,10 +1631,10 @@ void dual_rate_test() {
     st.radio.adc_modes[0] = two_pos_code;
     check(mn::is_dr_switch_available(1, st.radio), "dr: SA must be available as a two-position input");
     check(!mn::is_dr_switch_available(5, st.radio), "dr: SE needs the external switch board");
-    st.radio.ext_switches = 1;
+    set_se_sf(st.radio, true);
     check(mn::is_dr_switch_available(6, st.radio), "dr: SF available with the external board");
     check(mn::step_dr_switch(st.radio, 0, true) == 6, "dr: previous from 0 wraps to SF");
-    st.radio.ext_switches = 0;
+    set_se_sf(st.radio, false);
     check(mn::step_dr_switch(st.radio, 0, false) == 1, "dr: next from 0 skips unavailable SE/SF");
     check(mn::step_dr_switch(st.radio, 0, true) == 1, "dr: previous from 0 skips unavailable SE/SF");
 
@@ -1798,7 +1820,10 @@ void mixer_menu_test() {
 
     logic::storage::RadioStorage st = logic::storage::default_storage();
     st.active_model.mixes[0].source = 4;  // Thr: the first mix line starts on a usable source
-    st.radio.adc_modes = {3, 0, 0, 0, 3, 3, 0, 0, 0, 0};  // SA and VRA/VRB unusable: stepping must skip them
+    st.radio.adc_modes = {};
+    for (const std::size_t ch : {0, 4, 5}) {  // SA and VRA/VRB unusable: stepping must skip them
+        st.radio.adc_modes[ch] = adc_mode(logic::input::AdcMode::SixPos);
+    }
     mn::State ms{};
     mn::open(ms);
     uint32_t now = 0;
@@ -1874,7 +1899,8 @@ void mixer_menu_test() {
     for (int i = 0; i < 5; ++i) {
         tap(mn::kKeyDown);
     }
-    st.radio.adc_modes.fill(3);  // no switch input usable: the switch condition must stay
+    st.radio.adc_modes.fill(adc_mode(logic::input::AdcMode::SixPos));  // no switch input usable: the value must stay
+    set_se_sf(st.radio, false);
     tap(mn::kKeyOk);
     tap(mn::kKeyUp);
     check(st.active_model.mixes[0].switch_sel == 0, "mix: no switch condition is available, so the value stays");
@@ -1907,8 +1933,9 @@ void value_cues_test() {
     using mn::Screen;
 
     logic::storage::RadioStorage st = logic::storage::default_storage();
-    st.radio.ext_switches = 0;
-    st.radio.adc_modes = {3, 3, 3, 3, 0, 0, 0, 0, 0, 0};  // SA..SD unusable as dual-rate switches
+    set_se_sf(st.radio, false);
+    st.radio.adc_modes = {};
+    std::fill_n(st.radio.adc_modes.begin(), 4, adc_mode(logic::input::AdcMode::SixPos));  // SA..SD unusable for DR
     mn::State ms{};
     mn::update(ms, mn::Input{0, 0, 0}, st);
     uint32_t now = 0;
@@ -2046,7 +2073,10 @@ void aux_menu_test() {
     using mn::Screen;
 
     logic::storage::RadioStorage st = logic::storage::default_storage();
-    st.radio.adc_modes = {3, 0, 0, 0, 3, 3, 0, 0, 0, 0};  // SA, VRA, VRB unusable: stepping must skip them
+    st.radio.adc_modes = {};
+    for (const std::size_t ch : {0, 4, 5}) {  // SA, VRA, VRB unusable: stepping must skip them
+        st.radio.adc_modes[ch] = adc_mode(logic::input::AdcMode::SixPos);
+    }
     st.active_model.aux_channels[0] = 4;                   // Yaw
     st.active_model.aux_channels[1] = 8;                   // SB
     mn::State ms{};
@@ -2115,11 +2145,12 @@ void radio_setup_test() {
           "radio: throttle trim must cycle and request a save");
 
     st.radio.gimbal_type = 0;
-    check(mn::radio_value(st.radio, 12).view() == "POT", "radio: gimbal type 0 must read POT");
-    ms.radio.selected = 12;
+    const std::size_t gimbal_row = mn::radio_row_of(mn::RadioItem::Gimbals);
+    check(mn::radio_value(st.radio, gimbal_row).view() == "POT", "radio: gimbal type 0 must read POT");
+    ms.radio.selected = gimbal_row;
     const Event gimbal = tap(mn::kKeyOk);
     check(gimbal.action == Action::SaveRadioConfig && st.radio.gimbal_type == 1 &&
-              mn::radio_value(st.radio, 12).view() == "HALL",
+              mn::radio_value(st.radio, gimbal_row).view() == "HALL",
           "radio: OK on Gimbals must switch to HALL and request a save");
 
     ms.radio.selected = 4;
@@ -2145,13 +2176,14 @@ void radio_setup_test() {
     tap(mn::kKeyOk);
     check(st.radio.ext_module_pwr == 1, "radio: PC13 power must toggle");
 
-    ms.radio.selected = 14;
+    const std::size_t ppm_out_row = mn::radio_row_of(mn::RadioItem::PpmOut);
+    ms.radio.selected = ppm_out_row;
     tap(mn::kKeyOk);
     check(st.radio.trainer_config == mn::kTrainerPpmOut, "radio: PPM out must set its bit");
-    ms.radio.selected = 15;
+    ms.radio.selected = mn::radio_row_of(mn::RadioItem::TrainerIn);
     tap(mn::kKeyOk);
     check(st.radio.trainer_config == (mn::kTrainerPpmOut | mn::kTrainerPpmIn), "radio: trainer in must set its bit");
-    ms.radio.selected = 14;
+    ms.radio.selected = ppm_out_row;
     tap(mn::kKeyOk);
     check(st.radio.trainer_config == mn::kTrainerPpmIn, "radio: PPM out must clear only its bit");
 
@@ -2163,13 +2195,14 @@ void radio_setup_test() {
     const Event mode = tap(mn::kKeyOk);
     check(mode.action == Action::SaveRadioConfig && st.radio.adc_modes[0] == 1,
           "radio: input mode must cycle and request a save");
-    st.radio.adc_modes[0] = 6;
+    st.radio.adc_modes[0] = adc_mode(logic::input::AdcMode::InstantTrim);
     tap(mn::kKeyOk);
     check(st.radio.adc_modes[0] == 0, "radio: input mode must wrap after INST-TRIM");
 
     tap(mn::kKeyCancel);
-    check(ms.screen == Screen::RadioSetup && ms.radio.selected == mn::kRadioInputRow && ms.radio.scroll == 10,
-          "radio: cancel in Input Modes must return to row 13");
+    check(ms.screen == Screen::RadioSetup && ms.radio.selected == mn::kRadioInputRow &&
+              ms.radio.scroll == mn::kRadioInputRow - 3,
+          "radio: cancel in Input Modes must return to the Input Setup row");
     const Event back = tap(mn::kKeyCancel);
     check(back.action == Action::None && ms.screen == Screen::Main, "radio: cancel must return to the main menu");
 }
@@ -3035,7 +3068,8 @@ void buzzer_test() {
     check(!pf.step(Millis{1000}) && pf.step(Millis{1600}), "buzzer: preflight repeats every 800 ms");
 
     check(arm_cue(ArmEdge{SwitchIndex{0}, true, false, false}) == Cue::None, "buzzer: arm switch 0 is not armable");
-    check(arm_cue(ArmEdge{SwitchIndex{23}, true, false, false}) == Cue::None, "buzzer: arm switch 23 is not armable");
+    check(arm_cue(ArmEdge{SwitchIndex{board::kMaxSwitchCond + 1}, true, false, false}) == Cue::None,
+          "buzzer: arm switch past the last condition is not armable");
     check(arm_cue(ArmEdge{SwitchIndex{1}, true, false, false}) == Cue::Armed, "buzzer: arming chimes");
     check(arm_cue(ArmEdge{SwitchIndex{22}, false, true, false}) == Cue::Disarmed, "buzzer: disarming chimes");
     check(arm_cue(ArmEdge{SwitchIndex{5}, true, false, true}) == Cue::None, "buzzer: no arm chime while a menu is open");
@@ -3200,7 +3234,7 @@ void buzzer_test() {
     check(vario_switch_active(2, sw_arm) == mixer::eval_arm_switch(1, sw_arm) &&
               vario_switch_active(23, sw_arm) == mixer::eval_arm_switch(22, sw_arm),
           "vario: settings 2..=23 map to arm conditions 1..=22");
-    check(!vario_switch_active(24, sw_arm), "vario: out-of-range settings are off");
+    check(!vario_switch_active(board::kMaxSwitchCond + 2, sw_arm), "vario: out-of-range settings are off");
 
     PreflightTimer preflight_timer{};
     check(!preflight_timer.step(Millis{799}) && preflight_timer.step(Millis{800}) && !preflight_timer.step(Millis{1000}),
@@ -3276,7 +3310,10 @@ void trim_controller_test() {
     c.update(0, Millis{0});
 
     const int8_t roll_before = c.values.roll;
-    check(c.update(0x43, Millis{0}) == Event{} && c.values.roll == roll_before,
+    // Roll+ held together with the board's DFU combination (I6X: Roll L + Yaw R, I6S: OK + Cancel).
+    constexpr uint16_t kDfuKeys =
+        board::kIsI6S ? (logic::kKeyOk | logic::kKeyCancel) : (logic::kKeyRollLeft | logic::kKeyYawRight);
+    check(c.update(kDfuKeys | 0x01, Millis{0}) == Event{} && c.values.roll == roll_before,
           "trim: DFU combination locks trim processing");
     check(c.update(0x01, Millis{0}).kind == Kind::Step,
           "trim: a key still held after the DFU lockout steps as a new press");
@@ -3441,13 +3478,13 @@ void instant_trim_test() {
     input::Raw raw{};
     check(!instant_switch_down(radio, raw), "instant trim: default modes never fire");
 
-    radio.adc_modes[4] = 6;  // VRA as InstantTrim, reads raw index 6
+    radio.adc_modes[4] = adc_mode(input::AdcMode::InstantTrim);  // VRA as InstantTrim, reads raw index 6
     raw[6] = kInstantTrimRaw - 1;
     check(!instant_switch_down(radio, raw), "instant trim: switch below 2048 is up");
     raw[6] = kInstantTrimRaw;
     check(instant_switch_down(radio, raw), "instant trim: switch at 2048 is down");
 
-    radio.adc_modes[6] = 6;  // VRC as InstantTrim, reads raw index 11 (external ADC)
+    radio.adc_modes[6] = adc_mode(input::AdcMode::InstantTrim);  // VRC as InstantTrim, reads raw index 11 (external ADC)
     raw = {};
     raw[11] = 4000;
     check(!instant_switch_down(radio, raw), "instant trim: external ADC channels are ignored without ext ADC");
@@ -3892,8 +3929,8 @@ void model_setup_trigger_test() {
           "timer trigger labels must match Rust");
 
     st::RadioStorage rs = st::default_storage();
-    rs.radio.adc_modes.fill(3);  // SixPos: no SA..SD switch conditions
-    rs.radio.ext_switches = 0;
+    rs.radio.adc_modes.fill(adc_mode(logic::input::AdcMode::SixPos));  // no SA..SD switch conditions
+    set_se_sf(rs.radio, false);
     check(mn::is_timer_source_available(3, rs.radio) && !mn::is_timer_source_available(18, rs.radio),
           "OFF..ALWAYS ON must always exist and codes past 17 must not");
     check(!mn::is_timer_source_available(4, rs.radio) && !mn::is_timer_source_available(14, rs.radio),
@@ -3919,7 +3956,7 @@ void model_setup_trigger_test() {
     press(mn::kKeyDown, 40);
     check(rs.active_model.timer_source == 3, "DOWN must wrap back to ALWAYS ON");
 
-    rs.radio.ext_switches = 1;
+    set_se_sf(rs.radio, true);
     press(mn::kKeyUp, 50);
     check(rs.active_model.timer_source == 14, "UP must reach SE^ once external switches exist");
     const mn::Event done = press(mn::kKeyOk, 60);
@@ -4461,7 +4498,7 @@ void auto_select_test() {
     st.active_model.dr_switch = 0;
     mn::update(ms, mn::Input{0, 0, 0, dr_sa}, st);
     check(st.active_model.dr_switch == 1, "auto: dual rate switch follows SA when usable");
-    st.radio.adc_modes[0] = 3;  // SixPos: not usable for dual rate
+    st.radio.adc_modes[0] = adc_mode(logic::input::AdcMode::SixPos);  // not usable for dual rate
     st.active_model.dr_switch = 0;
     mn::update(ms, mn::Input{mn::kKeyUp, mn::kKeyUp, 10, dr_sa}, st);
     check(st.active_model.dr_switch == 0, "auto: unusable DR switch change is ignored and blocks up/down");
@@ -4473,7 +4510,7 @@ void auto_select_test() {
     st.active_model.arm_switch = 0;
     mn::update(ms, mn::Input{0, 0, 0, sa_moved}, st);
     check(st.active_model.arm_switch == 1, "auto: arm switch follows SA when usable");
-    st.radio.adc_modes[0] = 3;  // SixPos: not usable for arm switch
+    st.radio.adc_modes[0] = adc_mode(logic::input::AdcMode::SixPos);  // not usable for arm switch
     st.active_model.arm_switch = 0;
     mn::update(ms, mn::Input{0, 0, 1, sa_moved}, st);
     check(st.active_model.arm_switch == 0, "auto: unusable arm switch change is ignored");
@@ -4483,7 +4520,7 @@ void auto_select_test() {
     st.active_model.timer_source = 0;
     mn::update(ms, mn::Input{0, 0, 0, sa_moved}, st);
     check(st.active_model.timer_source == 4, "auto: timer trigger stores condition + 3");
-    st.radio.adc_modes[0] = 3;
+    st.radio.adc_modes[0] = adc_mode(logic::input::AdcMode::SixPos);
     st.active_model.timer_source = 1;
     mn::update(ms, mn::Input{0, 0, 1, sa_moved}, st);
     check(st.active_model.timer_source == 1, "auto: unusable timer trigger switch change is ignored");
@@ -4865,6 +4902,10 @@ void usb_logic_test() {
           "usb line coding: 115200 baud");
 }
 
+#include "touch_nav_tests.hpp"
+#include "i6s_tests.hpp"
+#include "board_idle_tests.hpp"
+
 int main() {
     ring_test();
     crsf_framer_test();
@@ -4874,6 +4915,11 @@ int main() {
     input_test();
     safety_test();
     preflight_screen_test();
+    touch_nav_tests();
+    board_idle_tests();
+#if WM_PCB_I6S
+    i6s_tests();
+#endif
     display_test();
     dashboard_test();
     menu_test();

@@ -20,6 +20,7 @@ struct Switches {
     SwitchPos swj{SwitchPos::Up};  // 2-pos or 3-pos (ext ADC 2)
     SwitchPos swk{SwitchPos::Up};  // 2-pos or 3-pos (ext ADC 3)
     SwitchPos swl{SwitchPos::Up};  // 2-pos or 3-pos (ext ADC 4)
+    SwitchPos swm{SwitchPos::Up};  // 2-pos or 3-pos (ext ADC 5, I6S only)
 
     constexpr bool operator==(const Switches&) const = default;
 };
