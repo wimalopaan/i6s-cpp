@@ -493,6 +493,7 @@ int main() {
                 case logic::menu::Action::EnterModelSelect: refresh_model_names(); break;
                 case logic::menu::Action::SwitchModel:
                     switch_model(ev.index);
+                    refresh_model_names();
                     apply_protocol_link();
                     apply_rf_model();
                     prev_armed = logic::mixer::eval_arm_switch(g_storage.active_model.arm_switch, input.switches);
@@ -580,6 +581,10 @@ int main() {
             case logic::bind::Action::None: break;
         }
         play_buzzer_cue(bind_ev.cue);
+        if (bind_ev.next_page) {
+            logic::dashboard::next_page(page_state);
+            play_buzzer_cue(logic::buzzer::Cue::NavStep);
+        }
 
         if (!menu_open) {
             const auto trim_ev = g_trims.update(g_keys, logic::vario::Millis{dt_ms});
@@ -668,7 +673,8 @@ int main() {
                        View{input, g_storage, g_trims, channels, crsf, link_telem, rf_binding, g_rf_ok, rf_bound, now,
                             rf_sent, g_rf_stats,
                             logic::flight_timer::display(g_flight_timer, timer_config(model)),
-                            logic::flight_timer::modal(g_flight_timer), hw::crsf::telemetry()});
+                            logic::flight_timer::modal(g_flight_timer), hw::crsf::telemetry(), usb_sim_active(),
+                            hw::rf::last_chip_id()});
             } else {
                 auto eeprom = g_eeprom;
                 eeprom.write_err = hw::I2c2Eeprom::write_failed();

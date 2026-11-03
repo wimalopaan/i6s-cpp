@@ -12,6 +12,8 @@ namespace wm::logic::bind {
 
 /// Holding BIND this long on the dashboard starts binding (Rust `main.rs` section 5).
 inline constexpr uint32_t kHoldMs = 1000;
+/// A shorter BIND press (at least this long) turns the dashboard page instead (Rust `main.rs` section 5).
+inline constexpr uint32_t kShortPressMs = 40;
 
 /// AFHDS 2A link state seen by the dashboard. `afhds` is false for CRSF models and when the radio is not ready.
 struct Link {
@@ -36,6 +38,7 @@ enum class Action : uint8_t { None, Start, Stop };
 struct Event {
     Action action = Action::None;
     buzzer::Cue cue = buzzer::Cue::None;
+    bool next_page = false;  // short BIND press on the dashboard
     friend constexpr bool operator==(const Event&, const Event&) = default;
 };
 
@@ -46,8 +49,9 @@ struct Controller {
     friend constexpr bool operator==(const Controller&, const Controller&) = default;
 };
 
-/// While binding, CANCEL or a new BIND press ends it (click). Otherwise a 1 s BIND hold starts it.
-/// The hold is ignored and reset while a menu is open, as in Rust.
+/// While binding, CANCEL or a new BIND press ends it (click). Otherwise a 1 s BIND hold starts it, and a
+/// shorter press (>= 40 ms) turns the dashboard page on release. The hold is ignored and reset while a menu
+/// is open, as in Rust. Without an AFHDS 2A link the long hold starts nothing but still suppresses the page turn.
 constexpr Event update(Controller& c, const Input& in) {
     if (binding_shown(in.link)) {
         if ((in.keys & safety::kKeyCancel) != 0 || (in.pressed & kKeyBind) != 0) {
@@ -55,14 +59,21 @@ constexpr Event update(Controller& c, const Input& in) {
         }
         return {};
     }
-    if (in.menu_active || !in.link.afhds || (in.keys & kKeyBind) == 0) {
+    if (in.menu_active) {
         c = {};
         return {};
+    }
+    if ((in.keys & kKeyBind) == 0) {
+        const bool short_press = !c.was_held && c.hold_ms >= kShortPressMs;
+        c = {};
+        return {.next_page = short_press};
     }
     c.hold_ms = std::min(c.hold_ms + in.dt.value, kHoldMs);
     if (c.hold_ms >= kHoldMs && !c.was_held) {
         c.was_held = true;
-        return {Action::Start, buzzer::Cue::BindHold};
+        if (in.link.afhds) {
+            return {Action::Start, buzzer::Cue::BindHold};
+        }
     }
     return {};
 }

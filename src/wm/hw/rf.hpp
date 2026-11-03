@@ -33,6 +33,8 @@ inline constinit volatile uint16_t g_heartbeat = 0;
 // ISR-only state.
 inline constinit logic::afhds2a::Heartbeat g_gate{};
 inline constinit bool g_antenna_state = false;
+// PLL II readback after init (0x9E on a working A7105); the status bar shows it as "E:xx" when RF failed.
+inline constinit uint8_t g_last_chip_id = 0;
 
 // Drops an edge latched while masked (e.g. the standby strobe ending an unanswered RX window).
 inline void gio2_irq_enable() {
@@ -71,7 +73,8 @@ inline bool init(const logic::afhds2a::TxId tx) {
     init_gio2_exti();
     const bool reset_ok = a7105::reset();
     a7105::init_regs();
-    const bool ok = reset_ok || a7105::read_reg(logic::a7105::kRegPllII) == logic::a7105::kChipSignature;
+    g_last_chip_id = a7105::read_reg(logic::a7105::kRegPllII);
+    const bool ok = reset_ok || g_last_chip_id == logic::a7105::kChipSignature;
 
     set_irq_priority(EXTI2_3_IRQn);
     set_irq_priority(TIM16_IRQn);
@@ -150,6 +153,9 @@ inline logic::afhds2a::RxId rx_id() {
     arch::CriticalSection cs;
     return g_radio->link.rx_id;
 }
+
+/// Last chip signature read during init (Rust `get_last_chip_id`).
+inline uint8_t last_chip_id() { return g_last_chip_id; }
 
 inline std::optional<logic::afhds2a::RxId> take_pending_rx_save() {
     arch::CriticalSection cs;
