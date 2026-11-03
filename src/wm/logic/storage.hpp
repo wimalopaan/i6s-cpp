@@ -36,12 +36,12 @@ inline constexpr std::size_t kModelSlotSize = 768;
 
 // Legacy payload sizes that are migrated on load (ModelConfig v1..v4).
 inline constexpr std::size_t kLegacyModelV1Size = 128;
-inline constexpr std::size_t kMaxLegacyModelSize = 364;
+inline constexpr std::size_t kMaxLegacyModelSize = board::kIsI6S ? 368 : 364;
 
 /// Older ModelConfig payload lengths that are upgraded by copying them over the defaults.
 constexpr bool is_legacy_prefix_len(const std::size_t len) {
     if constexpr (board::kIsI6S) {
-        return len == 348 || len == kMaxLegacyModelSize;
+        return len == 348 || len == 364 || len == kMaxLegacyModelSize;
     } else {
         return len == 348 || len == 352 || len == 360 || len == kMaxLegacyModelSize;
     }
@@ -207,12 +207,9 @@ struct ModelConfig {
     uint8_t crsf_arm_mode;
     std::array<int16_t, 5> gvars;
     std::array<uint8_t, 4> telem_slots;
-#if WM_USE_MULTISWITCH
-    uint8_t multiswitch_address;
-    uint8_t pad_gvar;
-#else
     std::array<uint8_t, 2> pad_gvar;
-#endif
+    // Kept with MultiSwitch disabled as well, so switching firmware options preserves model settings.
+    std::array<int16_t, 4> multiswitch_addresses;  // -1 = Off, 0..255 = module address
 #else
     uint8_t crsf_arm_mode;
     uint8_t pad_end;
@@ -226,7 +223,7 @@ struct ModelConfig {
     std::array<uint8_t, 4> telem_slots;
 #endif
 };
-static_assert(sizeof(ModelConfig) == 368);
+static_assert(sizeof(ModelConfig) == (board::kIsI6S ? 376 : 368));
 static_assert(offsetof(ModelConfig, rx_id) == 12);
 static_assert(offsetof(ModelConfig, timer_secs) == 58);
 static_assert(offsetof(ModelConfig, mixes) == 80);
@@ -235,9 +232,7 @@ static_assert(offsetof(ModelConfig, vario_switch) == 346);
 static_assert(offsetof(ModelConfig, crsf_arm_mode) == 351);
 static_assert(offsetof(ModelConfig, gvars) == 352);
 static_assert(offsetof(ModelConfig, telem_slots) == 362);
-#if WM_USE_MULTISWITCH
-static_assert(offsetof(ModelConfig, multiswitch_address) == 366);
-#endif
+static_assert(offsetof(ModelConfig, multiswitch_addresses) == 368);
 #else
 static_assert(offsetof(ModelConfig, gvars) == 348);
 static_assert(offsetof(ModelConfig, telem_slots) == 364);
@@ -293,7 +288,7 @@ struct RadioStorage {
     RadioConfig radio;
     ModelConfig active_model;
 };
-static_assert(sizeof(RadioStorage) == (board::kIsI6S ? 516 : 508));
+static_assert(sizeof(RadioStorage) == (board::kIsI6S ? 524 : 508));
 
 struct SlotHeader {
     uint16_t magic;
@@ -475,12 +470,8 @@ constexpr ModelConfig default_model_config(const std::size_t index) {
         .crsf_arm_mode = 0,
         .gvars = {},
         .telem_slots = {0, 1, 2, 3},
-#if WM_USE_MULTISWITCH
-        .multiswitch_address = 0,
-        .pad_gvar = 0,
-#else
         .pad_gvar = {},
-#endif
+        .multiswitch_addresses = {0, -1, -1, -1},
 #else
         .crsf_arm_mode = 0,
         .pad_end = 0,
@@ -562,6 +553,13 @@ constexpr void sanitize_calib(Calib& c) {
 }
 
 constexpr void sanitize_model(ModelConfig& m, const uint8_t active_model) {
+#if WM_PCB_I6S
+    for (auto& address : m.multiswitch_addresses) {
+        if (address < -1 || address > 255) {
+            address = -1;
+        }
+    }
+#endif
     if (m.model_type > 4) {
         m.model_type = 0;
     }
@@ -826,7 +824,15 @@ Status load_slot(const uint16_t addr, T& dst) {
             }
             auto upgraded = from_bytes<ModelConfig>(image);
             if constexpr (board::kIsI6S) {
-                upgraded.telem_slots = {0, 1, 2, 3};
+                if (hdr.len < 366) {
+                    upgraded.telem_slots = {0, 1, 2, 3};
+                }
+#if WM_PCB_I6S
+                if (hdr.len == 368) {
+                    // The single-page implementation stored its address in the first reserved tail byte.
+                    upgraded.multiswitch_addresses[0] = upgraded.pad_gvar[0];
+                }
+#endif
             }
             dst = upgraded;
             save_slot<Dev>(addr, upgraded);

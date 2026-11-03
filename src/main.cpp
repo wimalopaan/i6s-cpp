@@ -477,8 +477,7 @@ int main() {
     logic::board_idle::State board_idle{};
     logic::touch_nav::SwipeTracker swipe{};
 #if WM_USE_MULTISWITCH
-    logic::multiswitch::State multiswitch{};
-    uint8_t multiswitch_address = model.multiswitch_address;
+    logic::multiswitch::Pages multiswitch{};
 #endif
     uint16_t ok_hold_ms = 0;
     bool j4_enabled = g_storage.radio.j4_sg_sh_en != 0;
@@ -504,6 +503,7 @@ int main() {
 
     for (;;) {
         chip::watchdog::feed();
+        configure_pages(page_state, model);
 
 #if WM_PCB_I6S
         const bool menu_active_pre =
@@ -526,7 +526,7 @@ int main() {
                 g_storage.radio.rear_right_func, g_storage.radio.throttle_trim != 0, {rear.left, rear.right}, swipe,
                 time::millis()
 #if WM_USE_MULTISWITCH
-                , page_state.page == 5
+                , page_state.page >= kBasePageCount
 #endif
             );
         }
@@ -597,11 +597,14 @@ int main() {
             }
 #if WM_PCB_I6S
 #if WM_USE_MULTISWITCH
-            if (page_state.page == prev_page && page_state.page == 5 && swipe.tapped_switch &&
+            if (page_state.page == prev_page && page_state.page >= kBasePageCount && swipe.tapped_switch &&
                 model.rf_protocol == 1 && !sim && !logic::flight_timer::modal(g_flight_timer) &&
                 board_idle.power.progress_pct() == 0) {
-                multiswitch.toggle(*swipe.tapped_switch);
-                play_buzzer_cue(logic::buzzer::Cue::Click);
+                if (const auto slot = logic::multiswitch::slot_at(
+                        model.multiswitch_addresses, page_state.page - kBasePageCount)) {
+                    multiswitch.states[*slot].toggle(*swipe.tapped_switch);
+                    play_buzzer_cue(logic::buzzer::Cue::Click);
+                }
             }
 #endif
             // Long centre tap or the right rear button held for 1.2 s opens the menu.
@@ -610,7 +613,7 @@ int main() {
                 if (ok_hold_ms >= kMenuHoldMs) {
                     logic::menu::open(menu_state);
 #if WM_USE_MULTISWITCH
-                    if (page_state.page == 5) {
+                    if (page_state.page >= kBasePageCount) {
                         swipe.swiped = true;
                     }
 #endif
@@ -816,10 +819,8 @@ int main() {
         }
         const bool crsf = model.rf_protocol == 1;
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-        if (multiswitch_address != model.multiswitch_address) {
-            multiswitch = {};
-            multiswitch_address = model.multiswitch_address;
-        }
+        multiswitch.configure(model.multiswitch_addresses);
+        configure_pages(page_state, model);
 #endif
 #if WM_USE_USB
         hw::usb::poll(logic::usb::Millis{now}, channels, input.switches, input.battery_mv);
@@ -829,7 +830,7 @@ int main() {
                 hw::crsf::update_channels(now, channels, wm::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
                                           wm::logic::crsf::ArmedState{armed});
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-                hw::crsf::update_multiswitch(now, model.multiswitch_address, multiswitch);
+                hw::crsf::update_multiswitch(now, multiswitch);
 #endif
             }
         } else if (afhds && !sim) {
@@ -860,7 +861,7 @@ int main() {
                             logic::flight_timer::modal(g_flight_timer), hw::crsf::telemetry(), usb_sim_active(),
                             hw::rf::last_chip_id()
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-                            , multiswitch.switches
+                            , multiswitch.switches()
 #endif
                        });
             } else {

@@ -27,9 +27,8 @@ inline void i6s_storage_tests() {
     using st::ModelConfig;
     using st::RadioConfig;
 
-    // flysky-i6s-rs RadioConfig layout comments (148 bytes) and the 516-byte RadioStorage.
-    check(sizeof(RadioConfig) == 148 && sizeof(st::RadioStorage) == 516 && sizeof(ModelConfig) == 368,
-          "i6s storage: RadioConfig 148, RadioStorage 516, ModelConfig 368 bytes");
+    check(sizeof(RadioConfig) == 148 && sizeof(st::RadioStorage) == 524 && sizeof(ModelConfig) == 376,
+          "i6s storage: model extends the original layout by four optional MultiSwitch addresses");
     check(offsetof(RadioConfig, aux_pots) == 48 && offsetof(RadioConfig, ext_module_pwr) == 114 &&
               offsetof(RadioConfig, servo_rate_hz) == 116 && offsetof(RadioConfig, ext_switches) == 120 &&
               offsetof(RadioConfig, ext_adc) == 121 && offsetof(RadioConfig, adc_modes) == 122 &&
@@ -80,6 +79,30 @@ inline void i6s_storage_tests() {
     st::sanitize(s);
     check(s.active_model.arm_switch == 0 && s.active_model.vario_switch == 0,
           "i6s sanitize: arm/vario switch codes beyond SWMv are cleared");
+
+    s.active_model.multiswitch_addresses = {-2, -1, 255, 256};
+    st::sanitize(s);
+    check(s.active_model.multiswitch_addresses == std::array<int16_t, 4>{-1, -1, 255, -1},
+          "i6s sanitize: invalid MultiSwitch addresses become Off");
+    using Dev = test_eeprom::FakeEeprom;
+    auto old = st::to_bytes(st::default_model_config(17));
+    old[366] = 255;
+    old[362] = 12;
+    old[363] = 13;
+    const auto legacy_slot = *st::model_slot_addr(17);
+    test_eeprom::write_slot_raw(legacy_slot, st::kSchemaVersion, 368, old);
+    ModelConfig migrated{};
+    check(st::load_slot<Dev>(legacy_slot, migrated) == st::Status::Ok &&
+              migrated.multiswitch_addresses == std::array<int16_t, 4>{255, -1, -1, -1} &&
+              migrated.telem_slots == std::array<uint8_t, 4>{12, 13, 2, 3} &&
+              test_eeprom::read_header(legacy_slot).len == sizeof(ModelConfig),
+          "i6s storage: single-page models keep their address and telemetry while new pages default Off");
+    migrated.multiswitch_addresses = {-1, 0, 42, 255};
+    check(st::save_model_to_slot<Dev>(18, migrated), "i6s storage: save all optional MultiSwitch addresses");
+    ModelConfig restored{};
+    check(st::load_slot<Dev>(*st::model_slot_addr(18), restored) == st::Status::Ok &&
+              restored.multiswitch_addresses == migrated.multiswitch_addresses,
+          "i6s storage: addresses survive reload even when MultiSwitch is compiled out");
 }
 
 inline void i6s_input_tests() {
@@ -422,6 +445,35 @@ inline void i6s_multiswitch_tests() {
     state.sent(UINT32_MAX - 49);
     check(!state.due(49) && state.due(50), "multiswitch: repeat timer handles millis wraparound");
 
+    ms::Pages pages{};
+    pages.configure({0, 1, 2, 255});
+    for (uint8_t slot = 0; slot < ms::kMaxPages; ++slot) {
+        check(pages.due(0) == slot && pages.due(1) == slot,
+              "multiswitch pages: every active address is sent in order, failed sends remain pending");
+        pages.sent(slot, 1);
+        if (slot == 0) {
+            pages.states[0].toggle(0);
+        }
+    }
+    check(pages.due(2) == 0, "multiswitch pages: new changes do not starve other pending pages");
+    pages.sent(0, 2);
+    check(!pages.due(100) && pages.due(101) == 1, "multiswitch pages: every address has its own repeat deadline");
+    pages.states[1].toggle(7);
+    pages.states[2].toggle(3);
+    pages.configure({0, 1, 42, -1});
+    check(pages.states[0].switches == 1 && pages.states[1].switches == 0x80 &&
+              pages.states[2].switches == 0 && pages.states[2].pending,
+          "multiswitch pages: address changes reset only the affected page");
+    for (int i = 0; i < 3; ++i) {
+        const auto due = pages.due(200);
+        check(due && *due != 3, "multiswitch pages: Off addresses are never transmitted");
+        if (due) {
+            pages.sent(*due, 200);
+        }
+    }
+    pages.configure({-1, -1, -1, -1});
+    check(!pages.due(1000), "multiswitch pages: all Off disables transmission entirely");
+
     tn::SwipeTracker tracker{};
     const auto sample = [](const uint8_t x, const uint8_t y, const TouchEventKind event) {
         return tn::TouchSample{.point = tn::TouchPoint{.x = x, .y = y, .event = event}};
@@ -481,7 +533,7 @@ inline void i6s_multiswitch_tests() {
     auto storage = st::default_storage();
     mn::State menu{};
     menu.screen = mn::Screen::ModelSetup;
-    menu.setup.selected = static_cast<uint8_t>(mn::SetupRow::MultiSwitch);
+    menu.setup.selected = static_cast<uint8_t>(mn::SetupRow::MultiSwitch1);
     menu.setup.scroll = 7;
     uint32_t now = 3000;
     auto edit_cue = wm::logic::buzzer::Cue::None;
@@ -491,60 +543,119 @@ inline void i6s_multiswitch_tests() {
         mn::update(menu, mn::Input{0, 0, now++}, storage);
         return event;
     };
+    for (uint8_t slot = 0; slot < ms::kMaxPages; ++slot) {
+        menu.setup.selected = static_cast<uint8_t>(mn::SetupRow::MultiSwitch1) + slot;
+        auto& address = storage.active_model.multiswitch_addresses[slot];
+        address = 0;
+        press(mn::kKeyOk);
+        press(mn::kKeyDown);
+        check(menu.editing && address == -1 && edit_cue == wm::logic::buzzer::Cue::ValueStep,
+              "multiswitch setup: all four address rows step from zero to Off with a beep");
+        press(mn::kKeyDown);
+        check(address == -1 && edit_cue == wm::logic::buzzer::Cue::None,
+              "multiswitch setup: no change or beep below Off");
+        press(mn::kKeyUp);
+        check(address == 0 && edit_cue == wm::logic::buzzer::Cue::ValueStep,
+              "multiswitch setup: Up enables a page at address zero with a beep");
+        address = 255;
+        press(mn::kKeyUp);
+        check(address == 255 && edit_cue == wm::logic::buzzer::Cue::None,
+              "multiswitch setup: address edit clamps at 255 without a beep");
+        press(mn::kKeyDown);
+        check(address == 254 && edit_cue == wm::logic::buzzer::Cue::ValueStep,
+              "multiswitch setup: decrement confirms with value beep");
+        check(press(mn::kKeyOk).action == mn::Action::SaveActiveModel && !menu.editing,
+              "multiswitch setup: confirming any address requests model persistence");
+    }
     press(mn::kKeyOk);
     press(mn::kKeyDown);
-    check(menu.editing && storage.active_model.multiswitch_address == 0,
-          "multiswitch setup: address edit clamps at zero");
-    check(edit_cue == wm::logic::buzzer::Cue::None, "multiswitch setup: no value beep at lower limit");
-    press(mn::kKeyUp);
-    check(storage.active_model.multiswitch_address == 1, "multiswitch setup: UP increments module address");
-    check(edit_cue == wm::logic::buzzer::Cue::ValueStep, "multiswitch setup: increment confirms with value beep");
-    storage.active_model.multiswitch_address = 255;
-    press(mn::kKeyUp);
-    check(storage.active_model.multiswitch_address == 255, "multiswitch setup: address edit clamps at 255");
-    check(edit_cue == wm::logic::buzzer::Cue::None, "multiswitch setup: no value beep at upper limit");
-    press(mn::kKeyDown);
-    check(edit_cue == wm::logic::buzzer::Cue::ValueStep, "multiswitch setup: decrement confirms with value beep");
-    check(press(mn::kKeyOk).action == mn::Action::SaveActiveModel &&
-              storage.active_model.multiswitch_address == 254 && !menu.editing,
-          "multiswitch setup: confirming an address requests model persistence");
-    press(mn::kKeyOk);
     check(press(mn::kKeyCancel).action == mn::Action::SaveActiveModel && !menu.editing,
           "multiswitch setup: ESC finishes and saves like other model fields");
 
     using Dev = test_eeprom::FakeEeprom;
+    storage.active_model.multiswitch_addresses = {-1, 0, 42, 255};
     check(st::save_storage<Dev>(storage), "multiswitch storage: save model address");
     st::RadioStorage loaded{};
     st::load_storage<Dev>(loaded);
-    check(loaded.active_model.multiswitch_address == 254, "multiswitch storage: address survives reload");
+    check(loaded.active_model.multiswitch_addresses == storage.active_model.multiswitch_addresses,
+          "multiswitch storage: four addresses and Off survive reload");
     check(wm::logic::model_copy::copy_model<Dev>(
               storage, wm::logic::model_copy::active_slot(storage), wm::logic::model_copy::DstSlot{1}),
           "multiswitch storage: copy model with address");
     st::ModelConfig copy{};
     check(st::load_slot<Dev>(*st::model_slot_addr(1), copy) == st::Status::Ok &&
-              copy.multiswitch_address == 254, "multiswitch storage: copied model keeps address");
+              copy.multiswitch_addresses == storage.active_model.multiswitch_addresses,
+          "multiswitch storage: copied model keeps all page addresses");
     auto old = st::to_bytes(st::default_model_config(2));
     const auto address = *st::model_slot_addr(2);
     test_eeprom::write_slot_raw(address, st::kSchemaVersion, 364, old);
-    check(st::load_slot<Dev>(address, copy) == st::Status::Ok && copy.multiswitch_address == 0,
-          "multiswitch storage: older models migrate with address zero");
+    check(st::load_slot<Dev>(address, copy) == st::Status::Ok &&
+              copy.multiswitch_addresses == ms::Addresses{0, -1, -1, -1},
+          "multiswitch storage: older models migrate with only the first page enabled at address zero");
 
     wm::logic::input::InputState input{};
     wm::logic::trim::Controller trims{};
     std::array<uint16_t, wm::logic::kNumChannels> channels{};
     wm::logic::dashboard::View view{input, storage, trims, channels, true};
     wm::logic::display::Framebuffer off{}, on{};
-    wm::logic::dashboard::draw_multiswitch_page(off, view);
-    view.multiswitch_states = 1;
-    wm::logic::dashboard::draw_multiswitch_page(on, view);
+    wm::logic::dashboard::draw_multiswitch_page(off, view, 1, 5);
+    view.multiswitch_states[1] = 1;
+    wm::logic::dashboard::draw_multiswitch_page(on, view, 1, 5);
     check(off.data() != on.data(), "multiswitch dashboard: ON is visibly distinct from OFF");
     view.crsf = false;
     off.clear();
     on.clear();
-    wm::logic::dashboard::draw_multiswitch_page(on, view);
-    view.multiswitch_states = 0;
-    wm::logic::dashboard::draw_multiswitch_page(off, view);
+    wm::logic::dashboard::draw_multiswitch_page(on, view, 1, 5);
+    view.multiswitch_states[1] = 0;
+    wm::logic::dashboard::draw_multiswitch_page(off, view, 1, 5);
     check(off.data() == on.data(), "multiswitch dashboard: AFHDS shows CRSF requirement, not active fields");
+
+    namespace dash = wm::logic::dashboard;
+    dash::PageState dashboard{};
+    for (unsigned mask = 0; mask < 16; ++mask) {
+        auto& addresses = storage.active_model.multiswitch_addresses;
+        addresses.fill(-1);
+        uint8_t enabled = 0;
+        for (uint8_t slot = 0; slot < ms::kMaxPages; ++slot) {
+            if ((mask & (1u << slot)) != 0) {
+                addresses[slot] = slot;
+                check(ms::slot_at(addresses, enabled) == slot,
+                      "multiswitch dashboard: enabled entries map consecutively without Off gaps");
+                ++enabled;
+            }
+        }
+        dashboard.page = 0;
+        dash::configure_pages(dashboard, storage.active_model);
+        check(dashboard.count == 5 + enabled && !ms::slot_at(addresses, enabled),
+              "multiswitch dashboard: every combination exposes exactly the configured pages");
+        dash::prev_page(dashboard);
+        check(dashboard.page == dashboard.count - 1, "multiswitch dashboard: backward wrap reaches last active page");
+        dash::next_page(dashboard);
+        check(dashboard.page == 0, "multiswitch dashboard: forward wrap skips disabled pages");
+        for (uint8_t page = 0; page < dashboard.count; ++page) {
+            check(dashboard.page == page, "multiswitch dashboard: page navigation stays consecutive");
+            dash::handle_keys(dashboard, dash::kKeyPageDown);
+        }
+        check(dashboard.page == 0, "multiswitch dashboard: a full cycle returns to P1");
+    }
+
+    storage.active_model.multiswitch_addresses = {-1, -1, -1, 255};
+    dashboard.page = 8;
+    dash::configure_pages(dashboard, storage.active_model);
+    check(dashboard.count == 6 && dashboard.page == 5 && dash::page_label(view, 5).view() == "P6/6",
+          "multiswitch dashboard: disabling pages clamps the selection and updates page totals");
+    view.crsf = true;
+    view.multiswitch_states[3] = 0x80;
+    on.clear();
+    off.clear();
+    dash::render(on, dashboard, view);
+    dash::draw_status_bar(off, storage, input.battery_mv, view, 0);
+    dash::draw_multiswitch_page(off, view, 3, 5);
+    check(on.data() == off.data(), "multiswitch dashboard: P6 shows the fourth entry when entries 1-3 are Off");
+    storage.active_model.multiswitch_addresses.fill(-1);
+    dash::configure_pages(dashboard, storage.active_model);
+    check(dashboard.count == 5 && dashboard.page == 4 && dash::page_label(view, 4).view() == "P5/5",
+          "multiswitch dashboard: all Off leaves exactly the five original pages");
 }
 #endif
 
