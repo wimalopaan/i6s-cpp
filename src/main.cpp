@@ -31,6 +31,7 @@
 #include "wm/logic/mixer.hpp"
 #include "wm/logic/model_copy.hpp"
 #include "wm/logic/power.hpp"
+#include "wm/logic/preflight.hpp"
 #include "wm/logic/protocol.hpp"
 #include "wm/logic/safety.hpp"
 #include "wm/logic/storage.hpp"
@@ -271,7 +272,8 @@ void switch_model(const uint8_t index) {
     load_trims_from_model();
 }
 
-// Blocks until sticks and switches are safe (or the cancel key is pressed), sending failsafe pulses meanwhile.
+// Blocks until sticks and switches are safe (or the cancel key is pressed), sending failsafe pulses and
+// showing the safety warning meanwhile.
 void run_preflight(const wm::logic::storage::ModelConfig& model) {
     using namespace wm;
     using namespace logic;
@@ -284,6 +286,10 @@ void run_preflight(const wm::logic::storage::ModelConfig& model) {
     buzzer::PreflightTimer preflight{};
     buzzer::PreflightWarning warning{};
     uint32_t buzz_ms = time::millis();
+    uint32_t last_render_ms = 0;
+    bool rendered = false;
+    const bool crsf = model.rf_protocol == 1;
+    const bool afhds = g_rf_ok && !crsf;
 
     for (;;) {
         chip::watchdog::feed();
@@ -291,19 +297,33 @@ void run_preflight(const wm::logic::storage::ModelConfig& model) {
         const auto in = sample_inputs();
         const std::array<uint16_t, 4> raw{in.raw[0], in.raw[1], in.raw[2], in.raw[3]};
         const bool hold = in.switches.sa == SwitchPos::Down;
-        const bool ready = safety::check_preflight_throttle(raw, cals, sm, mt, hold) == safety::Preflight::Ok &&
-                           safety::switches_safe(in.switches, mt);
+        const auto thr = safety::check_preflight_throttle(raw, cals, sm, mt, hold);
+        const auto sw = preflight::unsafe_switches(in.switches, mt);
         g_keys = hw::keys::scan_keys();
-        if (ready || (g_keys & safety::kKeyCancel) != 0) {
+        if ((thr == safety::Preflight::Ok && !sw.any()) || (g_keys & safety::kKeyCancel) != 0) {
             play_buzzer_cue(warning.exit_cue());
             return;
         }
         warning.unsafe();
 
-        hw::crsf::update_channels(time::millis(), safety::kSafeIdleChannels,
-                                  wm::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
-                                  wm::logic::crsf::ArmedState{false});
-        hw::crsf::poll_telemetry(time::millis());
+        const uint32_t now = time::millis();
+#if WM_USE_USB
+        hw::usb::poll(logic::usb::Millis{now}, safety::kSafeIdleChannels, in.switches, in.battery_mv);
+#endif
+        if (crsf) {
+            hw::crsf::update_channels(now, safety::kSafeIdleChannels,
+                                      wm::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
+                                      wm::logic::crsf::ArmedState{false});
+        } else if (afhds) {
+            hw::rf::publish_channels(safety::kSafeIdleChannels);
+        }
+        hw::crsf::poll_telemetry(now);
+        if (!rendered || now - last_render_ms >= preflight::kRenderIntervalMs) {
+            rendered = true;
+            last_render_ms = now;
+            preflight::render(g_fb, thr, sw);
+            hw::lcd::flush(g_fb);
+        }
         if (preflight.step(buzzer::Millis{time::millis()})) {
             play_buzzer_cue(buzzer::Cue::WarnPreflight);
         }
