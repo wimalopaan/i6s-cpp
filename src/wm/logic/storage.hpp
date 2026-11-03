@@ -776,6 +776,40 @@ Status load_slot(const uint16_t addr, T& dst) {
     return Status::Ok;
 }
 
+/// Header lengths load_slot accepts for a model slot: the current layout and every legacy one.
+/// All of them start with the 10-byte name.
+constexpr bool is_model_slot_len(const uint16_t len) {
+    return len == sizeof(ModelConfig) || len == kLegacyModelV1Size || len == 348 || len == 352 || len == 360 ||
+           len == kMaxLegacyModelSize;
+}
+
+/// Reads only the header and the name of a model slot (Rust `peek_model_name`). Nothing for an empty,
+/// deleted or unreadable slot. Unlike load_slot it never converts or re-saves a legacy slot.
+template <EepromDevice Dev>
+std::optional<std::array<uint8_t, 10>> peek_model_name(const std::size_t index) {
+    const auto addr = model_slot_addr(index);
+    if (!addr) {
+        return std::nullopt;
+    }
+    std::array<uint8_t, kHeaderSize + 10> buf{};
+    if (Dev::read(*addr, buf) != Status::Ok) {
+        return std::nullopt;
+    }
+    std::array<uint8_t, kHeaderSize> hdr_bytes{};
+    std::array<uint8_t, 10> name{};
+    for (std::size_t i = 0; i < kHeaderSize; ++i) {
+        hdr_bytes[i] = buf[i];
+    }
+    for (std::size_t i = 0; i < name.size(); ++i) {
+        name[i] = buf[kHeaderSize + i];
+    }
+    const SlotHeader hdr = header_from_bytes(hdr_bytes);
+    if (hdr.magic != kSlotMagic || hdr.flags != kFlagValid || !is_model_slot_len(hdr.len)) {
+        return std::nullopt;
+    }
+    return name;
+}
+
 /// Loads radio config (A, then backup B) and the active model. Writes defaults when the EEPROM is blank.
 /// Returns true when the radio config was read from EEPROM (not replaced by defaults).
 template <EepromDevice Dev>

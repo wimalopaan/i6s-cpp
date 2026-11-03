@@ -21,6 +21,7 @@ struct I2c2Eeprom {
     static constexpr uint8_t kBaseAddr = 0x50;
     static constexpr uint8_t kMaxAddr = 0x57;
     static constexpr uint32_t kSpinLimit = 100000;
+    static constexpr uint32_t kStopSpinLimit = 2000;
     static constexpr uint32_t kAckPolls = 50;
     static constexpr std::size_t kPageSize = logic::storage::kPageSize;
     static constexpr std::size_t kMaxChunk = 255;
@@ -33,10 +34,15 @@ struct I2c2Eeprom {
 
     static constexpr uint32_t kErrorMask = I2C_ISR_NACKF | I2C_ISR_BERR | I2C_ISR_ARLO | I2C_ISR_OVR;
 
-    /// Enables the bus and probes the 0x50..0x57 address range. Returns false if no chip answers.
+    /// Enables the bus and probes the 0x50..0x57 address range. Returns false if no chip answers;
+    /// accesses then go to 0x50 (Rust `EEPROM_I2C_ADDR`).
     static bool init() {
         RCC->AHBENR |= RCC_AHBENR_GPIOBEN;
+        // SYSCFG needs its clock for the Fm+ bit below, otherwise the write is lost.
+        RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
         RCC->APB1ENR |= RCC_APB1ENR_I2C2EN;
+        RCC->APB1RSTR |= RCC_APB1RSTR_I2C2RST;
+        RCC->APB1RSTR &= ~RCC_APB1RSTR_I2C2RST;
 
         set_mode_mask<Port::B>((1u << 10) | (1u << 11), Mode::Alternate);
         set_alt_function<Port::B>({10}, {1});
@@ -56,6 +62,7 @@ struct I2c2Eeprom {
             }
             chip::watchdog::feed();
         }
+        g_addr = kBaseAddr;
         return false;
     }
 
@@ -97,10 +104,12 @@ private:
         I2C2->CR1 |= I2C_CR1_PE;
     }
 
-    /// Clears a hung bus: requests STOP, resets the peripheral, and restores the timing.
+    /// Clears a hung bus: requests STOP and waits briefly for it, resets the peripheral, and restores the timing.
     static void recover() {
         if ((I2C2->CR1 & I2C_CR1_PE) != 0) {
             I2C2->CR2 |= I2C_CR2_STOP;
+            for (uint32_t spin = 0; spin < kStopSpinLimit && (I2C2->ISR & I2C_ISR_STOPF) == 0; ++spin) {
+            }
         }
         I2C2->CR1 &= ~I2C_CR1_PE;
         RCC->APB1RSTR |= RCC_APB1RSTR_I2C2RST;
