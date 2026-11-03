@@ -971,7 +971,7 @@ void dashboard_test() {
     logic::dashboard::handle_keys(ps, logic::dashboard::kKeyPageUp);
     check(ps.page == 0, "page up goes back");
     logic::dashboard::handle_keys(ps, logic::dashboard::kKeyPageUp);
-    check(ps.page == logic::dashboard::kPageCount - 1, "page up wraps 0 to last page");
+    check(ps.page == ps.count - 1, "page up wraps 0 to last page");
     logic::dashboard::handle_keys(ps, logic::dashboard::kKeyPageDown);
     check(ps.page == 0, "page down wraps last page to 0");
 
@@ -1076,7 +1076,8 @@ void dashboard_test() {
 
     logic::display::Framebuffer fb{};
     PageState render_state{};
-    for (uint8_t p = 0; p < logic::dashboard::kPageCount; ++p) {
+    logic::dashboard::configure_pages(render_state, st.active_model);
+    for (uint8_t p = 0; p < render_state.count; ++p) {
         render_state.page = p;
         fb.clear();
         logic::dashboard::render(fb, render_state, view);
@@ -1086,7 +1087,7 @@ void dashboard_test() {
         }
         check(any, "dashboard page draws something");
     }
-    check(render_state.blink_phase == logic::dashboard::kPageCount, "blink phase advances once per render");
+    check(render_state.blink_phase == render_state.count, "blink phase advances once per render");
 
     fb.clear();
     logic::dashboard::draw_splash(fb);
@@ -4662,7 +4663,7 @@ void telem_slots_test() {
     };
 
     check(static_cast<std::size_t>(mn::SetupRow::Telemetry) == mn::kItemTelemRow &&
-              mn::kSetupRows == (wm::board::kHasMultiSwitch ? 11 : 10) &&
+              mn::kSetupRows == (wm::board::kHasMultiSwitch ? 14 : 10) &&
               static_cast<std::size_t>(mn::SetupRow::Protocol) == 8,
           "Telemetry must be the row before Protocol on the model setup screen");
 

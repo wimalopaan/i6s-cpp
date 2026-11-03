@@ -37,22 +37,35 @@ using display::kWidth;
 using display::Point;
 using display::Rect;
 
-inline constexpr uint8_t kPageCount = board::kHasMultiSwitch ? 6 : 5;
-inline constexpr std::array<std::string_view, 5> kPageLabels = board::kHasMultiSwitch
-    ? std::array<std::string_view, 5>{"P1/6", "P2/6", "P3/6", "P4/6", "P5/6"}
-    : std::array<std::string_view, 5>{"P1/5", "P2/5", "P3/5", "P4/5", "P5/5"};
+inline constexpr uint8_t kBasePageCount = 5;
 inline constexpr uint16_t kKeyPageDown = 1u << 8;
 inline constexpr uint16_t kKeyPageUp = 1u << 9;
+
+constexpr uint8_t page_count([[maybe_unused]] const storage::ModelConfig& model) {
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+    return static_cast<uint8_t>(kBasePageCount + multiswitch::enabled_count(model.multiswitch_addresses));
+#else
+    return kBasePageCount;
+#endif
+}
 
 struct PageState {
     uint8_t page{0};
     uint8_t blink_phase{0};
+    uint8_t count{kBasePageCount};
 };
 
-constexpr void next_page(PageState& s) { s.page = static_cast<uint8_t>((s.page + 1) % kPageCount); }
+constexpr void configure_pages(PageState& s, const storage::ModelConfig& model) {
+    s.count = page_count(model);
+    if (s.page >= s.count) {
+        s.page = static_cast<uint8_t>(s.count - 1);
+    }
+}
+
+constexpr void next_page(PageState& s) { s.page = static_cast<uint8_t>((s.page + 1) % s.count); }
 
 constexpr void prev_page(PageState& s) {
-    s.page = s.page == 0 ? static_cast<uint8_t>(kPageCount - 1) : static_cast<uint8_t>(s.page - 1);
+    s.page = s.page == 0 ? static_cast<uint8_t>(s.count - 1) : static_cast<uint8_t>(s.page - 1);
 }
 
 // Takes newly pressed keys (edge-detected). Up has priority over Down, as in the Rust firmware.
@@ -114,12 +127,21 @@ struct View {
     // A7105 signature read at init; shown as "E:xx" when the RF chip failed on AFHDS 2A.
     uint8_t rf_chip_id = 0;
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-    uint8_t multiswitch_states = 0;
+    std::array<uint8_t, multiswitch::kMaxPages> multiswitch_states{};
 #endif
 };
 
 using labels::model_name;
 using labels::model_type_label;
+
+constexpr format::Text<4> page_label(const View& v, const uint8_t page) {
+    format::Text<4> text;
+    text.push('P');
+    text.push(static_cast<char>('1' + page));
+    text.push('/');
+    text.push(static_cast<char>('0' + page_count(v.storage.active_model)));
+    return text;
+}
 
 /// Which footer the P1 page shows. Same precedence as Rust `gimbals::render_footer`.
 enum class FooterKind : uint8_t { Bind, Trim, Timer, Default };
@@ -567,10 +589,10 @@ constexpr void draw_gimbal_page(Framebuffer& fb, const View& v, const uint8_t bl
         case FooterKind::Timer: {
             const auto timer_text = format::format_timer(v.timer->value.value, v.timer->expired);
             const bool blink_on = (blink_phase & 0x08u) != 0;
-            widgets::draw_footer_three(fb, kPageLabels[0], timer_text.view(), "Hold OK:Menu", v.timer->expired && blink_on);
+            widgets::draw_footer_three(fb, page_label(v, 0).view(), timer_text.view(), "Hold OK:Menu", v.timer->expired && blink_on);
             break;
         }
-        case FooterKind::Default: widgets::draw_footer_split(fb, kPageLabels[0], "Hold OK:Menu"); break;
+        case FooterKind::Default: widgets::draw_footer_split(fb, page_label(v, 0).view(), "Hold OK:Menu"); break;
     }
 }
 
@@ -610,9 +632,9 @@ constexpr void draw_channel_page(Framebuffer& fb, const View& v, const bool seco
 
     fb.draw_vline({64, 12}, second_part ? 33 : 41, true);
     if (second_part) {
-        draw_page_footer(fb, v, kPageLabels[2], "CH 11-18 MONITOR");
+        draw_page_footer(fb, v, page_label(v, 2).view(), "CH 11-18 MONITOR");
     } else {
-        draw_page_footer(fb, v, kPageLabels[1], "CH 1-10 MONITOR");
+        draw_page_footer(fb, v, page_label(v, 1).view(), "CH 1-10 MONITOR");
     }
 }
 
@@ -641,7 +663,7 @@ constexpr void draw_model_page(Framebuffer& fb, const View& v) {
                          false);
     }
 
-    draw_page_footer(fb, v, kPageLabels[3], "MODEL DASHBOARD");
+    draw_page_footer(fb, v, page_label(v, 3).view(), "MODEL DASHBOARD");
 }
 
 // CRSF link page, same layout as Rust `telemetry.rs` (CRSF branch).
@@ -662,7 +684,7 @@ constexpr void draw_crsf_telemetry_page(Framebuffer& fb, const View& v) {
     fb.draw_str_6x10({66, 44}, "CAP:", false);
     fb.draw_str_6x10({92, 44}, d.cap.view(), false);
 
-    widgets::draw_footer_split(fb, kPageLabels[4], "CRSF LINK DIAG");
+    widgets::draw_footer_split(fb, page_label(v, 4).view(), "CRSF LINK DIAG");
 }
 
 // Sensor tile of the custom page, same layout as Rust `render_tile`: label, '*' when stale, value below.
@@ -700,7 +722,7 @@ constexpr void draw_custom_telemetry_page(Framebuffer& fb, const View& v) {
 
     fb.draw_vline({64, 12}, 42, true);
     fb.draw_hline({2, 31}, 124, true);
-    draw_page_footer(fb, v, kPageLabels[4], "CUSTOM TELEM");
+    draw_page_footer(fb, v, page_label(v, 4).view(), "CUSTOM TELEM");
 }
 
 constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
@@ -766,17 +788,17 @@ constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
                          .view(),
                      false);
 
-    draw_page_footer(fb, v, kPageLabels[4], "TELEMETRY SENSORS");
+    draw_page_footer(fb, v, page_label(v, 4).view(), "TELEMETRY SENSORS");
 }
 
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-constexpr void draw_multiswitch_page(Framebuffer& fb, const View& v) {
+constexpr void draw_multiswitch_page(Framebuffer& fb, const View& v, const uint8_t slot, const uint8_t page) {
     if (!v.crsf || v.usb_sim) {
         fb.draw_str_6x10({10, 25}, v.usb_sim ? "USB SIM: NO RF" : "CRSF REQUIRED", false);
     } else {
         for (uint8_t i = 0; i < multiswitch::kSwitchCount; ++i) {
             const auto r = multiswitch::switch_rect(i);
-            const bool on = (v.multiswitch_states & (1u << i)) != 0;
+            const bool on = (v.multiswitch_states[slot] & (1u << i)) != 0;
             fb.fill_rect(r, on);
             fb.draw_rect(r, true);
             fb.draw_char_4x6({r.pos.x + 3, r.pos.y + 5}, static_cast<char>('1' + i), on);
@@ -787,11 +809,11 @@ constexpr void draw_multiswitch_page(Framebuffer& fb, const View& v) {
     for (const char c : std::string_view{"MS "}) {
         footer.push(c);
     }
-    format::detail::push_uint(footer, v.storage.active_model.multiswitch_address);
+    format::detail::push_uint(footer, static_cast<unsigned>(v.storage.active_model.multiswitch_addresses[slot]));
     for (const char c : std::string_view{" Hold:Menu"}) {
         footer.push(c);
     }
-    widgets::draw_footer_split(fb, "P6/6", footer.view());
+    widgets::draw_footer_split(fb, page_label(v, page).view(), footer.view());
 }
 #endif
 
@@ -815,6 +837,7 @@ constexpr void draw_timer_modal(Framebuffer& fb, const flight_timer::Modal& m) {
 
 // Renders the status bar and the current page, then advances the blink phase.
 constexpr void render(Framebuffer& fb, PageState& s, const View& v) {
+    configure_pages(s, v.storage.active_model);
     draw_status_bar(fb, v.storage, v.in.battery_mv, v, s.blink_phase);
 
     switch (s.page) {
@@ -822,10 +845,18 @@ constexpr void render(Framebuffer& fb, PageState& s, const View& v) {
         case 1: draw_channel_page(fb, v, false); break;
         case 2: draw_channel_page(fb, v, true); break;
         case 3: draw_model_page(fb, v); break;
+        default:
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-        case 5: draw_multiswitch_page(fb, v); break;
+            if (s.page >= kBasePageCount) {
+                if (const auto slot = multiswitch::slot_at(
+                        v.storage.active_model.multiswitch_addresses, s.page - kBasePageCount)) {
+                    draw_multiswitch_page(fb, v, *slot, s.page);
+                }
+                break;
+            }
 #endif
-        default: draw_telemetry_page(fb, v); break;
+            draw_telemetry_page(fb, v);
+            break;
     }
 
     if (v.timer_modal) {

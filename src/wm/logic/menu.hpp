@@ -59,10 +59,10 @@ inline constexpr std::size_t kItemModelSetup = 1;
 enum class SetupRow : uint8_t {
     Name = 0, Type, ArmSwitch, Timer, Trigger, Copy, Vario, Telemetry, Protocol, Reset,
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-    MultiSwitch,
+    MultiSwitch1, MultiSwitch2, MultiSwitch3, MultiSwitch4,
 #endif
 };
-inline constexpr std::size_t kSetupRows = board::kHasMultiSwitch ? 11 : 10;
+inline constexpr std::size_t kSetupRows = board::kHasMultiSwitch ? 14 : 10;
 inline constexpr std::size_t kItemVarioRow = static_cast<std::size_t>(SetupRow::Vario);
 inline constexpr std::size_t kItemTelemRow = static_cast<std::size_t>(SetupRow::Telemetry);
 inline constexpr uint8_t kNameLen = 10;
@@ -579,7 +579,10 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
                 case SetupRow::Timer:
                 case SetupRow::Trigger:
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-                case SetupRow::MultiSwitch:
+                case SetupRow::MultiSwitch1:
+                case SetupRow::MultiSwitch2:
+                case SetupRow::MultiSwitch3:
+                case SetupRow::MultiSwitch4:
 #endif
                     s.editing = true;
                     break;
@@ -688,12 +691,16 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
         case SetupRow::Type:
             break;
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-        case SetupRow::MultiSwitch:
+        case SetupRow::MultiSwitch1:
+        case SetupRow::MultiSwitch2:
+        case SetupRow::MultiSwitch3:
+        case SetupRow::MultiSwitch4: {
+            auto& address = m.multiswitch_addresses[
+                static_cast<uint8_t>(row) - static_cast<uint8_t>(SetupRow::MultiSwitch1)];
             if (n.up != n.down) {
-                const uint8_t previous = m.multiswitch_address;
-                m.multiswitch_address = static_cast<uint8_t>(
-                    std::clamp(static_cast<int>(m.multiswitch_address) + (n.up ? 1 : -1), 0, 255));
-                if (m.multiswitch_address != previous) {
+                const int16_t previous = address;
+                address = static_cast<int16_t>(std::clamp(static_cast<int>(address) + (n.up ? 1 : -1), -1, 255));
+                if (address != previous) {
                     s.cue = buzzer::Cue::ValueStep;
                 }
             }
@@ -702,6 +709,7 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
                 return save;
             }
             break;
+        }
 #endif
         case SetupRow::Copy:
             switch (model_copy::update(s.copy, model_copy::Keys{n.up, n.down, n.ok, n.cancel})) {
@@ -1903,10 +1911,17 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
                 widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Reset: [OK Defaults]", {}, {0});
                 break;
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-            case SetupRow::MultiSwitch:
-                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "MS Addr:",
-                                       format::format_int(m.multiswitch_address).view(), {64});
+            case SetupRow::MultiSwitch1:
+            case SetupRow::MultiSwitch2:
+            case SetupRow::MultiSwitch3:
+            case SetupRow::MultiSwitch4: {
+                const auto index = idx - static_cast<std::size_t>(SetupRow::MultiSwitch1);
+                constexpr std::array<std::string_view, 4> labels{"MS1 Addr:", "MS2 Addr:", "MS3 Addr:", "MS4 Addr:"};
+                const auto address = m.multiswitch_addresses[index];
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, labels[index],
+                                       address < 0 ? std::string_view{"Off"} : format::format_int(address).view(), {64});
                 break;
+            }
 #endif
         }
     }
