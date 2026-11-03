@@ -1,9 +1,9 @@
 #pragma once
 
 // Pure trainer logic (Rust `trainer/ppm_in.rs`, `trainer/ppm_out.rs`, `trainer/handover.rs`):
-// the PPM decoder for the student input, the 8-channel PPM generator for the
+// the PPM decoder for the student input, the 8-channel PPM frame periods for the
 // trainer output, and the safety handover between instructor sticks and student.
-// Timer capture, compare and pin access live in `hw/trainer.hpp`.
+// Timer, DMA and pin access live in `hw/trainer.hpp`.
 
 #include <algorithm>
 #include <array>
@@ -22,12 +22,6 @@ struct PulseUs {
 struct DeltaMs {
     uint16_t value = 0;
     constexpr bool operator==(const DeltaMs&) const = default;
-};
-
-struct Interval {
-    PulseUs duration{};
-    bool high = false;
-    constexpr bool operator==(const Interval&) const = default;
 };
 
 inline constexpr std::size_t kPpmInChannels = 8;
@@ -122,57 +116,27 @@ private:
     uint32_t frame_count_ = 0;
 };
 
-class PpmGenerator {
-public:
-    constexpr PpmGenerator() { channels_.fill(kCenterUs); }
+// Timer periods (in us) of one PPM output frame. Every period starts with a kOutSyncUs low pulse and
+// ends high, so a hardware PWM with a fixed compare value and a per-period ARR produces the frame.
+// Periods 0..7 carry the channels (clamped to 900..2100 us); the last one is the sync gap that pads
+// the frame to kFrameTotalUs (at least kOutMinGapUs high). Missing channels are centred.
+inline constexpr std::size_t kPpmOutPeriods = kPpmOutChannels + 1;
+using OutPeriods = std::array<uint16_t, kPpmOutPeriods>;
 
-    // Copies up to 8 channels, clamped to 900..2100 us.
-    template <std::size_t N>
-    constexpr void update_channels(const std::array<uint16_t, N>& chs) {
-        constexpr std::size_t kCount = std::min(N, kPpmOutChannels);
-        for (std::size_t i = 0; i < kCount; ++i) {
-            channels_[i] = std::clamp(chs[i], kOutMinUs, kOutMaxUs);
-        }
+template <std::size_t N>
+constexpr OutPeriods ppm_out_periods(const std::array<uint16_t, N>& chs) {
+    constexpr uint16_t kMinPeriodUs = kOutSyncUs + kOutMinHighUs;
+    OutPeriods periods{};
+    uint32_t used = kOutSyncUs;
+    for (std::size_t i = 0; i < kPpmOutChannels; ++i) {
+        const uint16_t ch = i < N ? std::clamp(chs[i], kOutMinUs, kOutMaxUs) : kCenterUs;
+        periods[i] = std::max(ch, kMinPeriodUs);
+        used += periods[i];
     }
-
-    constexpr void reset_frame() {
-        current_ = 0;
-        in_sync_pulse_ = true;
-        elapsed_us_ = 0;
-    }
-
-    // Returns the next low or high interval. The 18 intervals of a frame sum to kFrameTotalUs.
-    constexpr Interval next_interval() {
-        if (current_ < kPpmOutChannels) {
-            if (in_sync_pulse_) {
-                in_sync_pulse_ = false;
-                elapsed_us_ += kOutSyncUs;
-                return {PulseUs{kOutSyncUs}, false};
-            }
-            const uint16_t high = static_cast<uint16_t>(std::max<int>(channels_[current_] - kOutSyncUs, kOutMinHighUs));
-            in_sync_pulse_ = true;
-            ++current_;
-            elapsed_us_ += high;
-            return {PulseUs{high}, true};
-        }
-        if (in_sync_pulse_) {
-            in_sync_pulse_ = false;
-            elapsed_us_ += kOutSyncUs;
-            return {PulseUs{kOutSyncUs}, false};
-        }
-        const uint32_t gap = elapsed_us_ < kFrameTotalUs ? kFrameTotalUs - elapsed_us_ : 0;
-        current_ = 0;
-        in_sync_pulse_ = true;
-        elapsed_us_ = 0;
-        return {PulseUs{static_cast<uint16_t>(std::max<uint32_t>(gap, kOutMinGapUs))}, true};
-    }
-
-private:
-    OutChannels channels_{};
-    std::size_t current_ = 0;
-    bool in_sync_pulse_ = true;
-    uint32_t elapsed_us_ = 0;
-};
+    const uint32_t gap = used < kFrameTotalUs ? kFrameTotalUs - used : 0;
+    periods[kPpmOutChannels] = static_cast<uint16_t>(kOutSyncUs + std::max<uint32_t>(gap, kOutMinGapUs));
+    return periods;
+}
 
 enum class State : uint8_t { Disabled, StudentActive, InstructorOverride, SignalLost };
 

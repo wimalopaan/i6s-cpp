@@ -4395,15 +4395,15 @@ void trainer_test() {
     using tr::PulseUs;
 
     constexpr uint32_t kTotal = [] {
-        tr::PpmGenerator g;
-        g.update_channels(std::array<uint16_t, 8>{1000, 1500, 2000, 1500, 1200, 1800, 1000, 2000});
+        const auto periods =
+            tr::ppm_out_periods(std::array<uint16_t, 8>{1000, 1500, 2000, 1500, 1200, 1800, 1000, 2000});
         uint32_t total = 0;
-        for (int i = 0; i < 18; ++i) {
-            total += g.next_interval().duration.value;
+        for (const uint16_t p : periods) {
+            total += p;
         }
         return total;
     }();
-    static_assert(kTotal == tr::kFrameTotalUs, "18 generator intervals must sum to 22.5 ms");
+    static_assert(kTotal == tr::kFrameTotalUs, "9 output periods must sum to 22.5 ms");
 
     {
         tr::PpmDecoder d;
@@ -4453,21 +4453,22 @@ void trainer_test() {
         check(d.channels() && (*d.channels())[1] == 988, "pulse of 900 us clamps up to the 988 us decode floor");
     }
     {
-        tr::PpmGenerator g;
-        g.update_channels(std::array<uint16_t, 8>{1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500});
-        const auto first = g.next_interval();
-        check(first.duration.value == 400 && !first.high, "frame starts with a 400 us low sync");
-        const auto second = g.next_interval();
-        check(second.duration.value == 1100 && second.high, "1500 us channel is a 1100 us high after sync");
+        const auto p = tr::ppm_out_periods(std::array<uint16_t, 8>{1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500});
+        check(p[0] == 1500, "1500 us channel is a 1500 us period (400 us low sync, 1100 us high)");
+        check(p[8] == 400 + 22500 - 8 * 1500 - 400, "gap period pads the frame to 22.5 ms");
     }
     {
-        tr::PpmGenerator g;
-        g.update_channels(std::array<uint16_t, 8>{2500, 500, 1500, 1500, 1500, 1500, 1500, 1500});
-        g.next_interval();
-        const auto high = g.next_interval();
-        check(high.duration.value == 1700, "channel above 2100 us clamps to 2100 us");
-        g.next_interval();
-        check(g.next_interval().duration.value == 500, "channel below 900 us clamps to 900 us high minimum");
+        const auto p = tr::ppm_out_periods(std::array<uint16_t, 8>{2500, 500, 1500, 1500, 1500, 1500, 1500, 1500});
+        check(p[0] == 2100, "channel above 2100 us clamps to 2100 us");
+        check(p[1] == 900, "channel below 900 us clamps to 900 us");
+    }
+    {
+        const auto p = tr::ppm_out_periods(std::array<uint16_t, 8>{2100, 2100, 2100, 2100, 2100, 2100, 2100, 2100});
+        check(p[8] == 400 + 22500 - 8 * 2100 - 400, "full-scale channels still fit the 22.5 ms frame");
+    }
+    {
+        const auto p = tr::ppm_out_periods(std::array<uint16_t, 4>{1000, 1100, 1200, 1300});
+        check(p[4] == 1500 && p[7] == 1500, "missing channels are centred");
     }
     {
         tr::Handover h;
