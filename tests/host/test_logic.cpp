@@ -353,6 +353,29 @@ void storage_test() {
     st::SlotHeader repaired = test_eeprom::read_header(st::kRadioSlotA);
     check(repaired.magic == st::kSlotMagic, "fallback must repair slot A");
 
+    {
+        st::ModelConfig m = st::default_model_config(3);
+        m.name = {'P', 'E', 'E', 'K', ' ', ' ', ' ', ' ', ' ', ' '};
+        check(st::save_model_to_slot<Dev>(3, m), "model slot 3 must save");
+        const auto peeked = st::peek_model_name<Dev>(3);
+        check(peeked.has_value() && (*peeked)[0] == 'P' && (*peeked)[3] == 'K', "peek must return the slot name");
+        const auto addr4 = st::model_slot_addr(4).value();
+        for (std::size_t i = 0; i < st::kHeaderSize + 10; ++i) {
+            mem[addr4 + i] = 0xFF;
+        }
+        check(!st::peek_model_name<Dev>(4).has_value(), "peek of a blank slot must return nothing");
+        std::array<uint8_t, st::kLegacyModelV1Size> legacy{};
+        legacy.fill(0);
+        legacy[0] = 'L';
+        test_eeprom::write_slot_raw(addr4, 0, legacy.size(), legacy);
+        const auto legacy_name = st::peek_model_name<Dev>(4);
+        check(legacy_name.has_value() && (*legacy_name)[0] == 'L', "peek must accept a legacy-length slot");
+        check(test_eeprom::read_header(addr4).len == st::kLegacyModelV1Size, "peek must not convert a legacy slot");
+        test_eeprom::write_slot_raw(addr4, st::kSchemaVersion, 77, legacy);
+        check(!st::peek_model_name<Dev>(4).has_value(), "peek must reject an unknown slot length");
+        check(!st::peek_model_name<Dev>(st::kNumModels).has_value(), "peek out of range must return nothing");
+    }
+
     Dev::fail_writes = true;
     check(!st::save_storage<Dev>(s), "failing EEPROM must report save failure");
     Dev::fail_writes = false;

@@ -240,12 +240,8 @@ void apply_protocol_link() {
 void refresh_model_names() {
     using namespace wm;
     for (std::size_t i = 0; i < logic::storage::kNumModels; ++i) {
-        g_model_names[i].fill(' ');
-        logic::storage::ModelConfig model{};
-        const auto addr = logic::storage::model_slot_addr(i);
-        if (addr && logic::storage::load_slot<hw::I2c2Eeprom>(*addr, model) == logic::storage::Status::Ok) {
-            g_model_names[i] = model.name;
-        }
+        // Header and name only (18 bytes instead of a full slot); empty slots show their default name (Rust).
+        g_model_names[i] = logic::storage::peek_model_name<hw::I2c2Eeprom>(i).value_or(logic::storage::default_name(i));
         chip::watchdog::feed();
     }
 }
@@ -503,6 +499,7 @@ int main() {
                     vario.reset();
                     break;
                 case logic::menu::Action::SaveActiveModel:
+                    store_trims_in_model();
                     logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage);
                     apply_protocol_link();
                     break;
@@ -528,6 +525,9 @@ int main() {
 #endif
                     break;
                 case logic::menu::Action::CopyActiveModel:
+                    // The copy gets the current trims, not the ones from the last trim auto-save (Rust keeps
+                    // active_model.trims in sync every loop).
+                    store_trims_in_model();
                     logic::model_copy::copy_model<hw::I2c2Eeprom>(
                         g_storage, logic::model_copy::active_slot(g_storage), logic::model_copy::DstSlot{ev.index});
                     break;
@@ -558,6 +558,7 @@ int main() {
             }
         }
         if (rx_id_dirty && !armed) {
+            store_trims_in_model();
             if (logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage)) {
                 play_buzzer_cue(logic::buzzer::Cue::RxSave);
                 rx_id_dirty = false;
