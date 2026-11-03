@@ -2066,6 +2066,64 @@ void cancel_click_test() {
           "cancel click: mixer line edit cancel stays silent");
 }
 
+void ok_click_test() {
+    namespace mn = logic::menu;
+    using logic::buzzer::Cue;
+    using mn::Screen;
+
+    uint32_t now = 0;
+    // OK on a fresh menu state of `from`: returns the cue of the OK tick.
+    auto ok = [&](const Screen from, const bool editing, mn::State* out = nullptr) {
+        logic::storage::RadioStorage st = logic::storage::default_storage();
+        mn::State ms{};
+        ms.screen = from;
+        ms.editing = editing;
+        now += 10;
+        mn::update(ms, mn::Input{mn::kKeyOk, mn::kKeyOk, now}, st);
+        const Cue cue = ms.cue;
+        if (out != nullptr) {
+            *out = ms;
+        }
+        mn::update(ms, mn::Input{0, 0, now + 1}, st);
+        check(ms.cue == Cue::None, "ok click: tone clears on the next tick");
+        return cue;
+    };
+
+    mn::State after{};
+    check(ok(Screen::Main, false, &after) == Cue::Click && after.screen == Screen::ModelSelect,
+          "ok click: main menu entry clicks");
+    check(ok(Screen::ModelSelect, false) == Cue::Click, "ok click: model switch clicks");
+    check(ok(Screen::ModelSetup, false) == Cue::Click, "ok click: model setup row clicks");
+    check(ok(Screen::ModelSetup, true) == Cue::Click, "ok click: model setup edit step clicks");
+    check(ok(Screen::DualRate, false) == Cue::Click, "ok click: dual rate edit start clicks");
+    check(ok(Screen::DualRate, true) == Cue::Click, "ok click: dual rate edit end clicks");
+    check(ok(Screen::ThrottleCurve, false) == Cue::Click, "ok click: throttle curve clicks");
+    check(ok(Screen::WingMixer, false) == Cue::Click, "ok click: wing mixer clicks");
+    check(ok(Screen::MixerLine, false) == Cue::Click, "ok click: mixer line edit start clicks");
+    check(ok(Screen::MixerLine, true) == Cue::Click, "ok click: mixer line edit end clicks");
+    check(ok(Screen::GlobalVars, false) == Cue::Click, "ok click: global variables click");
+    check(ok(Screen::AuxChannels, false) == Cue::Click, "ok click: aux channels click");
+    check(ok(Screen::RadioSetup, false) == Cue::Click, "ok click: radio setup row clicks");
+    check(ok(Screen::InputSetup, false) == Cue::Click, "ok click: input setup row clicks");
+    check(ok(Screen::ProtocolSetup, false) == Cue::Click, "ok click: protocol setup clicks");
+    check(ok(Screen::VarioSetup, false) == Cue::Click, "ok click: vario setup clicks");
+    check(ok(Screen::TelemSetup, false) == Cue::Click, "ok click: telemetry setup clicks");
+    check(ok(Screen::ChannelReverse, false) == Cue::Click, "ok click: channel reverse toggle clicks");
+
+    check(ok(Screen::DiagAnalog, false, &after) == Cue::None && after.nav_tick,
+          "ok click: diag page change keeps the nav tick only");
+    check(ok(Screen::ChannelMonitor, false) == Cue::None, "ok click: channel monitor ignores OK");
+    check(ok(Screen::SystemInfo, false) == Cue::None, "ok click: system info ignores OK");
+
+    // Keys held when a screen opens are ignored until released, without a click.
+    logic::storage::RadioStorage st = logic::storage::default_storage();
+    mn::State ms{};
+    ms.screen = Screen::Main;
+    ms.waiting_release = true;
+    mn::update(ms, mn::Input{mn::kKeyOk, mn::kKeyOk, now += 10}, st);
+    check(ms.cue == Cue::None && ms.screen == Screen::Main, "ok click: no click while waiting for release");
+}
+
 void aux_menu_test() {
     namespace mn = logic::menu;
     using mn::Action;
@@ -4934,6 +4992,7 @@ int main() {
     mixer_menu_test();
     value_cues_test();
     cancel_click_test();
+    ok_click_test();
     aux_menu_test();
     radio_setup_test();
     afhds2a_test();

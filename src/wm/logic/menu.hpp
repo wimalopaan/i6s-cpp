@@ -1614,6 +1614,45 @@ constexpr bool is_source_selection(const State& s) {
     return s.editing && (s.screen == Screen::AuxChannels || (s.screen == Screen::MixerLine && s.mix_line.selected == 1));
 }
 
+// Per-screen handler for one tick of navigation keys.
+constexpr Event update_screen(State& s, const Nav& n, const Input& in, storage::RadioStorage& st) {
+    switch (s.screen) {
+        case Screen::Main: return update_main(s, n, st.radio.active_model);
+        case Screen::ModelSelect: return update_models(s, n);
+        case Screen::ModelSetup: return update_setup(s, n, st.active_model, st.radio, model_copy::active_slot(st));
+        case Screen::DualRate: return update_dual_rate(s, n, st.active_model, st.radio);
+        case Screen::ThrottleCurve: return update_throttle_curve(s, n, st.active_model);
+        case Screen::AuxChannels: return update_aux(s, n, st.active_model, st.radio);
+        case Screen::RadioSetup: return update_radio_setup(s, n, st.radio);
+        case Screen::InputSetup: return update_input_setup(s, n, st.radio);
+        case Screen::ProtocolSetup: return update_protocol(s, n, st.active_model);
+        case Screen::CrsfSetup: return update_crsf_setup(s, n, in);
+        case Screen::VarioSetup: return update_vario(s, n, st.active_model, st.radio);
+        case Screen::TelemSetup: return update_telem(s, n, st.active_model);
+        case Screen::ChannelReverse: return update_channel_reverse(s, n, st.active_model);
+        case Screen::ChannelMonitor: return update_monitor(s, n);
+        case Screen::DiagAnalog: return update_diag(s, n);
+        case Screen::SystemInfo: return update_system(s, n);
+        case Screen::WingMixer: return update_wing_mixer(s, n, st.active_model);
+        case Screen::MixerLine: return update_mixer_line(s, n, st.active_model, st.radio);
+        case Screen::GlobalVars: return update_global_vars(s, n, st.active_model);
+        case Screen::Closed: break;
+    }
+    return {};
+}
+
+// OK confirms with a click as in Rust (`buzzer.click()` in the screen handlers). Configure Module plays its own
+// tones; Channel Monitor and System Info ignore OK.
+constexpr bool ok_clicks(const Screen screen) {
+    switch (screen) {
+        case Screen::CrsfSetup:
+        case Screen::ChannelMonitor:
+        case Screen::SystemInfo:
+        case Screen::Closed: return false;
+        default: return true;
+    }
+}
+
 constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
     s.nav_tick = false;
     s.cue = buzzer::Cue::None;
@@ -1651,29 +1690,12 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
         n.down = n.down || step == jog::Step::Down;
     }
 
-    switch (s.screen) {
-        case Screen::Main: return update_main(s, n, st.radio.active_model);
-        case Screen::ModelSelect: return update_models(s, n);
-        case Screen::ModelSetup: return update_setup(s, n, st.active_model, st.radio, model_copy::active_slot(st));
-        case Screen::DualRate: return update_dual_rate(s, n, st.active_model, st.radio);
-        case Screen::ThrottleCurve: return update_throttle_curve(s, n, st.active_model);
-        case Screen::AuxChannels: return update_aux(s, n, st.active_model, st.radio);
-        case Screen::RadioSetup: return update_radio_setup(s, n, st.radio);
-        case Screen::InputSetup: return update_input_setup(s, n, st.radio);
-        case Screen::ProtocolSetup: return update_protocol(s, n, st.active_model);
-        case Screen::CrsfSetup: return update_crsf_setup(s, n, in);
-        case Screen::VarioSetup: return update_vario(s, n, st.active_model, st.radio);
-        case Screen::TelemSetup: return update_telem(s, n, st.active_model);
-        case Screen::ChannelReverse: return update_channel_reverse(s, n, st.active_model);
-        case Screen::ChannelMonitor: return update_monitor(s, n);
-        case Screen::DiagAnalog: return update_diag(s, n);
-        case Screen::SystemInfo: return update_system(s, n);
-        case Screen::WingMixer: return update_wing_mixer(s, n, st.active_model);
-        case Screen::MixerLine: return update_mixer_line(s, n, st.active_model, st.radio);
-        case Screen::GlobalVars: return update_global_vars(s, n, st.active_model);
-        case Screen::Closed: break;
+    const Screen screen = s.screen;
+    const Event ev = update_screen(s, n, in, st);
+    if (n.ok && s.cue == buzzer::Cue::None && !s.nav_tick && ok_clicks(screen)) {
+        s.cue = buzzer::Cue::Click;
     }
-    return {};
+    return ev;
 }
 
 // Name without the NUL terminator, trailing spaces kept.
