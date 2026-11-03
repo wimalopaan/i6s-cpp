@@ -115,24 +115,41 @@ inline constexpr std::size_t kItemCalibration = 9;
 inline constexpr std::size_t kItemDiagAnalog = 10;
 inline constexpr std::size_t kItemSystemInfo = 11;
 inline constexpr std::size_t kItemRadioSetup = 7;
-// Radio Setup row contents; the order per board is given by kRadioItems.
+// Radio Setup row contents; the order per board is given by kBoardRadioItems.
 enum class RadioItem : uint8_t {
     ThrTrim, Beeper, Tones, BlTimer, BlLevel, Contrast, BatWarn, UsbMode, ModulePwr, ExtSwitches, ExtAdc,
     StickMode, Gimbals, InputSetup, PpmOut, TrainerIn, J4Mode, RearLeft, RearRight, Touch, SwitchSound,
 };
 #if WM_PCB_I6S
-inline constexpr std::array<RadioItem, 20> kRadioItems{
+inline constexpr std::array<RadioItem, 20> kBoardRadioItems{
     RadioItem::ThrTrim,   RadioItem::Beeper,   RadioItem::Tones,     RadioItem::BlTimer,     RadioItem::BlLevel,
     RadioItem::Contrast,  RadioItem::BatWarn,  RadioItem::UsbMode,   RadioItem::ModulePwr,   RadioItem::J4Mode,
     RadioItem::RearLeft,  RadioItem::RearRight, RadioItem::Touch,    RadioItem::StickMode,   RadioItem::Gimbals,
     RadioItem::SwitchSound, RadioItem::InputSetup, RadioItem::ExtAdc, RadioItem::PpmOut,     RadioItem::TrainerIn};
 #else
-inline constexpr std::array<RadioItem, 16> kRadioItems{
+inline constexpr std::array<RadioItem, 16> kBoardRadioItems{
     RadioItem::ThrTrim,   RadioItem::Beeper,  RadioItem::Tones,     RadioItem::BlTimer,    RadioItem::BlLevel,
     RadioItem::Contrast,  RadioItem::BatWarn, RadioItem::UsbMode,   RadioItem::ModulePwr,  RadioItem::ExtSwitches,
     RadioItem::ExtAdc,    RadioItem::StickMode, RadioItem::Gimbals, RadioItem::InputSetup, RadioItem::PpmOut,
     RadioItem::TrainerIn};
 #endif
+#if WM_USE_USB
+inline constexpr bool kHasUsb = true;
+#else
+inline constexpr bool kHasUsb = false;
+#endif
+
+// Rows whose feature is compiled out (USB Mode without USE_USB) are not shown.
+constexpr bool radio_item_present(const RadioItem item) {
+    return kHasUsb || item != RadioItem::UsbMode;
+}
+
+inline constexpr auto kRadioItems = [] {
+    constexpr auto n = static_cast<std::size_t>(std::ranges::count_if(kBoardRadioItems, radio_item_present));
+    std::array<RadioItem, n> items{};
+    std::ranges::copy_if(kBoardRadioItems, items.begin(), radio_item_present);
+    return items;
+}();
 inline constexpr std::size_t kRadioRows = kRadioItems.size();
 
 constexpr std::size_t radio_row_of(const RadioItem item) {

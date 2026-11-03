@@ -2144,6 +2144,10 @@ void radio_setup_test() {
     check(thr.action == Action::SaveRadioConfig && st.radio.throttle_trim == 1,
           "radio: throttle trim must cycle and request a save");
 
+    const bool usb_row = std::ranges::find(mn::kRadioItems, mn::RadioItem::UsbMode) != mn::kRadioItems.end();
+    check(usb_row == mn::kHasUsb && mn::kRadioRows == mn::kBoardRadioItems.size() - (mn::kHasUsb ? 0 : 1),
+          "radio: USB Mode row exists only when USE_USB is enabled");
+
     st.radio.gimbal_type = 0;
     const std::size_t gimbal_row = mn::radio_row_of(mn::RadioItem::Gimbals);
     check(mn::radio_value(st.radio, gimbal_row).view() == "POT", "radio: gimbal type 0 must read POT");
@@ -2172,7 +2176,7 @@ void radio_setup_test() {
     tap(mn::kKeyOk);
     check(st.radio.backlight_timeout == 1, "radio: backlight timeout must cycle");
 
-    ms.radio.selected = 8;
+    ms.radio.selected = mn::radio_row_of(mn::RadioItem::ModulePwr);
     tap(mn::kKeyOk);
     check(st.radio.ext_module_pwr == 1, "radio: PC13 power must toggle");
 

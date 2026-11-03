@@ -45,7 +45,7 @@ Firmware (clang + arm-none-eabi-gcc for Cortex-M0, MinSizeRel = -Oz):
     cmake -S . -B build-fw -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi-clang.cmake -DCMAKE_BUILD_TYPE=MinSizeRel
     cmake --build build-fw --target i6s_fw
 
-`USE_USB` (default ON) sets `WM_USE_USB`, so USB code can be left out to save flash: `-DUSE_USB=OFF`.
+`USE_USB` (default ON) sets `WM_USE_USB`, so USB code can be left out to save flash: `-DUSE_USB=OFF`. Without USB the "USB Mode" row is also removed from Radio Setup.
 
 `PCB` selects the board: `-DPCB=I6X` (default, also when unset) or `-DPCB=I6S`. It sets `WM_PCB_I6S` for firmware and
 host tests; board constants live in `src/wm/board.hpp`.

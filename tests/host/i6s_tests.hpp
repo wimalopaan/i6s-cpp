@@ -252,14 +252,19 @@ inline void i6s_radio_setup_tests() {
         "Thr Trim:", "Beeper:",     "Tones:",   "BL Timer:", "BL Level:",   "Contrast:",  "Bat Warn:",
         "USB Mode:", "H1 PF6 Pwr:", "J4 Mode:", "Rear L:",   "Rear R:",     "Touch:",     "Stick Mode:",
         "Gimbals:",  "Sw Sound:",   "Inputs:",  "Ext ADC (PC):", "PPM Out:", "Trainer In:"};
-    bool labels_ok = mn::kRadioRows == kRustLabels.size();
-    for (std::size_t i = 0; labels_ok && i < kRustLabels.size(); ++i) {
-        labels_ok = mn::radio_label(mn::kRadioItems[i]) == kRustLabels[i];
+    // Without USE_USB the "USB Mode:" row (Rust row 7) is dropped and later rows move up by one.
+    const std::size_t skip = mn::kHasUsb ? 0 : 1;
+    bool labels_ok = mn::kRadioRows == kRustLabels.size() - skip;
+    for (std::size_t i = 0, row = 0; labels_ok && i < kRustLabels.size(); ++i) {
+        if (!mn::kHasUsb && kRustLabels[i] == "USB Mode:") {
+            continue;
+        }
+        labels_ok = mn::radio_label(mn::kRadioItems[row++]) == kRustLabels[i];
     }
-    check(labels_ok, "i6s radio: 20 Radio Setup rows in Rust order and labels");
-    check(mn::kRadioInputRow == 16 && mn::radio_row_of(RadioItem::Gimbals) == 14 &&
-              mn::radio_row_of(RadioItem::PpmOut) == 18 && mn::radio_row_of(RadioItem::TrainerIn) == 19,
-          "i6s radio: Inputs is row 16, PPM rows 18/19");
+    check(labels_ok, "i6s radio: Radio Setup rows in Rust order and labels");
+    check(mn::kRadioInputRow == 16 - skip && mn::radio_row_of(RadioItem::Gimbals) == 14 - skip &&
+              mn::radio_row_of(RadioItem::PpmOut) == 18 - skip && mn::radio_row_of(RadioItem::TrainerIn) == 19 - skip,
+          "i6s radio: Inputs is row 16, PPM rows 18/19 (one less without USB)");
 
     st::RadioConfig r = st::default_radio_config();
     const auto value = [&](const RadioItem item) { return mn::radio_value(r, mn::radio_row_of(item)); };
