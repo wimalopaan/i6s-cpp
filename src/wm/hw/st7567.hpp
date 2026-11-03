@@ -138,12 +138,6 @@ inline void init_controller() {
     detail::delay_cycles(10000);
 }
 
-inline void init() {
-    init_hardware();
-    init_controller();
-    init_backlight_pwm();
-}
-
 // Sends all 8 pages; RS is set once per page, then each data byte is strobed.
 inline void flush(const logic::display::Framebuffer& fb) {
     const auto& px = fb.data();
@@ -158,6 +152,27 @@ inline void flush(const logic::display::Framebuffer& fb) {
             detail::put_byte(px[start + x]);
         }
     }
+}
+
+// Blanks the display RAM so no power-up garbage shows (Rust: clear_buffer + flush in `new`).
+inline void clear() {
+    for (uint8_t page = 0; page < 8; ++page) {
+        detail::write_cmd(static_cast<uint8_t>(cmd::kPageStart | page));
+        detail::write_cmd(cmd::kColLo);
+        detail::write_cmd(cmd::kColHi);
+
+        detail::RS::write(true);
+        for (int x = 0; x < logic::display::kWidth; ++x) {
+            detail::put_byte(0);
+        }
+    }
+}
+
+inline void init() {
+    init_hardware();
+    init_controller();
+    init_backlight_pwm();
+    clear();
 }
 
 }  // namespace wm::hw::lcd

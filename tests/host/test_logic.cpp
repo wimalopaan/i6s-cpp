@@ -30,6 +30,7 @@
 #include "wm/logic/model_copy.hpp"
 #include "wm/logic/protocol.hpp"
 #include "wm/logic/power.hpp"
+#include "wm/logic/preflight.hpp"
 #include "wm/logic/safety.hpp"
 #include "wm/logic/storage.hpp"
 #include "wm/logic/switches.hpp"
@@ -696,6 +697,68 @@ void input_test() {
     in::apply_calibration(storage::default_storage().radio, off);
     const auto off_st = in::process(in::Raw{}, in::BoardSwitches{.se_high = false, .sf_high = false}, off);
     check(off_st.switches.se == SwitchPos::Up && off_st.switches.sf == SwitchPos::Up, "SE/SF disabled");
+}
+
+void preflight_screen_test() {
+    namespace pf = logic::preflight;
+    namespace sf = logic::safety;
+    using logic::SwitchPos;
+    using logic::mixer::ModelType;
+
+    logic::Switches sw{};
+    sw.sa = SwitchPos::Up;
+    sw.sb = SwitchPos::Up;
+    sw.sc = SwitchPos::Up;
+    sw.sd = SwitchPos::Up;
+    check(!pf::unsafe_switches(sw, ModelType::Airplane).any(), "all switches up are safe");
+    check(pf::unsafe_switches(sw, ModelType::Heli).sa, "heli needs SA down (throttle hold)");
+    sw.sa = SwitchPos::Down;
+    check(!pf::unsafe_switches(sw, ModelType::Heli).any(), "heli with SA down is safe");
+    for (const auto mt : {ModelType::Airplane, ModelType::Heli, ModelType::Glider, ModelType::General,
+                          ModelType::Quad}) {
+        for (const auto a : {SwitchPos::Up, SwitchPos::Mid, SwitchPos::Down}) {
+            for (const auto d : {SwitchPos::Up, SwitchPos::Down}) {
+                logic::Switches t = sw;
+                t.sa = a;
+                t.sd = d;
+                check(pf::unsafe_switches(t, mt).any() == !sf::switches_safe(t, mt),
+                      "unsafe_switches must agree with switches_safe");
+            }
+        }
+    }
+
+    check(std::string_view{pf::switch_list({true, false, true, false}).view()} == "[SA] [SC]",
+          "switch list joins labels with spaces");
+    check(std::string_view{pf::switch_list({true, true, true, true}).view()} == "[SA] [SB] [SC] [SD]",
+          "all four labels are shown");
+    check(pf::throttle_message(sf::Preflight::ThrottleHigh) == "THROTTLE NOT AT IDLE!" &&
+              pf::throttle_message(sf::Preflight::ThrottleNotCentered) == "CENTER THROTTLE STICK!" &&
+              pf::throttle_message(sf::Preflight::ThrottleHoldDisengaged) == "THROTTLE HOLD OFF!" &&
+              pf::throttle_message(sf::Preflight::Ok).empty(),
+          "throttle messages as in Rust");
+    check(pf::footer(sf::Preflight::ThrottleNotCentered) == "Center Thr/Safe SW [ESC]Skip" &&
+              pf::footer(sf::Preflight::ThrottleHoldDisengaged) == "Hold Thr/Safe SW   [ESC]Skip" &&
+              pf::footer(sf::Preflight::ThrottleHigh) == "Lower Thr/Safe SW  [ESC]Skip" &&
+              pf::footer(sf::Preflight::Ok) == "Lower Thr/Safe SW  [ESC]Skip",
+          "footers as in Rust");
+
+    const auto row_lit = [](const logic::display::Framebuffer& f, const int y0, const int y1) {
+        for (int y = y0; y < y1; ++y) {
+            for (int x = 0; x < 128; ++x) {
+                if (((f.data()[static_cast<std::size_t>((y / 8) * 128 + x)] >> (y % 8)) & 1) != 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    logic::display::Framebuffer fb{};
+    pf::render(fb, sf::Preflight::Ok, {false, true, false, false});
+    check(row_lit(fb, 0, 11) && row_lit(fb, 11, 12) && row_lit(fb, 55, 56) && row_lit(fb, 57, 63),
+          "warning screen draws title, rules and footer");
+    check(!row_lit(fb, 16, 26) && row_lit(fb, 27, 47), "switch-only warning: no throttle line, switch lines");
+    pf::render(fb, sf::Preflight::ThrottleHigh, {});
+    check(row_lit(fb, 16, 26) && !row_lit(fb, 27, 47), "throttle-only warning: throttle line, no switch lines");
 }
 
 void safety_test() {
@@ -4810,6 +4873,7 @@ int main() {
     mixer_test();
     input_test();
     safety_test();
+    preflight_screen_test();
     display_test();
     dashboard_test();
     menu_test();
