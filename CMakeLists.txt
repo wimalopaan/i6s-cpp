@@ -24,7 +24,8 @@ if(PCB STREQUAL "I6S")
 else()
     set(WM_PCB_I6S 0)
 endif()
-message(STATUS "Target board: ${PCB}")
+string(TOLOWER "${PCB}_fw" WM_FW_NAME)
+message(STATUS "Target board: ${PCB} (firmware: ${WM_FW_NAME})")
 
 if(CMAKE_CROSSCOMPILING)
     # Short commit hash for the system info screen, as the Rust build.rs does. The reflog changes on every commit, so
@@ -51,24 +52,24 @@ if(CMAKE_CROSSCOMPILING)
         third_party/cmsis/Startup/startup_stm32f072xb.s
     )
 
-    add_executable(i6s_fw ${WM_SOURCES})
+    add_executable(${WM_FW_NAME} ${WM_SOURCES})
     # The assembler gets no optimisation or NDEBUG flags from the MinSizeRel defaults; clang warns that they are unused.
     set(CMAKE_ASM_FLAGS_MINSIZEREL "")
     # -Oz instead of the CMake default -Os for MinSizeRel: about 14 % smaller.
     set(CMAKE_C_FLAGS_MINSIZEREL "-Oz -DNDEBUG")
     set(CMAKE_CXX_FLAGS_MINSIZEREL "-Oz -DNDEBUG")
-    target_include_directories(i6s_fw PRIVATE
+    target_include_directories(${WM_FW_NAME} PRIVATE
         src
         third_party/cmsis/Core
         third_party/cmsis/Device
     )
     # C++-only flags: the assembler step would otherwise warn about them as unused.
-    target_compile_definitions(i6s_fw PRIVATE
+    target_compile_definitions(${WM_FW_NAME} PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:STM32F072xB>
         "$<$<COMPILE_LANGUAGE:CXX>:WM_FW_VERSION=\"${PROJECT_VERSION}\";WM_GIT_HASH=\"${WM_GIT_HASH}\">"
         $<$<COMPILE_LANGUAGE:CXX>:WM_PCB_I6S=${WM_PCB_I6S}>
         $<$<AND:$<BOOL:${USE_USB}>,$<COMPILE_LANGUAGE:CXX>>:WM_USE_USB=1>)
-    target_compile_options(i6s_fw PRIVATE
+    target_compile_options(${WM_FW_NAME} PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
         $<$<COMPILE_LANGUAGE:CXX>:-fno-threadsafe-statics>
@@ -78,21 +79,21 @@ if(CMAKE_CROSSCOMPILING)
         $<$<COMPILE_LANGUAGE:CXX>:-Wall>
         $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
     )
-    target_link_options(i6s_fw PRIVATE
+    target_link_options(${WM_FW_NAME} PRIVATE
         -T${CMAKE_SOURCE_DIR}/linker/stm32f072xb.ld
         -nostartfiles
         -nodefaultlibs
         -nostdlib++
         -fuse-ld=lld
         -Wl,--gc-sections
-        -Wl,-Map=${CMAKE_BINARY_DIR}/i6s_fw.map
+        -Wl,-Map=${CMAKE_BINARY_DIR}/${WM_FW_NAME}.map
         -Wl,--print-memory-usage
     )
-    target_link_libraries(i6s_fw PRIVATE -Wl,--start-group c m gcc -Wl,--end-group)
+    target_link_libraries(${WM_FW_NAME} PRIVATE -Wl,--start-group c m gcc -Wl,--end-group)
 
-    add_custom_command(TARGET i6s_fw POST_BUILD
-        COMMAND ${CMAKE_OBJCOPY} -O ihex $<TARGET_FILE:i6s_fw> ${CMAKE_BINARY_DIR}/i6s_fw.hex
-        COMMAND ${CMAKE_SIZE} $<TARGET_FILE:i6s_fw>
+    add_custom_command(TARGET ${WM_FW_NAME} POST_BUILD
+        COMMAND ${CMAKE_OBJCOPY} -O ihex $<TARGET_FILE:${WM_FW_NAME}> ${CMAKE_BINARY_DIR}/${WM_FW_NAME}.hex
+        COMMAND ${CMAKE_SIZE} $<TARGET_FILE:${WM_FW_NAME}>
         VERBATIM
     )
 elseif(WM_BUILD_TESTS)

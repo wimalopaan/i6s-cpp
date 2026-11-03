@@ -43,12 +43,13 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 Firmware (clang + arm-none-eabi-gcc for Cortex-M0, MinSizeRel = -Oz):
 
     cmake -S . -B build-fw -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi-clang.cmake -DCMAKE_BUILD_TYPE=MinSizeRel
-    cmake --build build-fw --target i6s_fw
+    cmake --build build-fw
 
 `USE_USB` (default ON) sets `WM_USE_USB`, so USB code can be left out to save flash: `-DUSE_USB=OFF`. Without USB the "USB Mode" row is also removed from Radio Setup.
 
 `PCB` selects the board: `-DPCB=I6X` (default, also when unset) or `-DPCB=I6S`. It sets `WM_PCB_I6S` for firmware and
-host tests; board constants live in `src/wm/board.hpp`.
+host tests; board constants live in `src/wm/board.hpp`. The firmware target and its output files are named after the
+board: `i6x_fw` (`i6x_fw.hex`, `i6x_fw.map`) or `i6s_fw` (`i6s_fw.hex`, `i6s_fw.map`).
 
 Host tests (clang with C++26 support):
 
