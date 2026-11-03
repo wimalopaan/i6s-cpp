@@ -49,6 +49,9 @@
 #include "wm/logic/board_idle.hpp"
 #include "wm/logic/touch_nav.hpp"
 #endif
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+#include "wm/logic/multiswitch.hpp"
+#endif
 
 namespace {
 
@@ -473,6 +476,10 @@ int main() {
 #if WM_PCB_I6S
     logic::board_idle::State board_idle{};
     logic::touch_nav::SwipeTracker swipe{};
+#if WM_USE_MULTISWITCH
+    logic::multiswitch::State multiswitch{};
+    uint8_t multiswitch_address = model.multiswitch_address;
+#endif
     uint16_t ok_hold_ms = 0;
     bool j4_enabled = g_storage.radio.j4_sg_sh_en != 0;
 #else
@@ -517,7 +524,11 @@ int main() {
             g_keys = logic::touch_nav::update_inputs(
                 touch, input.gimbals, menu_active_pre, g_storage.radio.rear_left_func,
                 g_storage.radio.rear_right_func, g_storage.radio.throttle_trim != 0, {rear.left, rear.right}, swipe,
-                time::millis());
+                time::millis()
+#if WM_USE_MULTISWITCH
+                , page_state.page == 5
+#endif
+            );
         }
 #else
         g_keys = hw::keys::scan_keys();
@@ -585,11 +596,24 @@ int main() {
                 play_buzzer_cue(logic::buzzer::Cue::NavStep);
             }
 #if WM_PCB_I6S
+#if WM_USE_MULTISWITCH
+            if (page_state.page == prev_page && page_state.page == 5 && swipe.tapped_switch &&
+                model.rf_protocol == 1 && !sim && !logic::flight_timer::modal(g_flight_timer) &&
+                board_idle.power.progress_pct() == 0) {
+                multiswitch.toggle(*swipe.tapped_switch);
+                play_buzzer_cue(logic::buzzer::Cue::Click);
+            }
+#endif
             // Long centre tap or the right rear button held for 1.2 s opens the menu.
             if (idle.ok_held) {
                 ok_hold_ms = static_cast<uint16_t>(std::min<uint32_t>(uint32_t{ok_hold_ms} + dt_ms, UINT16_MAX));
                 if (ok_hold_ms >= kMenuHoldMs) {
                     logic::menu::open(menu_state);
+#if WM_USE_MULTISWITCH
+                    if (page_state.page == 5) {
+                        swipe.swiped = true;
+                    }
+#endif
                     play_buzzer_cue(logic::buzzer::Cue::Click);
                     ok_hold_ms = 0;
                     board_idle.clear_menu_open_state();
@@ -628,6 +652,9 @@ int main() {
                     refresh_model_names();
                     apply_protocol_link();
                     apply_rf_model();
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+                    multiswitch = {};
+#endif
                     prev_armed = logic::mixer::eval_arm_switch(g_storage.active_model.arm_switch, input.switches);
                     vario.reset();
                     break;
@@ -637,6 +664,9 @@ int main() {
                     apply_protocol_link();
                     break;
                 case logic::menu::Action::ResetActiveModel:
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+                    multiswitch = {};
+#endif
                     load_trims_from_model();
                     logic::storage::save_active_model<hw::I2c2Eeprom>(g_storage);
                     apply_protocol_link();
@@ -785,6 +815,12 @@ int main() {
             hw::trainer::publish_out(channels);
         }
         const bool crsf = model.rf_protocol == 1;
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+        if (multiswitch_address != model.multiswitch_address) {
+            multiswitch = {};
+            multiswitch_address = model.multiswitch_address;
+        }
+#endif
 #if WM_USE_USB
         hw::usb::poll(logic::usb::Millis{now}, channels, input.switches, input.battery_mv);
 #endif
@@ -792,6 +828,9 @@ int main() {
             if (!sim) {
                 hw::crsf::update_channels(now, channels, wm::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
                                           wm::logic::crsf::ArmedState{armed});
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+                hw::crsf::update_multiswitch(now, model.multiswitch_address, multiswitch);
+#endif
             }
         } else if (afhds && !sim) {
             hw::rf::publish_channels(channels);
@@ -819,7 +858,11 @@ int main() {
                             rf_sent, g_rf_stats,
                             logic::flight_timer::display(g_flight_timer, timer_config(model)),
                             logic::flight_timer::modal(g_flight_timer), hw::crsf::telemetry(), usb_sim_active(),
-                            hw::rf::last_chip_id()});
+                            hw::rf::last_chip_id()
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+                            , multiswitch.switches
+#endif
+                       });
             } else {
                 auto eeprom = g_eeprom;
                 eeprom.write_err = hw::I2c2Eeprom::write_failed();

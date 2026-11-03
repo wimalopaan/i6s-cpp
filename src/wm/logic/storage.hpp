@@ -207,7 +207,12 @@ struct ModelConfig {
     uint8_t crsf_arm_mode;
     std::array<int16_t, 5> gvars;
     std::array<uint8_t, 4> telem_slots;
+#if WM_USE_MULTISWITCH
+    uint8_t multiswitch_address;
+    uint8_t pad_gvar;
+#else
     std::array<uint8_t, 2> pad_gvar;
+#endif
 #else
     uint8_t crsf_arm_mode;
     uint8_t pad_end;
@@ -230,6 +235,9 @@ static_assert(offsetof(ModelConfig, vario_switch) == 346);
 static_assert(offsetof(ModelConfig, crsf_arm_mode) == 351);
 static_assert(offsetof(ModelConfig, gvars) == 352);
 static_assert(offsetof(ModelConfig, telem_slots) == 362);
+#if WM_USE_MULTISWITCH
+static_assert(offsetof(ModelConfig, multiswitch_address) == 366);
+#endif
 #else
 static_assert(offsetof(ModelConfig, gvars) == 348);
 static_assert(offsetof(ModelConfig, telem_slots) == 364);
@@ -467,7 +475,12 @@ constexpr ModelConfig default_model_config(const std::size_t index) {
         .crsf_arm_mode = 0,
         .gvars = {},
         .telem_slots = {0, 1, 2, 3},
+#if WM_USE_MULTISWITCH
+        .multiswitch_address = 0,
+        .pad_gvar = 0,
+#else
         .pad_gvar = {},
+#endif
 #else
         .crsf_arm_mode = 0,
         .pad_end = 0,

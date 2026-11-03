@@ -20,6 +20,9 @@
 #include "wm/logic/glyphs.hpp"
 #include "wm/logic/input.hpp"
 #include "wm/logic/mixer.hpp"
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+#include "wm/logic/multiswitch.hpp"
+#endif
 #include "wm/logic/safety.hpp"
 #include "wm/logic/storage.hpp"
 #include "wm/logic/switches.hpp"
@@ -34,7 +37,10 @@ using display::kWidth;
 using display::Point;
 using display::Rect;
 
-inline constexpr uint8_t kPageCount = 5;
+inline constexpr uint8_t kPageCount = board::kHasMultiSwitch ? 6 : 5;
+inline constexpr std::array<std::string_view, 5> kPageLabels = board::kHasMultiSwitch
+    ? std::array<std::string_view, 5>{"P1/6", "P2/6", "P3/6", "P4/6", "P5/6"}
+    : std::array<std::string_view, 5>{"P1/5", "P2/5", "P3/5", "P4/5", "P5/5"};
 inline constexpr uint16_t kKeyPageDown = 1u << 8;
 inline constexpr uint16_t kKeyPageUp = 1u << 9;
 
@@ -107,6 +113,9 @@ struct View {
     bool usb_sim = false;
     // A7105 signature read at init; shown as "E:xx" when the RF chip failed on AFHDS 2A.
     uint8_t rf_chip_id = 0;
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+    uint8_t multiswitch_states = 0;
+#endif
 };
 
 using labels::model_name;
@@ -558,10 +567,10 @@ constexpr void draw_gimbal_page(Framebuffer& fb, const View& v, const uint8_t bl
         case FooterKind::Timer: {
             const auto timer_text = format::format_timer(v.timer->value.value, v.timer->expired);
             const bool blink_on = (blink_phase & 0x08u) != 0;
-            widgets::draw_footer_three(fb, "P1/5", timer_text.view(), "Hold OK:Menu", v.timer->expired && blink_on);
+            widgets::draw_footer_three(fb, kPageLabels[0], timer_text.view(), "Hold OK:Menu", v.timer->expired && blink_on);
             break;
         }
-        case FooterKind::Default: widgets::draw_footer_split(fb, "P1/5", "Hold OK:Menu"); break;
+        case FooterKind::Default: widgets::draw_footer_split(fb, kPageLabels[0], "Hold OK:Menu"); break;
     }
 }
 
@@ -601,9 +610,9 @@ constexpr void draw_channel_page(Framebuffer& fb, const View& v, const bool seco
 
     fb.draw_vline({64, 12}, second_part ? 33 : 41, true);
     if (second_part) {
-        draw_page_footer(fb, v, "P3/5", "CH 11-18 MONITOR");
+        draw_page_footer(fb, v, kPageLabels[2], "CH 11-18 MONITOR");
     } else {
-        draw_page_footer(fb, v, "P2/5", "CH 1-10 MONITOR");
+        draw_page_footer(fb, v, kPageLabels[1], "CH 1-10 MONITOR");
     }
 }
 
@@ -632,7 +641,7 @@ constexpr void draw_model_page(Framebuffer& fb, const View& v) {
                          false);
     }
 
-    draw_page_footer(fb, v, "P4/5", "MODEL DASHBOARD");
+    draw_page_footer(fb, v, kPageLabels[3], "MODEL DASHBOARD");
 }
 
 // CRSF link page, same layout as Rust `telemetry.rs` (CRSF branch).
@@ -653,7 +662,7 @@ constexpr void draw_crsf_telemetry_page(Framebuffer& fb, const View& v) {
     fb.draw_str_6x10({66, 44}, "CAP:", false);
     fb.draw_str_6x10({92, 44}, d.cap.view(), false);
 
-    widgets::draw_footer_split(fb, "P5/5", "CRSF LINK DIAG");
+    widgets::draw_footer_split(fb, kPageLabels[4], "CRSF LINK DIAG");
 }
 
 // Sensor tile of the custom page, same layout as Rust `render_tile`: label, '*' when stale, value below.
@@ -691,7 +700,7 @@ constexpr void draw_custom_telemetry_page(Framebuffer& fb, const View& v) {
 
     fb.draw_vline({64, 12}, 42, true);
     fb.draw_hline({2, 31}, 124, true);
-    draw_page_footer(fb, v, "P5/5", "CUSTOM TELEM");
+    draw_page_footer(fb, v, kPageLabels[4], "CUSTOM TELEM");
 }
 
 constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
@@ -757,8 +766,34 @@ constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
                          .view(),
                      false);
 
-    draw_page_footer(fb, v, "P5/5", "TELEMETRY SENSORS");
+    draw_page_footer(fb, v, kPageLabels[4], "TELEMETRY SENSORS");
 }
+
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+constexpr void draw_multiswitch_page(Framebuffer& fb, const View& v) {
+    if (!v.crsf || v.usb_sim) {
+        fb.draw_str_6x10({10, 25}, v.usb_sim ? "USB SIM: NO RF" : "CRSF REQUIRED", false);
+    } else {
+        for (uint8_t i = 0; i < multiswitch::kSwitchCount; ++i) {
+            const auto r = multiswitch::switch_rect(i);
+            const bool on = (v.multiswitch_states & (1u << i)) != 0;
+            fb.fill_rect(r, on);
+            fb.draw_rect(r, true);
+            fb.draw_char_4x6({r.pos.x + 3, r.pos.y + 5}, static_cast<char>('1' + i), on);
+            fb.draw_str_4x6({r.pos.x + 12, r.pos.y + 5}, on ? "ON" : "OFF", on);
+        }
+    }
+    format::Text<24> footer;
+    for (const char c : std::string_view{"MS "}) {
+        footer.push(c);
+    }
+    format::detail::push_uint(footer, v.storage.active_model.multiswitch_address);
+    for (const char c : std::string_view{" Hold:Menu"}) {
+        footer.push(c);
+    }
+    widgets::draw_footer_split(fb, "P6/6", footer.view());
+}
+#endif
 
 // Centered box shown after a timer reset: a hold progress bar, then a confirmation toast.
 constexpr void draw_timer_modal(Framebuffer& fb, const flight_timer::Modal& m) {
@@ -787,6 +822,9 @@ constexpr void render(Framebuffer& fb, PageState& s, const View& v) {
         case 1: draw_channel_page(fb, v, false); break;
         case 2: draw_channel_page(fb, v, true); break;
         case 3: draw_model_page(fb, v); break;
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+        case 5: draw_multiswitch_page(fb, v); break;
+#endif
         default: draw_telemetry_page(fb, v); break;
     }
 

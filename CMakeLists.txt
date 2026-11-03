@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(WM_BUILD_TESTS "Build host-side logic tests" ON)
 option(USE_USB "Include the USB device stack (removing it saves flash)" ON)
+option(USE_MULTISWITCH "Include the I6S MultiSwitch touch dashboard and CRSF SET4 protocol" OFF)
 
 # Target board: I6X (FlySky FS-i6X, default) or I6S (FlySky FS-i6S: touch screen, rear buttons, power latch).
 set(PCB "I6X" CACHE STRING "Target board (I6X or I6S)")
@@ -68,6 +69,7 @@ if(CMAKE_CROSSCOMPILING)
         $<$<COMPILE_LANGUAGE:CXX>:STM32F072xB>
         "$<$<COMPILE_LANGUAGE:CXX>:WM_FW_VERSION=\"${PROJECT_VERSION}\";WM_GIT_HASH=\"${WM_GIT_HASH}\">"
         $<$<COMPILE_LANGUAGE:CXX>:WM_PCB_I6S=${WM_PCB_I6S}>
+        $<$<AND:$<BOOL:${USE_MULTISWITCH}>,$<BOOL:${WM_PCB_I6S}>,$<COMPILE_LANGUAGE:CXX>>:WM_USE_MULTISWITCH=1>
         $<$<AND:$<BOOL:${USE_USB}>,$<COMPILE_LANGUAGE:CXX>>:WM_USE_USB=1>)
     target_compile_options(${WM_FW_NAME} PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
@@ -100,7 +102,9 @@ elseif(WM_BUILD_TESTS)
     enable_testing()
     add_executable(host_logic_tests tests/host/test_logic.cpp)
     target_include_directories(host_logic_tests PRIVATE src)
-    target_compile_definitions(host_logic_tests PRIVATE WM_PCB_I6S=${WM_PCB_I6S} $<$<BOOL:${USE_USB}>:WM_USE_USB=1>)
+    target_compile_definitions(host_logic_tests PRIVATE WM_PCB_I6S=${WM_PCB_I6S}
+        $<$<BOOL:${USE_USB}>:WM_USE_USB=1>
+        $<$<AND:$<BOOL:${USE_MULTISWITCH}>,$<BOOL:${WM_PCB_I6S}>>:WM_USE_MULTISWITCH=1>)
     target_compile_options(host_logic_tests PRIVATE -Wall -Wextra -fno-exceptions -fno-rtti)
     add_test(NAME host_logic_tests COMMAND host_logic_tests)
 endif()

@@ -388,6 +388,166 @@ inline void i6s_auto_select_tests() {
     check(s.active_model.arm_switch == 0, "i6s auto: SWM as pot is not an arm switch");
 }
 
+#if WM_USE_MULTISWITCH
+inline void i6s_multiswitch_tests() {
+    namespace ms = wm::logic::multiswitch;
+    namespace tn = wm::logic::touch_nav;
+    namespace mn = wm::logic::menu;
+    namespace st = wm::logic::storage;
+    using tn::TouchEventKind;
+
+    check(ms::build_set4(0, 0) == std::array<uint8_t, 12>{
+              0xC8, 0x0A, 0x32, 0x00, 0xEA, 0xA1, 0x07, 0x00, 0x00, 0x00, 0x7E, 0xDE},
+          "multiswitch: all OFF has command CRC BA and frame CRC D5");
+    check(ms::build_set4(0, 1) == std::array<uint8_t, 12>{
+              0xC8, 0x0A, 0x32, 0x00, 0xEA, 0xA1, 0x07, 0x00, 0x00, 0x01, 0xC4, 0x9A},
+          "multiswitch: output 1 uses the low state bits");
+    check(ms::build_set4(255, 0x80) == std::array<uint8_t, 12>{
+              0xC8, 0x0A, 0x32, 0x00, 0xEA, 0xA1, 0x07, 0xFF, 0x40, 0x00, 0x1C, 0x1E},
+          "multiswitch: output 8 uses high state bits, address accepts 255");
+    check(ms::build_set4(42, 0xFF) == std::array<uint8_t, 12>{
+              0xC8, 0x0A, 0x32, 0x00, 0xEA, 0xA1, 0x07, 0x2A, 0x55, 0x55, 0xFE, 0xC0},
+          "multiswitch: all ON uses code 01 for every output in big-endian order");
+
+    ms::State state{};
+    check(state.due(0), "multiswitch: initial OFF state is sent immediately");
+    state.sent(100);
+    check(!state.due(199) && state.due(200), "multiswitch: states repeat every 100 ms");
+    state.toggle(7);
+    state.toggle(0);
+    check(state.switches == 0x81 && state.due(101) && state.due(102),
+          "multiswitch: changes stay pending until actually sent, preserving other switches");
+    state.toggle(7);
+    check(state.switches == 1, "multiswitch: second tap switches OFF without state 2");
+    state.sent(UINT32_MAX - 49);
+    check(!state.due(49) && state.due(50), "multiswitch: repeat timer handles millis wraparound");
+
+    tn::SwipeTracker tracker{};
+    const auto sample = [](const uint8_t x, const uint8_t y, const TouchEventKind event) {
+        return tn::TouchSample{.point = tn::TouchPoint{.x = x, .y = y, .event = event}};
+    };
+    const auto tick = [&](const std::optional<tn::TouchSample>& touch, const uint32_t now,
+                          const bool menu_active = false) {
+        return tn::update_inputs(touch, {}, menu_active, 0, 0, true, {}, tracker, now, true);
+    };
+    for (uint8_t i = 0; i < ms::kSwitchCount; ++i) {
+        tracker = {};
+        const auto r = ms::switch_rect(i);
+        const auto x = static_cast<uint8_t>(r.pos.x + r.size.w / 2);
+        const auto y = static_cast<uint8_t>(r.pos.y + r.size.h / 2);
+        const auto down = tick(sample(x, y, TouchEventKind::PressDown), 10);
+        const auto hold = tick(sample(x, y, TouchEventKind::Contact), 1200);
+        check(down == tn::kKeyTouchActivity && hold == tn::kKeyTouchActivity && !tracker.tapped_switch,
+              "multiswitch touch: pressing or holding a field neither switches nor trims nor opens menu");
+        tick(sample(x, y, TouchEventKind::LiftUp), 1210);
+        check(tracker.tapped_switch == i, "multiswitch touch: release selects the correct one of eight fields");
+        tick(std::nullopt, 1260);
+        check(!tracker.tapped_switch, "multiswitch touch: release toggles exactly once");
+    }
+
+    tick(sample(5, 20, TouchEventKind::PressDown), 2000);
+    tick(std::nullopt, 2039);
+    check(!tracker.tapped_switch, "multiswitch touch: missing packets do not release before timeout");
+    tick(std::nullopt, 2040);
+    check(tracker.tapped_switch == 0, "multiswitch touch: packet timeout also completes a tap");
+    tick(sample(5, 20, TouchEventKind::Contact), 2050);
+    tick(std::nullopt, 2100);
+    check(!tracker.tapped_switch, "multiswitch touch: late contacts cannot repeat a timed-out tap");
+
+    tick(sample(45, 20, TouchEventKind::PressDown), 2200);
+    check((tick(sample(25, 20, TouchEventKind::Contact), 2210) & tn::kKeyNavDown) != 0,
+          "multiswitch touch: a drag navigates to the next page");
+    tick(sample(25, 20, TouchEventKind::LiftUp), 2220);
+    check(!tracker.tapped_switch, "multiswitch touch: lifting after a swipe never toggles a field");
+    tick(sample(5, 20, TouchEventKind::PressDown), 2300);
+    tick(sample(12, 20, TouchEventKind::Contact), 2310);
+    tick(sample(5, 20, TouchEventKind::LiftUp), 2320);
+    check(!tracker.tapped_switch, "multiswitch touch: small drags cancel taps even after returning to start");
+    tick(sample(5, 20, TouchEventKind::PressDown), 2400);
+    tick(tn::TouchSample{.gesture = tn::Gesture::SwipeLeft}, 2410);
+    check(!tracker.tapped_switch, "multiswitch touch: hardware gestures cancel switch taps");
+
+    tick(sample(64, 5, TouchEventKind::PressDown), 2500);
+    check((tick(sample(64, 5, TouchEventKind::LiftUp), 2510) & tn::kKeyNavDown) != 0,
+          "multiswitch touch: header tap advances the dashboard");
+    check((tick(sample(64, 58, TouchEventKind::PressDown), 2600) & tn::kKeyMenuOpen) != 0,
+          "multiswitch touch: holding footer opens menu");
+    tick(sample(64, 58, TouchEventKind::LiftUp), 2610);
+    check(!tracker.tapped_switch, "multiswitch touch: footer never selects a switch");
+    tick(sample(45, 20, TouchEventKind::PressDown), 2700, true);
+    tick(sample(45, 20, TouchEventKind::LiftUp), 2710, true);
+    check(!tracker.tapped_switch, "multiswitch touch: menu taps do not operate switches");
+
+    auto storage = st::default_storage();
+    mn::State menu{};
+    menu.screen = mn::Screen::ModelSetup;
+    menu.setup.selected = static_cast<uint8_t>(mn::SetupRow::MultiSwitch);
+    menu.setup.scroll = 7;
+    uint32_t now = 3000;
+    auto edit_cue = wm::logic::buzzer::Cue::None;
+    const auto press = [&](const uint16_t key) {
+        const auto event = mn::update(menu, mn::Input{key, key, now++}, storage);
+        edit_cue = menu.cue;
+        mn::update(menu, mn::Input{0, 0, now++}, storage);
+        return event;
+    };
+    press(mn::kKeyOk);
+    press(mn::kKeyDown);
+    check(menu.editing && storage.active_model.multiswitch_address == 0,
+          "multiswitch setup: address edit clamps at zero");
+    check(edit_cue == wm::logic::buzzer::Cue::None, "multiswitch setup: no value beep at lower limit");
+    press(mn::kKeyUp);
+    check(storage.active_model.multiswitch_address == 1, "multiswitch setup: UP increments module address");
+    check(edit_cue == wm::logic::buzzer::Cue::ValueStep, "multiswitch setup: increment confirms with value beep");
+    storage.active_model.multiswitch_address = 255;
+    press(mn::kKeyUp);
+    check(storage.active_model.multiswitch_address == 255, "multiswitch setup: address edit clamps at 255");
+    check(edit_cue == wm::logic::buzzer::Cue::None, "multiswitch setup: no value beep at upper limit");
+    press(mn::kKeyDown);
+    check(edit_cue == wm::logic::buzzer::Cue::ValueStep, "multiswitch setup: decrement confirms with value beep");
+    check(press(mn::kKeyOk).action == mn::Action::SaveActiveModel &&
+              storage.active_model.multiswitch_address == 254 && !menu.editing,
+          "multiswitch setup: confirming an address requests model persistence");
+    press(mn::kKeyOk);
+    check(press(mn::kKeyCancel).action == mn::Action::SaveActiveModel && !menu.editing,
+          "multiswitch setup: ESC finishes and saves like other model fields");
+
+    using Dev = test_eeprom::FakeEeprom;
+    check(st::save_storage<Dev>(storage), "multiswitch storage: save model address");
+    st::RadioStorage loaded{};
+    st::load_storage<Dev>(loaded);
+    check(loaded.active_model.multiswitch_address == 254, "multiswitch storage: address survives reload");
+    check(wm::logic::model_copy::copy_model<Dev>(
+              storage, wm::logic::model_copy::active_slot(storage), wm::logic::model_copy::DstSlot{1}),
+          "multiswitch storage: copy model with address");
+    st::ModelConfig copy{};
+    check(st::load_slot<Dev>(*st::model_slot_addr(1), copy) == st::Status::Ok &&
+              copy.multiswitch_address == 254, "multiswitch storage: copied model keeps address");
+    auto old = st::to_bytes(st::default_model_config(2));
+    const auto address = *st::model_slot_addr(2);
+    test_eeprom::write_slot_raw(address, st::kSchemaVersion, 364, old);
+    check(st::load_slot<Dev>(address, copy) == st::Status::Ok && copy.multiswitch_address == 0,
+          "multiswitch storage: older models migrate with address zero");
+
+    wm::logic::input::InputState input{};
+    wm::logic::trim::Controller trims{};
+    std::array<uint16_t, wm::logic::kNumChannels> channels{};
+    wm::logic::dashboard::View view{input, storage, trims, channels, true};
+    wm::logic::display::Framebuffer off{}, on{};
+    wm::logic::dashboard::draw_multiswitch_page(off, view);
+    view.multiswitch_states = 1;
+    wm::logic::dashboard::draw_multiswitch_page(on, view);
+    check(off.data() != on.data(), "multiswitch dashboard: ON is visibly distinct from OFF");
+    view.crsf = false;
+    off.clear();
+    on.clear();
+    wm::logic::dashboard::draw_multiswitch_page(on, view);
+    view.multiswitch_states = 0;
+    wm::logic::dashboard::draw_multiswitch_page(off, view);
+    check(off.data() == on.data(), "multiswitch dashboard: AFHDS shows CRSF requirement, not active fields");
+}
+#endif
+
 inline void i6s_tests() {
     i6s_storage_tests();
     i6s_input_tests();
@@ -396,6 +556,9 @@ inline void i6s_tests() {
     i6s_radio_setup_tests();
     i6s_jog_tests();
     i6s_auto_select_tests();
+#if WM_USE_MULTISWITCH
+    i6s_multiswitch_tests();
+#endif
 }
 
 #endif  // WM_PCB_I6S

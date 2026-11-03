@@ -971,7 +971,7 @@ void dashboard_test() {
     logic::dashboard::handle_keys(ps, logic::dashboard::kKeyPageUp);
     check(ps.page == 0, "page up goes back");
     logic::dashboard::handle_keys(ps, logic::dashboard::kKeyPageUp);
-    check(ps.page == 4, "page up wraps 0 to last page");
+    check(ps.page == logic::dashboard::kPageCount - 1, "page up wraps 0 to last page");
     logic::dashboard::handle_keys(ps, logic::dashboard::kKeyPageDown);
     check(ps.page == 0, "page down wraps last page to 0");
 
@@ -3874,12 +3874,12 @@ void model_copy_test() {
         return e;
     };
     press(mn::kKeyUp, 10);
-    check(s.setup.selected == 9 && s.setup.scroll == 6, "up from Name must wrap to the Reset row and scroll");
-    press(mn::kKeyUp, 15);
-    press(mn::kKeyUp, 16);
-    press(mn::kKeyUp, 17);
-    press(mn::kKeyUp, 18);
-    check(s.setup.selected == 5, "up from Reset must reach the Copy row");
+    check(s.setup.selected == mn::kSetupRows - 1 && s.setup.scroll == mn::kSetupRows - mn::kListVisible,
+          "up from Name must wrap to the last row and scroll");
+    for (std::size_t row = mn::kSetupRows - 1; row > 5; --row) {
+        press(mn::kKeyUp, static_cast<uint32_t>(15 + mn::kSetupRows - 1 - row));
+    }
+    check(s.setup.selected == 5, "up from last setup row must reach the Copy row");
     const mn::Event open_ev = press(mn::kKeyOk, 20);
     check(open_ev.action == Action::None && s.editing && s.copy.dst == mc::DstSlot{3},
           "OK on Copy must open the picker at source + 1");
@@ -4662,7 +4662,8 @@ void telem_slots_test() {
     };
 
     check(static_cast<std::size_t>(mn::SetupRow::Telemetry) == mn::kItemTelemRow &&
-              mn::kSetupRows == 10 && static_cast<std::size_t>(mn::SetupRow::Protocol) == 8,
+              mn::kSetupRows == (wm::board::kHasMultiSwitch ? 11 : 10) &&
+              static_cast<std::size_t>(mn::SetupRow::Protocol) == 8,
           "Telemetry must be the row before Protocol on the model setup screen");
 
     press(mn::kKeyOk, 10);
