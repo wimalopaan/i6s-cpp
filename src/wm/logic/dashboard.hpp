@@ -101,6 +101,10 @@ struct View {
     std::optional<flight_timer::Modal> timer_modal{};
     // CRSF link state for page P5, only meaningful when crsf.
     wm::logic::crsf::Telemetry crsf_link{};
+    // USB joystick mode with a host attached (Rust `usb::is_sim_mode`): status "U:SIM".
+    bool usb_sim = false;
+    // A7105 signature read at init; shown as "E:xx" when the RF chip failed on AFHDS 2A.
+    uint8_t rf_chip_id = 0;
 };
 
 using labels::model_name;
@@ -122,13 +126,16 @@ constexpr FooterKind footer_kind(const View& v) {
     return FooterKind::Default;
 }
 
-// Fixed status text; empty when the RSSI value is shown instead. Same order as Rust `status_bar.rs`.
+// Fixed status text; empty when the chip error or RSSI value is shown instead. Same order as Rust `status_bar.rs`.
 constexpr std::string_view rf_status_fixed(const View& v) {
     if (!v.crsf && !v.rf_ok) {
-        return "NO RF";
+        return {};
     }
     if (v.binding) {
         return "BIND";
+    }
+    if (v.usb_sim) {
+        return "U:SIM";
     }
     if (v.telem.connected) {
         return {};
@@ -158,7 +165,21 @@ constexpr format::Text<5> rssi_status_text(const uint8_t rssi) {
     return t;
 }
 
+// "E:9E": RF chip signature in hex when the A7105 did not answer (Rust status_bar.rs).
+constexpr format::Text<4> rf_error_text(const uint8_t chip_id) {
+    format::Text<4> t;
+    t.push('E');
+    t.push(':');
+    t.push(format::detail::hex_digit(chip_id >> 4));
+    t.push(format::detail::hex_digit(chip_id));
+    return t;
+}
+
 constexpr void draw_rf_status(Framebuffer& fb, const View& v) {
+    if (!v.crsf && !v.rf_ok) {
+        fb.draw_str_4x6({64, 3}, rf_error_text(v.rf_chip_id).view(), false);
+        return;
+    }
     const auto fixed = rf_status_fixed(v);
     if (!fixed.empty()) {
         fb.draw_str_4x6({64, 3}, fixed, false);
@@ -199,12 +220,6 @@ constexpr format::Text<12> model_link_text(const View& v) {
         t.push(c);
     }
     return t;
-}
-
-// Telemetry older than 2.5 s counts as stale, as in Rust `check_sensor_status`.
-constexpr bool sensor_fresh(const View& v, const uint32_t last_ms) {
-    const auto st = telemetry::check_sensor_status({.value = last_ms}, {.value = v.now_ms}, v.telem.connected);
-    return st.has_data && !st.stale;
 }
 
 constexpr void draw_status_bar(Framebuffer& fb, const storage::RadioStorage& st, const uint16_t battery_mv, const View& v,
@@ -582,7 +597,7 @@ constexpr void draw_model_page(Framebuffer& fb, const View& v) {
     draw_page_footer(fb, v, "P4/5", "MODEL DASHBOARD");
 }
 
-// AFHDS 2A sensor page, same layout as Rust `telemetry.rs` (AFHDS branch). CRSF is not ported yet.
+// CRSF link page, same layout as Rust `telemetry.rs` (CRSF branch).
 constexpr void draw_crsf_telemetry_page(Framebuffer& fb, const View& v) {
     const auto d = telemetry::crsf_diag(v.crsf_link, {.value = v.now_ms});
     fb.draw_vline({64, 12}, 42, true);
@@ -651,61 +666,58 @@ constexpr void draw_telemetry_page(Framebuffer& fb, const View& v) {
         return;
     }
 
+    using telemetry::detail::diag_stat;
+    using telemetry::detail::to_text;
+    using telemetry::detail::with_prefix;
+    const auto fixed = [](const format::FixedFormat f) { return to_text(format::format_fixed(f)); };
+    // Packet counters are 5 digits wide, right-aligned and clamped at 99999 (Rust `u32_to_dec_5`).
+    const auto count = [&](const uint32_t n) {
+        return fixed({.value = static_cast<int32_t>(std::min<uint32_t>(n, 99999u)), .pad_digits = 5});
+    };
+    const auto rxv = telemetry::check_sensor_status({.value = v.telem.last_rx_voltage_ms}, {.value = v.now_ms},
+                                                    v.telem.connected);
+
+    fb.draw_str_6x10(
+        {2, 14},
+        diag_stat(v.telem.connected, rxv.stale,
+                  with_prefix("RSSI:", fixed({.value = std::min<int32_t>(v.telem.rssi, 100), .pad_digits = 3,
+                                              .suffix = "%"})),
+                  "RSSI: --%")
+            .view(),
+        false);
+    fb.draw_str_6x10({2, 24}, v.telem.connected ? "LINK: OK" : "LINK: DISC", false);
+    fb.draw_str_6x10({2, 34}, "TX:", false);
+    fb.draw_str_6x10({24, 34}, count(v.packets_sent).view(), false);
+    fb.draw_str_6x10({2, 44}, "RX:", false);
+    fb.draw_str_6x10({24, 44}, count(v.telem.packets_received).view(), false);
+
     fb.draw_vline({64, 12}, 42, true);
 
-    const bool rssi_ok = sensor_fresh(v, v.telem.last_rx_voltage_ms);
-    fb.draw_str_6x10({2, 14}, "RSSI:", false);
-    if (rssi_ok) {
-        const auto r = std::min<unsigned>(v.telem.rssi, 100u);
-        const auto digits = format::format_dec2(r);
-        format::Text<4> t;
-        for (const char c : digits.view()) {
-            t.push(c);
-        }
-        t.push('%');
-        fb.draw_str_6x10({44, 14}, t.view(), false);
-    } else {
-        fb.draw_str_6x10({44, 14}, "--%", false);
-    }
-
-    fb.draw_str_6x10({2, 24}, v.telem.connected ? "LINK: OK" : "LINK: DISC", false);
-
-    format::Text<5> tx_count;
-    format::detail::push_uint(tx_count, v.packets_sent);
-    fb.draw_str_6x10({2, 34}, "TX:", false);
-    fb.draw_str_6x10({24, 34}, tx_count.view(), false);
-
-    format::Text<5> rx_count;
-    format::detail::push_uint(rx_count, v.telem.packets_received);
-    fb.draw_str_6x10({2, 44}, "RX:", false);
-    fb.draw_str_6x10({24, 44}, rx_count.view(), false);
-
-    const bool rx_fresh = sensor_fresh(v, v.telem.last_rx_voltage_ms) && v.telem.rx_voltage_mv > 0;
-    const auto rx_text = format::format_vbat(v.telem.rx_voltage_mv);
     fb.draw_str_6x10({66, 14}, "RX:", false);
-    fb.draw_str_6x10({88, 14}, rx_fresh ? rx_text.view() : std::string_view("----"), false);
+    fb.draw_str_6x10({88, 14},
+                     diag_stat(rxv.has_data && v.telem.rx_voltage_mv > 0, rxv.stale,
+                               to_text(format::format_vbat(v.telem.rx_voltage_mv)), "----")
+                         .view(),
+                     false);
 
-    const auto tx_text = format::format_vbat(v.in.battery_mv);
     fb.draw_str_6x10({66, 24}, "TX:", false);
-    fb.draw_str_6x10({88, 24}, tx_text.view(), false);
+    fb.draw_str_6x10({88, 24}, format::format_vbat(v.in.battery_mv).view(), false);
 
     fb.draw_str_6x10({66, 34}, "mRSS:", false);
-    if (v.stats.seen) {
-        const auto digits = format::format_dec2(std::min<unsigned>(v.stats.min_rssi, 100u));
-        format::Text<4> t;
-        for (const char c : digits.view()) {
-            t.push(c);
-        }
-        t.push('%');
-        fb.draw_str_6x10({98, 34}, t.view(), false);
-    } else {
-        fb.draw_str_6x10({98, 34}, " --%", false);
-    }
+    fb.draw_str_6x10({98, 34},
+                     diag_stat(v.stats.seen, false,
+                               fixed({.value = std::min<int32_t>(v.stats.min_rssi, 100), .pad_digits = 3,
+                                      .suffix = "%"}),
+                               " --%")
+                         .view(),
+                     false);
 
     fb.draw_str_6x10({66, 44}, "mRX:", false);
-    const bool min_rx_ok = v.stats.seen && v.stats.min_rx_v_mv != 0xFFFF && v.stats.min_rx_v_mv > 0;
-    const auto min_rx_text = format::format_vbat(v.stats.min_rx_v_mv);
-    fb.draw_str_6x10({92, 44}, min_rx_ok ? min_rx_text.view() : std::string_view("----"), false);
+    fb.draw_str_6x10({92, 44},
+                     diag_stat(v.stats.min_rx_v_mv != 0xFFFF && v.stats.min_rx_v_mv > 0, rxv.stale,
+                               to_text(format::format_vbat(v.stats.min_rx_v_mv)), "----")
+                         .view(),
+                     false);
 
     draw_page_footer(fb, v, "P5/5", "TELEMETRY SENSORS");
 }

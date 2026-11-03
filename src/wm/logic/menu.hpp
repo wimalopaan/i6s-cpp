@@ -38,7 +38,7 @@ using ModelNames = std::array<ModelName, storage::kNumModels>;
 
 inline constexpr uint16_t kKeyDown = 1u << 8;
 inline constexpr uint16_t kKeyUp = 1u << 9;
-inline constexpr uint16_t kNavMask = kKeyDown | kKeyUp | kKeyOk | kKeyCancel;
+inline constexpr uint16_t kNavMask = kKeyDown | kKeyUp | kKeyOk | kKeyCancel | kKeyBind;
 inline constexpr uint32_t kRepeatDelayMs = 300;
 inline constexpr uint32_t kRepeatIntervalMs = 70;
 
@@ -216,6 +216,7 @@ struct Nav {
     bool down{false};
     bool ok{false};
     bool cancel{false};
+    bool bind{false};  // BIND key: "next" in Model Setup, Vario Setup, name edit and Throttle Curve (Rust)
     auto_select::Changes changes{};
 };
 
@@ -339,7 +340,9 @@ constexpr Event update_main(State& s, const Nav& n, const uint8_t active_model) 
             s.screen = Screen::ModelSelect;
             s.models = ListPos{};
             s.models.selected = active_model;
-            s.models.scroll = window_scroll({active_model}, {kListVisible});
+            // Active model in the third row where possible (Rust: sel - 2, at most count - 4).
+            s.models.scroll = static_cast<uint8_t>(
+                std::min<std::size_t>(active_model > 2 ? active_model - 2u : 0u, storage::kNumModels - kListVisible));
             return {Action::EnterModelSelect, 0};
         }
         if (s.main.selected == kItemModelSetup) {
@@ -406,7 +409,8 @@ constexpr Event update_models(State& s, const Nav& n) {
         return {};
     }
     if (n.ok) {
-        s.screen = Screen::Main;
+        // Rust stays in the list (the new model gets the [*] mark) and waits for the keys to be released.
+        s.waiting_release = true;
         return {Action::SwitchModel, s.models.selected};
     }
     return {};
@@ -460,8 +464,8 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
     const Event save{Action::SaveActiveModel, 0};
 
     if (!s.editing) {
-        if (n.up != n.down) {
-            s.nav_tick = step_list(s.setup, kSetupRows, Rows{kListVisible}, nav_dir(n));
+        if (const bool down = n.down || n.bind; n.up != down) {
+            s.nav_tick = step_list(s.setup, kSetupRows, Rows{kListVisible}, down ? Dir::Down : Dir::Up);
         }
         if (n.cancel) {
             s.screen = Screen::Main;
@@ -516,25 +520,30 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
         case SetupRow::Reset:
             break;
         case SetupRow::Name:
-            if (n.up) {
-                auto& c = m.name[s.name_cursor];
-                c = static_cast<uint8_t>(next_ascii(static_cast<char>(c)));
-            }
-            if (n.down) {
-                auto& c = m.name[s.name_cursor];
-                c = static_cast<uint8_t>(prev_ascii(static_cast<char>(c)));
-            }
-            if (n.ok) {
-                if (++s.name_cursor >= kNameLen) {
-                    s.name_cursor = 0;
-                    s.editing = false;
-                    return save;
-                }
-            }
             if (n.cancel) {
                 s.name_cursor = 0;
                 s.editing = false;
                 return save;
+            }
+            if (n.bind) {
+                s.name_cursor = static_cast<uint8_t>((s.name_cursor + 1) % kNameLen);
+                s.cue = buzzer::Cue::Click;
+            } else if (n.ok) {
+                if (s.name_cursor + 1u < kNameLen) {
+                    ++s.name_cursor;
+                } else {
+                    // Done after the last character: continue on the next row (Rust).
+                    s.name_cursor = 0;
+                    s.editing = false;
+                    s.setup.selected = static_cast<uint8_t>(SetupRow::Type);
+                    return save;
+                }
+            } else if (n.up) {
+                auto& c = m.name[s.name_cursor];
+                c = static_cast<uint8_t>(next_ascii(static_cast<char>(c)));
+            } else if (n.down) {
+                auto& c = m.name[s.name_cursor];
+                c = static_cast<uint8_t>(prev_ascii(static_cast<char>(c)));
             }
             break;
         case SetupRow::ArmSwitch:
@@ -542,10 +551,10 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
                 if (is_arm_switch_available(*n.changes.sw_cond, r)) {
                     m.arm_switch = *n.changes.sw_cond;
                 }
-            } else if (n.up) {
-                m.arm_switch = static_cast<uint8_t>((m.arm_switch + 1) % kArmSwitchCount);
-            } else if (n.down) {
-                m.arm_switch = static_cast<uint8_t>((m.arm_switch + kArmSwitchCount - 1) % kArmSwitchCount);
+            } else if (n.up != n.down) {
+                // Skip switches that are not configured (Rust next/prev_available_arm_switch).
+                m.arm_switch = step_available(m.arm_switch, kArmSwitchCount, n.down,
+                                              [&](const uint8_t sw) { return is_arm_switch_available(sw, r); });
             }
             if (n.ok || n.cancel) {
                 s.editing = false;
@@ -856,6 +865,12 @@ constexpr Event update_throttle_curve(State& s, const Nav& n, storage::ModelConf
             }
             return {Action::SaveActiveModel, 0};
         }
+        if (n.bind) {
+            // Next point, wrapping back to P1, without leaving edit mode (Rust).
+            s.throttle_curve.selected = static_cast<uint8_t>(sel + 1u < items ? sel + 1 : 2);
+            s.cue = buzzer::Cue::Click;
+            return {Action::SaveActiveModel, 0};
+        }
         return {};
     }
 
@@ -868,6 +883,12 @@ constexpr Event update_throttle_curve(State& s, const Nav& n, storage::ModelConf
         const std::size_t next = n.down ? (sel + 1u) % items : (sel == 0 ? items - 1 : sel - 1u);
         s.throttle_curve.selected = static_cast<uint8_t>(next);
         s.cue = buzzer::Cue::ValueStep;
+    }
+    if (n.bind) {
+        // Jump to the curve points: P1 from the mode rows, otherwise the next point, wrapping to P1 (Rust).
+        const uint8_t cur = s.throttle_curve.selected;
+        s.throttle_curve.selected = static_cast<uint8_t>(cur < 2 || cur + 1u >= items ? 2 : cur + 1);
+        s.cue = buzzer::Cue::Click;
     }
     if (n.ok) {
         if (sel == 0) {
@@ -1059,8 +1080,8 @@ constexpr Event update_vario(State& s, const Nav& n, storage::ModelConfig& m, co
             s.setup.scroll = window_scroll(ItemIndex{kItemVarioRow}, Rows{kListVisible});
             return {};
         }
-        if (n.up != n.down) {
-            s.nav_tick = step_list(s.vario, kVarioRows, Rows{kListVisible}, nav_dir(n));
+        if (const bool down = n.down || n.bind; n.up != down) {
+            s.nav_tick = step_list(s.vario, kVarioRows, Rows{kListVisible}, down ? Dir::Down : Dir::Up);
         }
         if (n.ok) {
             switch (static_cast<VarioRow>(s.vario.selected)) {
@@ -1423,11 +1444,13 @@ constexpr Event update_monitor(State& s, const Nav& n) {
         s.cue = buzzer::Cue::Click;
         return {};
     }
-    if (n.down) {
-        s.page = static_cast<uint8_t>((s.page + 1) % kMonitorPages);
-    }
+    // UP turns forward and DOWN back, as in Rust `update_channel_monitor`.
     if (n.up) {
+        s.page = static_cast<uint8_t>((s.page + 1) % kMonitorPages);
+        s.nav_tick = true;
+    } else if (n.down) {
         s.page = static_cast<uint8_t>((s.page + kMonitorPages - 1) % kMonitorPages);
+        s.nav_tick = true;
     }
     return {};
 }
@@ -1479,6 +1502,7 @@ constexpr Event update(State& s, const Input& in, storage::RadioStorage& st) {
     n.down = repeat_step(s.down, KeyState{down_pressed, down_held}, in.now_ms);
     n.ok = (in.pressed & kKeyOk) != 0;
     n.cancel = (in.pressed & kKeyCancel) != 0;
+    n.bind = (in.pressed & kKeyBind) != 0;
     n.changes = in.changes;
 
     switch (s.screen) {
@@ -1545,12 +1569,14 @@ constexpr format::Text<20> model_row_text(const std::size_t idx, const ModelName
         t.push(c);
     }
     t.push(':');
-    const auto text = name_text(name);
-    for (const char c : format::trim_spaces(text.view())) {
-        t.push(c);
+    // All 10 name characters at fixed width, then " [*]" on the active model (Rust `update_select`).
+    for (const uint8_t c : name) {
+        t.push(c >= 0x20 && c < 0x7F ? static_cast<char>(c) : ' ');
     }
     if (active) {
-        t.push('*');
+        for (const char c : std::string_view{" [*]"}) {
+            t.push(c);
+        }
     }
     return t;
 }
@@ -1608,7 +1634,6 @@ constexpr void render_models(Framebuffer& fb, const State& s, const ModelNames& 
         const auto label = model_row_text(idx, name, active);
         widgets::draw_list_row(fb, {static_cast<int>(slot)}, idx == s.models.selected, label.view(), {}, {0});
     }
-    widgets::draw_scrollbar(fb, {s.models.selected}, {static_cast<int>(storage::kNumModels)}, {14, 36});
     widgets::draw_footer(fb, "[OK] Load     [ESC] Back");
 }
 
@@ -1622,11 +1647,15 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
             break;
         }
         const int y = 14 + static_cast<int>(slot) * 9;
-        const bool selected = !s.editing && idx == s.setup.selected;
+        // The row stays highlighted while it is edited (Rust `is_sel || is_edit`).
+        const bool selected = idx == s.setup.selected;
         switch (static_cast<SetupRow>(idx)) {
             case SetupRow::Name: {
+                // Deliberate deviation: no row highlight while editing the name, otherwise the inverted
+                // cursor cell is invisible on the inverted row (as it is in Rust).
                 const auto name = name_text(m.name);
-                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Name:", name.view(), {kValueX});
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected && !s.editing, "Name:", name.view(),
+                                       {kValueX});
                 if (s.editing && idx == s.setup.selected) {
                     const int char_x = kValueX + s.name_cursor * 6;
                     const uint8_t c = m.name[s.name_cursor];
@@ -1648,10 +1677,10 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
             }
             case SetupRow::Timer: {
                 if (m.timer_secs == 0) {
-                    widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Timer:", "OFF", {kValueX});
+                    widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Timer:", "OFF", {52});
                 } else {
                     const auto t = timer_text(m.timer_secs);
-                    widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Timer:", t.view(), {kValueX});
+                    widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Timer:", t.view(), {52});
                 }
                 break;
             }
@@ -1662,29 +1691,27 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
             case SetupRow::Copy: {
                 if (s.editing && idx == s.setup.selected) {
                     const auto target = model_copy::target_label(s.copy.dst);
-                    widgets::draw_list_row(fb, {static_cast<int>(slot)}, true, "", target.view(), {kValueX});
+                    widgets::draw_list_row(fb, {static_cast<int>(slot)}, true, target.view(), {}, {0});
                 } else {
-                    widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Copy:", "[OK Duplicate]",
-                                           {kValueX});
+                    widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Copy: [OK Duplicate]", {}, {0});
                 }
                 break;
             }
             case SetupRow::Vario:
-                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Vario:", "[SETUP]", {kValueX});
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Vario: [SETUP]", {}, {0});
                 break;
             case SetupRow::Telemetry:
-                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Telemetry:", "[SETUP]", {68});
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Telemetry: [SETUP]", {}, {0});
                 break;
             case SetupRow::Protocol:
                 widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Protocol:",
                                        protocol::label(protocol::from_raw(m.rf_protocol)), {64});
                 break;
             case SetupRow::Reset:
-                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Reset:", "[OK Defaults]", {kValueX});
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Reset: [OK Defaults]", {}, {0});
                 break;
         }
     }
-    widgets::draw_scrollbar(fb, {s.setup.selected}, {static_cast<int>(kSetupRows)}, {14, 36});
 
     if (!s.editing) {
         widgets::draw_footer(fb, "[OK] Select    [ESC] Back");

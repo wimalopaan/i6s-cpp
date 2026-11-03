@@ -935,7 +935,15 @@ void dashboard_test() {
         const View crsf_view{in, st, trims, chs, true, {}, false, false, false, 0};
         check(logic::dashboard::rf_status_fixed(bind_view) == "BIND", "dashboard shows BIND while binding");
         check(logic::dashboard::rf_status_fixed(link_view).empty(), "dashboard shows RSSI when linked");
-        check(logic::dashboard::rf_status_fixed(down_view) == "NO RF", "dashboard shows NO RF without radio");
+        check(logic::dashboard::rf_status_fixed(down_view).empty(), "dashboard shows the chip error without radio");
+        check(logic::dashboard::rf_error_text(0x9E).view() == "E:9E" && logic::dashboard::rf_error_text(0x0F).view() == "E:0F",
+              "status bar chip error is two hex digits (Rust)");
+        View sim_view = link_view;
+        sim_view.usb_sim = true;
+        check(logic::dashboard::rf_status_fixed(sim_view) == "U:SIM", "status bar shows U:SIM in joystick mode");
+        View sim_bind_view = bind_view;
+        sim_bind_view.usb_sim = true;
+        check(logic::dashboard::rf_status_fixed(sim_bind_view) == "BIND", "BIND takes precedence over U:SIM");
         check(logic::dashboard::rf_status_fixed(crsf_view) == "CRSF", "dashboard shows CRSF for CRSF models");
         check(logic::dashboard::model_link_text(link_view).view() == "RSSI: 87%", "model page shows AFHDS RSSI");
         check(logic::dashboard::model_rx_voltage_text(link_view).view() == "4.95V", "model page shows fresh RX voltage");
@@ -959,8 +967,10 @@ void dashboard_test() {
         const View crsf_link_view{in, st, trims, chs, true, mapped, false, false, false, 1500};
         check(logic::dashboard::rf_status_fixed(crsf_link_view).empty(), "dashboard shows LQ for a connected CRSF link");
         check(logic::dashboard::model_link_text(crsf_link_view).view() == "LQ: 42%", "model page shows CRSF LQ");
-        check(logic::dashboard::sensor_fresh(link_view, linked.last_rx_voltage_ms), "fresh telemetry is not stale");
-        check(!logic::dashboard::sensor_fresh(stale_view, linked.last_rx_voltage_ms), "telemetry older than 2.5 s is stale");
+        check(!logic::telemetry::check_sensor_status({linked.last_rx_voltage_ms}, {link_view.now_ms}, true).stale,
+              "fresh telemetry is not stale");
+        check(logic::telemetry::check_sensor_status({linked.last_rx_voltage_ms}, {stale_view.now_ms}, true).stale,
+              "telemetry older than 2.5 s is stale");
 
         logic::dashboard::SessionStats stats{};
         logic::afhds2a::Telemetry sample{};
@@ -1072,10 +1082,28 @@ void menu_test() {
     check(enter.action == Action::EnterModelSelect && s.screen == Screen::ModelSelect,
           "OK on Model Select must open the model list");
     check(s.models.selected == 2, "model list must start on the active model");
+    {
+        mn::State es{};
+        mn::open(es);
+        logic::storage::RadioStorage rs10 = st;
+        rs10.radio.active_model = 10;
+        mn::update(es, mn::Input{0, 0, 0}, rs10);
+        mn::update(es, mn::Input{mn::kKeyOk, mn::kKeyOk, 1}, rs10);
+        check(es.screen == Screen::ModelSelect && es.models.scroll == 8, "entry scroll must keep active-2 on top");
+        mn::State es2{};
+        mn::open(es2);
+        rs10.radio.active_model = 19;
+        mn::update(es2, mn::Input{0, 0, 0}, rs10);
+        mn::update(es2, mn::Input{mn::kKeyOk, mn::kKeyOk, 1}, rs10);
+        check(es2.models.selected == 19 && es2.models.scroll == 16, "entry scroll must clamp at the list end");
+    }
     press(mn::kKeyDown, 160);
-    const Event sw = press(mn::kKeyOk, 180);
+    const Event sw = tick(mn::kKeyOk, mn::kKeyOk, 180);
     check(sw.action == Action::SwitchModel && sw.index == 3, "OK must switch to the selected model");
-    check(s.screen == Screen::Main && s.main.selected == 0, "switch must return to main menu");
+    check(s.screen == Screen::ModelSelect && s.waiting_release, "switch must stay in the model list (Rust)");
+    tick(0, 0, 181);
+    press(mn::kKeyCancel, 190);
+    check(s.screen == Screen::Main && s.main.selected == 0, "cancel must return to main menu");
 
     // Model setup: type cycling, name editing, arm switch and timer.
     press(mn::kKeyDown, 200);
@@ -1093,8 +1121,12 @@ void menu_test() {
 
     press(mn::kKeyDown, 300);  // -> Arm Sw
     press(mn::kKeyOk, 320);    // edit arm switch
+    uint8_t last_arm = 22;
+    while (!mn::is_arm_switch_available(last_arm, st.radio)) {
+        --last_arm;
+    }
     press(mn::kKeyDown, 330);
-    check(st.active_model.arm_switch == 22, "arm switch down from 0 must wrap to last condition");
+    check(st.active_model.arm_switch == last_arm, "arm switch down from 0 must wrap to the last available condition");
     press(mn::kKeyUp, 340);
     press(mn::kKeyUp, 350);
     check(st.active_model.arm_switch == 1, "arm switch up must step through conditions");
@@ -1127,6 +1159,42 @@ void menu_test() {
     check(name_done.action == Action::SaveActiveModel && !s.editing && s.name_cursor == 0,
           "cancel must end name edit and request save");
 
+    // BIND in name edit moves the cursor; OK on the 10th character ends the edit on the next row (Rust).
+    press(mn::kKeyOk, 521);
+    press(logic::kKeyBind, 522);
+    check(s.editing && s.name_cursor == 1, "BIND must advance the name cursor");
+    for (uint32_t i = 0; i < 8; ++i) {
+        press(mn::kKeyOk, 523 + i * 2);
+    }
+    check(s.editing && s.name_cursor == 9, "OK must reach the last character");
+    const Event name_last = press(mn::kKeyOk, 541);
+    check(name_last.action == Action::SaveActiveModel && !s.editing && s.setup.selected == 1,
+          "OK on the last character must save and select the next row");
+    press(mn::kKeyUp, 542);
+    press(logic::kKeyBind, 543);
+    check(!s.editing && s.setup.selected == 1, "BIND must move down the setup list (Rust)");
+    press(mn::kKeyUp, 544);
+
+    // Arm switch stepping skips unavailable switches (Rust next/prev_available_arm_switch).
+    {
+        const auto radio_saved = st.radio;
+        st.radio.ext_switches = 0;
+        st.radio.j4_sg_sh_en = 0;
+        st.radio.ext_adc = 0;
+        mn::State arm{};
+        arm.screen = Screen::ModelSetup;
+        arm.setup.selected = 2;
+        st.active_model.arm_switch = 10;
+        press_in(arm, mn::kKeyOk, 545);
+        check(arm.editing, "OK on Arm Sw must start editing");
+        press_in(arm, mn::kKeyUp, 547);
+        check(st.active_model.arm_switch == 0, "arm switch up must skip unavailable switches 11..22");
+        press_in(arm, mn::kKeyDown, 549);
+        check(st.active_model.arm_switch == 10, "arm switch down must skip unavailable switches 22..11");
+        st.radio = radio_saved;
+        st.active_model.arm_switch = 0;
+    }
+
     press(mn::kKeyCancel, 530);
     check(s.screen == Screen::Main, "cancel in setup must return to main menu");
     check(s.main.selected == 1, "main menu position must be kept");
@@ -1144,6 +1212,40 @@ void menu_test() {
         s.screen = screen;
         fb.clear();
         mn::render(fb, s, names, st, mn::Live{});
+    }
+
+    {
+        // Rust draws no scrollbar in Model Select / Model Setup (column 126 stays dark).
+        const auto px = [](const logic::display::Framebuffer& f, const int x, const int y) {
+            return ((f.data()[static_cast<std::size_t>((y / 8) * 128 + x)] >> (y % 8)) & 1) != 0;
+        };
+        const auto col_lit = [&](const logic::display::Framebuffer& f, const int x) {
+            for (int y = 14; y < 50; ++y) {
+                if (px(f, x, y)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        mn::State rs{};
+        rs.screen = Screen::ModelSelect;
+        rs.models.selected = 1;
+        fb.clear();
+        mn::render(fb, rs, names, st, mn::Live{});
+        check(!col_lit(fb, 126), "model select must not draw a scrollbar");
+        rs.screen = Screen::ModelSetup;
+        rs.setup = {};
+        rs.setup.selected = 2;
+        fb.clear();
+        mn::render(fb, rs, names, st, mn::Live{});
+        check(!col_lit(fb, 126), "model setup must not draw a scrollbar");
+        // The row stays highlighted while it is edited (Rust `is_sel || is_edit`).
+        rs.setup = {};
+        rs.setup.selected = 1;  // Type
+        rs.editing = true;
+        fb.clear();
+        mn::render(fb, rs, names, st, mn::Live{});
+        check(px(fb, 2, 14 + 9), "edited setup row must stay inverted");
     }
 
     check(logic::glyphs::kMenuGlyphs[0][4] == 194 && logic::glyphs::kMenuGlyphs[11][13] == 194,
@@ -1167,8 +1269,8 @@ void menu_test() {
     check(mn::timer_text(30).view() == std::string_view{"00:30"}, "timer text must pad seconds");
 
     const mn::ModelName named{'A', 'B', 'C', 0, 0, 0, 0, 0, 0, 0};
-    check(mn::model_row_text(0, named, true).view() == std::string_view{"M01:ABC*"}, "active model row label");
-    check(mn::model_row_text(9, named, false).view() == std::string_view{"M10:ABC"}, "two-digit model row label");
+    check(mn::model_row_text(0, named, true).view() == std::string_view{"M01:ABC        [*]"}, "active model row label");
+    check(mn::model_row_text(9, named, false).view() == std::string_view{"M10:ABC       "}, "two-digit model row label");
 
     // Channel labels follow the wing/tail mix and the aux source table.
     auto model = logic::storage::default_storage().active_model;
@@ -1204,10 +1306,13 @@ void menu_test() {
     mn::State mon{};
     mon.screen = Screen::ChannelMonitor;
     mn::update(mon, mn::Input{0, 0, 0}, st);
-    press_in(mon, mn::kKeyUp, 700);
-    check(mon.page == 2, "up from first monitor page must wrap to last");
-    press_in(mon, mn::kKeyDown, 710);
-    check(mon.page == 0, "down from last monitor page must wrap to first");
+    press_in(mon, mn::kKeyDown, 700);
+    check(mon.page == 2, "down from first monitor page must wrap to last (Rust)");
+    press_in(mon, mn::kKeyUp, 710);
+    check(mon.page == 0, "up from last monitor page must wrap to first (Rust)");
+    press_in(mon, mn::kKeyUp, 715);
+    check(mon.page == 1, "up must turn the monitor page forward (Rust)");
+    press_in(mon, mn::kKeyDown, 717);
     press_in(mon, mn::kKeyCancel, 720);
     check(mon.screen == Screen::Main, "cancel must leave the monitor");
 
@@ -1589,6 +1694,24 @@ void throttle_curve_test() {
     check(!ms.editing && ms.throttle_curve.selected == 8, "curve: OK on the last point must leave edit mode");
     tap(mn::kKeyUp, 500);
     check(ms.throttle_curve.selected == 7, "curve: navigation must move between points");
+    tap(logic::kKeyBind, 501);
+    check(ms.throttle_curve.selected == 8, "curve: BIND must select the next point");
+    tap(logic::kKeyBind, 502);
+    check(ms.throttle_curve.selected == 2, "curve: BIND on the last point must wrap to P1");
+    tap(mn::kKeyUp, 503);
+    tap(mn::kKeyUp, 504);
+    tap(logic::kKeyBind, 505);
+    check(ms.throttle_curve.selected == 2, "curve: BIND on a mode row must jump to P1");
+    tap(mn::kKeyOk, 506);
+    const Event bind_next = tap(logic::kKeyBind, 507);
+    check(ms.editing && ms.throttle_curve.selected == 3 && bind_next.action == Action::SaveActiveModel,
+          "curve: BIND while editing must save and edit the next point");
+    for (int i = 0; i < 6; ++i) {
+        tap(logic::kKeyBind, 508);
+    }
+    check(ms.editing && ms.throttle_curve.selected == 2, "curve: BIND while editing must wrap to P1 and stay in edit");
+    tap(mn::kKeyCancel, 509);
+    ms.throttle_curve.selected = 7;
     const Event saved = tap(mn::kKeyCancel, 510);
     check(saved.action == Action::SaveActiveModel && ms.screen == Screen::Main,
           "curve: cancel must save and return to main");
@@ -3484,6 +3607,22 @@ void bind_test() {
     Controller crsf_c{};
     check(logic::bind::update(crsf_c, make({false, false}, kBind, kBind, 2000)).action == Action::None,
           "bind: no start without AFHDS 2A");
+    check(!logic::bind::update(crsf_c, make({false, false}, 0, 0, 10)).next_page,
+          "bind: release after a long hold without AFHDS 2A does not turn the page");
+
+    // Short press turns the dashboard page on release (Rust: >= 40 ms, < 1 s), for every protocol.
+    Controller page_c{};
+    check(!logic::bind::update(page_c, make(kLinked, kBind, kBind, 100)).next_page, "bind: no page turn while held");
+    check(logic::bind::update(page_c, make(kLinked, 0, 0, 10)).next_page, "bind: short press turns the page");
+    check(!logic::bind::update(page_c, make(kLinked, 0, 0, 10)).next_page, "bind: page turn only once");
+    logic::bind::update(page_c, make({false, false}, kBind, kBind, 40));
+    check(logic::bind::update(page_c, make({false, false}, 0, 0, 10)).next_page,
+          "bind: short press turns the page on CRSF too");
+    logic::bind::update(page_c, make(kLinked, kBind, kBind, 39));
+    check(!logic::bind::update(page_c, make(kLinked, 0, 0, 10)).next_page, "bind: a 39 ms blip is ignored");
+    logic::bind::update(page_c, make(kLinked, kBind, kBind, 100));
+    logic::bind::update(page_c, make(kLinked, kBind, 0, 10, true));
+    check(!logic::bind::update(page_c, make(kLinked, 0, 0, 10)).next_page, "bind: no page turn after the menu opened");
 
     Controller stop_c{};
     const auto stop_bind = logic::bind::update(stop_c, make(kBinding, 0, kBind, 10));
