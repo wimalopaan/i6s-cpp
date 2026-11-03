@@ -8,7 +8,7 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 ## Ported
 
 - Chip: clock (48 MHz), reset flags, DFU entry, UID, watchdog, SysTick
-- Peripherals: GPIO, ADC (DMA), USART (DMA, CRSF/half-duplex), keys, LCD (ST7567), buzzer (TIM1), trainer PPM (TIM15)
+- Peripherals: GPIO, ADC (DMA), USART (DMA, CRSF/half-duplex), keys, LCD (ST7567), buzzer (TIM1), trainer PPM (TIM15 + TIM2, DMA)
 - CRSF: framing, telemetry parser, RC frames, parameter menu engine
 - AFHDS 2A: protocol logic, A7105 driver, radio state machine, ISRs
 - Storage: I2C EEPROM, A/B radio slots, model slots, legacy v1–v4 migration
@@ -48,7 +48,10 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 ## Known deviations from Rust
 
 - CRSF: telemetry tiles 12 (VSPD) and 13 (ALT) use CRSF data instead of AFHDS 2A data.
-- Trainer: CC2 is not an AF output (PF10 is driven from the ISR, as in Rust).
+- Trainer: no interrupts (Rust drives PF10 and reads PF9 from the TIM15 ISR).
+  - PPM out: PF10 is TIM15_CH2 (AF0) in PWM mode; the TIM15 update DMA (DMA1 channel 5) loads each period into ARR.
+  - PPM in: each PF9 capture on TIM15 triggers (TRGO, ITR1) a TRC capture of the free-running TIM2; the TIM2 CC4
+    DMA (DMA1 channel 4) stores the timestamps in a ring that the main loop decodes. TIM15 has only one DMA channel.
 - FS-i6S:
   - Sanitize keeps the ADC mode InstantTrim (Rust clamps at > 6) and aux sources 41..44 (VRG, SWK..SWM).
   - SE/SF availability follows the rear-button function (`rear_*_func == 0`); Rust checks `ext_switches`, which has
