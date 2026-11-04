@@ -30,8 +30,8 @@ inline constexpr uint32_t kChselrP7 = 0xF7FF;   // CH0..CH10 + CH12..CH15
 inline constexpr uint32_t kPortCAnalog = 0x003D;  // PC0, PC2..PC5
 #endif
 static_assert(std::popcount(kChselrP7) == kChannels);
-// DMA CCR: MINC | PSIZE=16 bit | MSIZE=16 bit | PL=High | EN
-inline constexpr uint32_t kDmaCcr = (1u << 7) | (1u << 8) | (1u << 10) | (2u << 12) | 1u;
+inline constexpr uint32_t kDmaCcr =
+    DMA_CCR_MINC | DMA_CCR_CIRC | DMA_CCR_PSIZE_0 | DMA_CCR_MSIZE_0 | DMA_CCR_PL_1 | DMA_CCR_EN;
 
 constexpr std::size_t count_for(const bool p7) {
     return p7 ? kChannels : kStdChannels;
@@ -59,12 +59,12 @@ inline void take_snapshot() {
     }
 }
 
-/// Clears DMA/ADC flags and restarts DMA channel 1 plus the ADC sequence.
+/// Starts circular DMA and ADC conversions; the ADC must be stopped before reconfiguration.
 inline void rearm() {
+    DMA1_Channel1->CCR = 0;
     DMA1->IFCR = 0x0F;  // GIF1, TCIF1, HTIF1, TEIF1
     ADC1->ISR = ADC_ISR_EOSEQ | ADC_ISR_OVR;
 
-    DMA1_Channel1->CCR = 0;
     DMA1_Channel1->CNDTR = static_cast<uint32_t>(g_scan_count);
     DMA1_Channel1->CCR = kDmaCcr;
 
@@ -97,28 +97,24 @@ inline void init(const bool p7_enabled) {
 
     ADC1->CHSELR = detail::chselr_for(p7_enabled);
     ADC1->SMPR = 0b111;  // 239.5 ADC cycles
-    ADC1->CFGR1 = ADC_CFGR1_DMAEN;
+    ADC1->CFGR1 = ADC_CFGR1_DMAEN | ADC_CFGR1_DMACFG | ADC_CFGR1_CONT;
 
     DMA1_Channel1->CCR = 0;
     DMA1_Channel1->CPAR = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&ADC1->DR));
     DMA1_Channel1->CMAR = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(detail::g_raw.data()));
-    DMA1_Channel1->CNDTR = static_cast<uint32_t>(detail::g_scan_count);
-    DMA1_Channel1->CCR = detail::kDmaCcr;
-
-    ADC1->CR |= ADC_CR_ADSTART;
+    detail::rearm();
 }
 
 /// Switches between 11 and kChannels scanned channels at runtime.
 inline void set_p7_enabled(const bool enabled) {
-    detail::g_scan_count = detail::count_for(enabled);
-
-    DMA1_Channel1->CCR = 0;
     if ((ADC1->CR & ADC_CR_ADSTART) != 0) {
         ADC1->CR |= ADC_CR_ADSTP;
         for (uint32_t t = 10'000; t > 0 && (ADC1->CR & ADC_CR_ADSTART) != 0; --t) {
         }
     }
 
+    DMA1_Channel1->CCR = 0;
+    detail::g_scan_count = detail::count_for(enabled);
     ADC1->CHSELR = detail::chselr_for(enabled);
     detail::rearm();
 }
@@ -132,15 +128,11 @@ inline void wait_first_conversion() {
     for (uint32_t t = 200'000; t > 0 && (DMA1->ISR & DMA_ISR_TCIF1) == 0; --t) {
     }
     detail::take_snapshot();
-    detail::rearm();
 }
 
-/// Returns the latest complete scan. Re-arms DMA when a new sequence finished.
+/// Returns current per-channel readings while DMA keeps running; this is not an atomic scan snapshot.
 inline Samples read_raw() {
-    if ((DMA1->ISR & DMA_ISR_TCIF1) != 0) {
-        detail::take_snapshot();
-        detail::rearm();
-    }
+    detail::take_snapshot();
     return detail::g_snapshot;
 }
 
