@@ -504,6 +504,12 @@ int main() {
     for (;;) {
         chip::watchdog::feed();
         configure_pages(page_state, model);
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+        const auto multiswitch_page_slot = page_state.page >= kBasePageCount
+            ? logic::multiswitch::slot_at(model.multiswitch_addresses, page_state.page - kBasePageCount)
+            : std::nullopt;
+        std::optional<uint8_t> multiswitch_touch_slot{};
+#endif
 
 #if WM_PCB_I6S
         const bool menu_active_pre =
@@ -526,7 +532,8 @@ int main() {
                 g_storage.radio.rear_right_func, g_storage.radio.throttle_trim != 0, {rear.left, rear.right}, swipe,
                 time::millis()
 #if WM_USE_MULTISWITCH
-                , page_state.page >= kBasePageCount
+                , page_state.page >= kBasePageCount,
+                multiswitch_page_slot ? model.multiswitch_momentary[*multiswitch_page_slot] : 0
 #endif
             );
         }
@@ -597,14 +604,8 @@ int main() {
             }
 #if WM_PCB_I6S
 #if WM_USE_MULTISWITCH
-            if (page_state.page == prev_page && page_state.page >= kBasePageCount && swipe.tapped_switch &&
-                model.rf_protocol == 1 && !sim && !logic::flight_timer::modal(g_flight_timer) &&
-                board_idle.power.progress_pct() == 0) {
-                if (const auto slot = logic::multiswitch::slot_at(
-                        model.multiswitch_addresses, page_state.page - kBasePageCount)) {
-                    multiswitch.states[*slot].toggle(*swipe.tapped_switch);
-                    play_buzzer_cue(logic::buzzer::Cue::Click);
-                }
+            if (page_state.page == prev_page && page_state.page >= kBasePageCount) {
+                multiswitch_touch_slot = multiswitch_page_slot;
             }
 #endif
             // Long centre tap or the right rear button held for 1.2 s opens the menu.
@@ -819,8 +820,19 @@ int main() {
         }
         const bool crsf = model.rf_protocol == 1;
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-        multiswitch.configure(model.multiswitch_addresses);
+        multiswitch.configure(model.multiswitch_addresses, model.multiswitch_momentary);
         configure_pages(page_state, model);
+        if (menu_state.screen != logic::menu::Screen::Closed || logic::calib::active(g_calib_wizard) ||
+            !crsf || sim || logic::flight_timer::modal(g_flight_timer) ||
+            board_idle.power.progress_pct() != 0 || g_storage.radio.touch_disabled != 0) {
+            multiswitch_touch_slot.reset();
+        }
+        if (!multiswitch_touch_slot) {
+            swipe.held_switch.reset();
+        }
+        if (multiswitch.update_touch(multiswitch_touch_slot, swipe.held_switch, swipe.tapped_switch)) {
+            play_buzzer_cue(logic::buzzer::Cue::Click);
+        }
 #endif
 #if WM_USE_USB
         hw::usb::poll(logic::usb::Millis{now}, channels, input.switches, input.battery_mv);

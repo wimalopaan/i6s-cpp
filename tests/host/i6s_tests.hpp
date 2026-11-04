@@ -27,8 +27,8 @@ inline void i6s_storage_tests() {
     using st::ModelConfig;
     using st::RadioConfig;
 
-    check(sizeof(RadioConfig) == 148 && sizeof(st::RadioStorage) == 716 && sizeof(ModelConfig) == 568,
-          "i6s storage: model appends four MultiSwitch addresses and 32 six-character captions");
+    check(sizeof(RadioConfig) == 148 && sizeof(st::RadioStorage) == 720 && sizeof(ModelConfig) == 572,
+          "i6s storage: model appends MultiSwitch addresses, captions and four mode masks");
     check(offsetof(RadioConfig, aux_pots) == 48 && offsetof(RadioConfig, ext_module_pwr) == 114 &&
               offsetof(RadioConfig, servo_rate_hz) == 116 && offsetof(RadioConfig, ext_switches) == 120 &&
               offsetof(RadioConfig, ext_adc) == 121 && offsetof(RadioConfig, adc_modes) == 122 &&
@@ -113,12 +113,25 @@ inline void i6s_storage_tests() {
           "i6s storage: previous four-address models retain all addresses and gain empty captions");
     migrated.multiswitch_labels[0][0] = {'L', 'I', 'G', 'H', 'T', 'S'};
     migrated.multiswitch_labels[3][7] = {'H', 'O', 'R', 'N', 0, 0};
+    old = st::to_bytes(migrated);
+    test_eeprom::write_slot_raw(legacy_slot, st::kSchemaVersion, 568, old);
+    check(st::peek_model_name<Dev>(17) == migrated.name,
+          "i6s storage: caption-era model names remain discoverable before migration");
+    ModelConfig caption_model{};
+    check(st::load_slot<Dev>(legacy_slot, caption_model) == st::Status::Ok &&
+              caption_model.multiswitch_addresses == migrated.multiswitch_addresses &&
+              caption_model.multiswitch_labels == migrated.multiswitch_labels &&
+              caption_model.multiswitch_momentary == st::MultiSwitchModes{} &&
+              test_eeprom::read_header(legacy_slot).len == sizeof(ModelConfig),
+          "i6s storage: caption-era models keep all settings and default every function to toggle");
+    migrated.multiswitch_momentary = {0x81, 0x24, 0xFF, 0};
     check(st::save_model_to_slot<Dev>(18, migrated), "i6s storage: save all optional MultiSwitch addresses");
     ModelConfig restored{};
     check(st::load_slot<Dev>(*st::model_slot_addr(18), restored) == st::Status::Ok &&
               restored.multiswitch_addresses == migrated.multiswitch_addresses &&
-              restored.multiswitch_labels == migrated.multiswitch_labels,
-          "i6s storage: addresses and captions survive reload even when MultiSwitch is compiled out");
+              restored.multiswitch_labels == migrated.multiswitch_labels &&
+              restored.multiswitch_momentary == migrated.multiswitch_momentary,
+          "i6s storage: addresses, captions and modes survive reload even when MultiSwitch is compiled out");
 }
 
 inline void i6s_input_tests() {
@@ -604,6 +617,9 @@ inline void i6s_multiswitch_tests() {
               "multiswitch setup: confirming an address does not write EEPROM");
         press(mn::kKeyDown);
         press(mn::kKeyOk);
+        check(menu.screen == mn::Screen::MultiSwitchButtonSetup && !menu.editing,
+              "multiswitch setup: OK on a function opens its text/type sub-dialog");
+        press(mn::kKeyOk);
         auto& label = storage.active_model.multiswitch_labels[slot][0];
         if (slot == 0) {
             constexpr std::string_view alphabet{" ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"};
@@ -629,6 +645,24 @@ inline void i6s_multiswitch_tests() {
         check(!menu.editing && label == st::MultiSwitchLabel{
                   static_cast<uint8_t>('A' + slot), 'A', 'A', 'A', 'A', 'A'},
               "multiswitch setup: all six characters are editable independently for each MS entry");
+        press(mn::kKeyDown);
+        press(mn::kKeyOk);
+        check(press(mn::kKeyUp).action == mn::Action::None &&
+                  storage.active_model.multiswitch_momentary[slot] == 1 &&
+                  edit_cue == wm::logic::buzzer::Cue::ValueStep,
+              "multiswitch setup: type edit enables momentary mode for only the selected entry/function");
+        press(mn::kKeyUp | mn::kKeyDown);
+        check(storage.active_model.multiswitch_momentary[slot] == 1,
+              "multiswitch setup: simultaneous Up/Down does not change type");
+        press(mn::kKeyDown);
+        check(storage.active_model.multiswitch_momentary[slot] == 0,
+              "multiswitch setup: type edit can return to toggle");
+        press(mn::kKeyUp);
+        check(press(mn::kKeyOk).action == mn::Action::None && !menu.editing,
+              "multiswitch setup: confirming the type does not write EEPROM");
+        check(press(mn::kKeyCancel).action == mn::Action::None &&
+                  menu.screen == mn::Screen::MultiSwitchPageSetup && menu.multiswitch_page.selected == 1,
+              "multiswitch setup: leaving function settings preserves its row and defers saving");
         check(press(mn::kKeyCancel).action == mn::Action::SaveActiveModel &&
                   menu.screen == mn::Screen::MultiSwitchSetup && menu.multiswitch.selected == slot,
               "multiswitch setup: leaving entry settings saves address and captions together and preserves focus");
@@ -652,6 +686,7 @@ inline void i6s_multiswitch_tests() {
     check(menu.multiswitch_page.selected == 8 && menu.multiswitch_page.scroll > 0,
           "multiswitch setup: navigation wraps and scrolls to the eighth caption even when Off");
     press(mn::kKeyOk);
+    press(mn::kKeyOk);
     press(mn::kKeyDown);
     for (unsigned i = 0; i < 5; ++i) {
         press(mn::kKeyOk);
@@ -660,10 +695,20 @@ inline void i6s_multiswitch_tests() {
     setup_fb.clear();
     mn::render(setup_fb, menu, names, storage, mn::Live{});
     check(menu.editing && menu.name_cursor == 5 && lit_pixels(setup_fb) > 0,
-          "multiswitch setup: the final character of a scrolled caption renders with its edit cursor");
+          "multiswitch setup: the eighth function's final character renders with its edit cursor");
     check(press(mn::kKeyCancel).action == mn::Action::None && !menu.editing &&
               storage.active_model.multiswitch_labels[0][7] == st::MultiSwitchLabel{'_', ' ', ' ', ' ', ' ', 'A'},
           "multiswitch setup: ESC finishes caption editing without saving or undoing its text");
+    press(mn::kKeyDown);
+    press(mn::kKeyOk);
+    press(mn::kKeyUp);
+    check(storage.active_model.multiswitch_momentary[0] == 0x81,
+          "multiswitch setup: the eighth function has its own type bit without changing the first");
+    check(press(mn::kKeyCancel).action == mn::Action::None && !menu.editing,
+          "multiswitch setup: ESC finishes type editing without saving");
+    check(press(mn::kKeyCancel).action == mn::Action::None &&
+              menu.screen == mn::Screen::MultiSwitchPageSetup,
+          "multiswitch setup: ESC leaves button settings without saving");
     check(press(mn::kKeyCancel).action == mn::Action::SaveActiveModel &&
               menu.screen == mn::Screen::MultiSwitchSetup,
           "multiswitch setup: ESC saves all collected edits only when leaving the entry");
@@ -682,24 +727,27 @@ inline void i6s_multiswitch_tests() {
     st::RadioStorage loaded{};
     st::load_storage<Dev>(loaded);
     check(loaded.active_model.multiswitch_addresses == storage.active_model.multiswitch_addresses &&
-              loaded.active_model.multiswitch_labels == storage.active_model.multiswitch_labels,
-          "multiswitch storage: all addresses and edited captions survive reload");
+              loaded.active_model.multiswitch_labels == storage.active_model.multiswitch_labels &&
+              loaded.active_model.multiswitch_momentary == storage.active_model.multiswitch_momentary,
+          "multiswitch storage: all addresses, captions and types survive reload");
     check(wm::logic::model_copy::copy_model<Dev>(
               storage, wm::logic::model_copy::active_slot(storage), wm::logic::model_copy::DstSlot{1}),
           "multiswitch storage: copy model with address");
     st::ModelConfig copy{};
     check(st::load_slot<Dev>(*st::model_slot_addr(1), copy) == st::Status::Ok &&
               copy.multiswitch_addresses == storage.active_model.multiswitch_addresses &&
-              copy.multiswitch_labels == storage.active_model.multiswitch_labels,
-          "multiswitch storage: copied model keeps all page addresses and captions");
+              copy.multiswitch_labels == storage.active_model.multiswitch_labels &&
+              copy.multiswitch_momentary == storage.active_model.multiswitch_momentary,
+          "multiswitch storage: copied model keeps all page addresses, captions and types");
     auto reset_storage = storage;
     mn::State reset_menu{};
     reset_menu.screen = mn::Screen::ModelSetup;
     reset_menu.setup.selected = static_cast<uint8_t>(mn::SetupRow::Reset);
     check(mn::update(reset_menu, mn::Input{mn::kKeyOk, mn::kKeyOk, now++}, reset_storage).action ==
                   mn::Action::ResetActiveModel &&
-              reset_storage.active_model.multiswitch_labels == st::MultiSwitchLabels{},
-          "multiswitch setup: model reset clears configured captions");
+              reset_storage.active_model.multiswitch_labels == st::MultiSwitchLabels{} &&
+              reset_storage.active_model.multiswitch_momentary == st::MultiSwitchModes{},
+          "multiswitch setup: model reset clears captions and restores toggle mode");
     auto old = st::to_bytes(st::default_model_config(2));
     const auto address = *st::model_slot_addr(2);
     test_eeprom::write_slot_raw(address, st::kSchemaVersion, 364, old);
@@ -712,6 +760,7 @@ inline void i6s_multiswitch_tests() {
     std::array<uint16_t, wm::logic::kNumChannels> channels{};
     wm::logic::dashboard::View view{input, storage, trims, channels, true};
     wm::logic::display::Framebuffer off{}, on{};
+    storage.active_model.multiswitch_momentary.fill(0);
     wm::logic::dashboard::draw_multiswitch_page(off, view, 1, 5);
     view.multiswitch_states[1] = 1;
     wm::logic::dashboard::draw_multiswitch_page(on, view, 1, 5);
@@ -732,6 +781,19 @@ inline void i6s_multiswitch_tests() {
     expected.draw_str_4x6({first_button.pos.x + 3, first_button.pos.y + 5}, "BAAAAA", true);
     check(on.data() == expected.data(),
           "multiswitch dashboard: an active button inverts the same centered six-character caption");
+    storage.active_model.multiswitch_momentary[1] = 1;
+    wm::logic::display::Framebuffer momentary_off{}, momentary_on{};
+    wm::logic::dashboard::draw_multiswitch_page(momentary_on, view, 1, 5);
+    auto expected_momentary = expected;
+    expected_momentary.draw_rect({{first_button.pos.x + 2, first_button.pos.y + 2}, {26, 13}}, false);
+    check(momentary_on.data() == expected_momentary.data() && momentary_on.data() != on.data(),
+          "multiswitch dashboard: momentary ON has a contrasting inner frame without obscuring six characters");
+    view.multiswitch_states[1] = 0;
+    wm::logic::dashboard::draw_multiswitch_page(momentary_off, view, 1, 5);
+    expected_momentary = off;
+    expected_momentary.draw_rect({{first_button.pos.x + 2, first_button.pos.y + 2}, {26, 13}}, true);
+    check(momentary_off.data() == expected_momentary.data() && momentary_off.data() != off.data(),
+          "multiswitch dashboard: momentary OFF is distinguishable by a double frame");
     check(ms::label_text(st::MultiSwitchLabel{' ', ' ', 0, ' ', 0, ' '}, 7).view() == "8" &&
               ms::label_text(st::MultiSwitchLabel{' ', 'A', 0, 'B', ' ', ' '}, 0).view() == "A B",
           "multiswitch captions: blank text falls back to its number, surrounding blanks are trimmed");
@@ -790,6 +852,98 @@ inline void i6s_multiswitch_tests() {
     check(dashboard.count == 5 && dashboard.page == 4 && dash::page_label(view, 4).view() == "P5/5",
           "multiswitch dashboard: all Off leaves exactly the five original pages");
 }
+
+inline void i6s_multiswitch_momentary_tests() {
+    namespace ms = wm::logic::multiswitch;
+    namespace tn = wm::logic::touch_nav;
+    using Kind = tn::TouchEventKind;
+    ms::Pages pages{};
+    pages.configure({0, 1, -1, 255}, {0xFF, 1, 0xFF, 0x80});
+    tn::SwipeTracker tracker{};
+    const auto sample = [](const uint8_t x, const uint8_t y, const Kind event) {
+        return tn::TouchSample{.point = tn::TouchPoint{.x = x, .y = y, .event = event}};
+    };
+    const auto tick = [&](const std::optional<tn::TouchSample>& touch, const uint32_t now,
+                          const bool menu = false, const bool page = true) {
+        const auto keys = tn::update_inputs(touch, {}, menu, 0, 0, true, {}, tracker, now, page, pages.momentary[0]);
+        pages.update_touch(!menu && page ? std::optional<uint8_t>{0} : std::nullopt,
+                           tracker.held_switch, tracker.tapped_switch);
+        return keys;
+    };
+    for (uint8_t i = 0; i < ms::kSwitchCount; ++i) {
+        tracker = {};
+        const auto r = ms::switch_rect(i);
+        const auto x = static_cast<uint8_t>(r.pos.x + r.size.w / 2);
+        const auto y = static_cast<uint8_t>(r.pos.y + r.size.h / 2);
+        const uint32_t now = 100 * i;
+        tick(sample(x, y, Kind::PressDown), now);
+        check(pages.states[0].switches == (1u << i) && pages.states[0].pending && !tracker.tapped_switch,
+              "multiswitch momentary: every button turns ON at press, not at release");
+        pages.sent(0, now);
+        const auto keys = tick(tn::TouchSample{.gesture = tn::Gesture::SwipeLeft,
+                                              .point = tn::TouchPoint{.x = x, .y = y, .event = Kind::Contact}}, now + 14);
+        check(keys == tn::kKeyTouchActivity && pages.states[0].switches == (1u << i) &&
+                  !pages.states[0].pending,
+              "multiswitch momentary: stationary contact stays ON without repeated toggles or swipe navigation");
+        tick(sample(x, y, Kind::LiftUp), now + 20);
+        check(pages.states[0].switches == 0 && pages.states[0].pending && !tracker.tapped_switch,
+              "multiswitch momentary: release queues OFF without generating a latching tap");
+    }
+
+    pages.configure({0, 1, -1, 255}, {0x81, 1, 0xFF, 0x80});
+    tick(sample(16, 20, Kind::PressDown), 1000);
+    check(tick(sample(48, 20, Kind::Contact), 1010) == tn::kKeyTouchActivity &&
+              pages.states[0].switches == 0 && tracker.momentary_touch,
+          "multiswitch momentary: leaving the button releases it without sliding onto another button or page");
+    tick(sample(16, 20, Kind::Contact), 1020);
+    check(pages.states[0].switches == 0, "multiswitch momentary: sliding back in does not reactivate");
+    tick(sample(16, 20, Kind::LiftUp), 1030);
+    tick(sample(16, 20, Kind::PressDown), 1040);
+    check(pages.states[0].switches == 1, "multiswitch momentary: a new press reactivates after leaving");
+    tick(std::nullopt, 1040 + tn::kReleaseTimeoutMs - 1);
+    check(pages.states[0].switches == 1, "multiswitch momentary: a short missing packet does not flicker OFF");
+    tick(std::nullopt, 1040 + tn::kReleaseTimeoutMs);
+    check(pages.states[0].switches == 0 && !tracker.held_switch && !tracker.tapped_switch,
+          "multiswitch momentary: touch timeout safely releases without latching");
+    tick(sample(16, 20, Kind::Contact), 1090);
+    check(pages.states[0].switches == 0, "multiswitch momentary: late contact after timeout cannot reactivate");
+    for (const bool menu : {false, true}) {
+        tracker = {};
+        tick(sample(16, 20, Kind::PressDown), 1200);
+        const auto keys = tick(sample(16, 20, Kind::Contact), 1210, menu, menu);
+        check(keys == tn::kKeyTouchActivity && pages.states[0].switches == 0 &&
+                  !tracker.held_switch && tracker.momentary_touch,
+              "multiswitch momentary: leaving the dashboard or opening a menu releases and consumes the touch");
+        tick(sample(16, 20, Kind::Contact), 1220);
+        check(pages.states[0].switches == 0, "multiswitch momentary: returning to a page needs a fresh press");
+        tick(sample(16, 20, Kind::LiftUp), 1230);
+    }
+    tick(sample(16, 20, Kind::PressDown), 1300);
+    tick(tn::TouchSample{}, 1310);
+    check(pages.states[0].switches == 0, "multiswitch momentary: an explicit no-contact packet releases immediately");
+    tick(sample(48, 20, Kind::PressDown), 1400);
+    check(pages.states[0].switches == 0, "multiswitch mixed modes: a toggle still waits for release");
+    tick(sample(48, 20, Kind::LiftUp), 1410);
+    check(pages.states[0].switches == 2, "multiswitch mixed modes: toggle latches on release");
+    tick(sample(16, 20, Kind::PressDown), 1420);
+    check(pages.states[0].switches == 3, "multiswitch mixed modes: pressing momentary preserves latched output");
+    pages.update_touch(std::nullopt, tracker.held_switch, {});
+    check(pages.states[0].switches == 2 && pages.states[0].pending,
+          "multiswitch momentary: input inhibition releases momentary outputs but preserves latches");
+    pages.update_touch(3, 7, {});
+    check(pages.states[0].switches == 2 && pages.states[3].switches == 0x80,
+          "multiswitch momentary: holding a function affects its configuration slot, not the dashboard ordinal");
+    pages.update_touch(2, 0, {});
+    check(pages.states[2].switches == 0 && pages.states[3].switches == 0,
+          "multiswitch momentary: disabled entries cannot activate and other held entries are released");
+    pages.states[0].set_switches(6);
+    pages.configure({0, 1, -1, 255}, {0x83, 1, 0xFF, 0x80});
+    check(pages.states[0].switches == 4 && pages.states[0].pending,
+          "multiswitch modes: changing one function's type resets only that function to OFF");
+    pages.states[0].set_switches(5);
+    pages.configure({0, 1, -1, 255}, {0x82, 1, 0xFF, 0x80});
+    check(pages.states[0].switches == 4, "multiswitch modes: changing momentary to toggle also resets it to OFF");
+}
 #endif
 
 inline void i6s_tests() {
@@ -802,6 +956,7 @@ inline void i6s_tests() {
     i6s_auto_select_tests();
 #if WM_USE_MULTISWITCH
     i6s_multiswitch_tests();
+    i6s_multiswitch_momentary_tests();
 #endif
 }
 

@@ -103,6 +103,15 @@ struct State {
         pending = true;
     }
 
+    constexpr bool set_switches(const uint8_t value) {
+        if (switches == value) {
+            return false;
+        }
+        switches = value;
+        pending = true;
+        return true;
+    }
+
     constexpr bool due(const uint32_t now_ms) const {
         return pending || now_ms - last_tx_ms >= kRepeatMs;
     }
@@ -115,16 +124,38 @@ struct State {
 
 struct Pages {
     Addresses addresses{-1, -1, -1, -1};
+    storage::MultiSwitchModes momentary{};
     std::array<State, kMaxPages> states{};
     uint8_t next_slot = 0;
 
-    constexpr void configure(const Addresses& configured) {
+    constexpr void configure(const Addresses& configured, const storage::MultiSwitchModes& modes = {}) {
         for (uint8_t slot = 0; slot < kMaxPages; ++slot) {
             if (addresses[slot] != configured[slot]) {
                 states[slot] = {};
                 addresses[slot] = configured[slot];
             }
+            states[slot].set_switches(static_cast<uint8_t>(
+                states[slot].switches & ~(momentary[slot] ^ modes[slot])));
+            momentary[slot] = modes[slot];
         }
+    }
+
+    constexpr bool update_touch(const std::optional<uint8_t> slot, const std::optional<uint8_t> held,
+                                const std::optional<uint8_t> tapped) {
+        bool changed = false;
+        for (uint8_t i = 0; i < kMaxPages; ++i) {
+            uint8_t value = static_cast<uint8_t>(states[i].switches & ~momentary[i]);
+            if (slot == i && addresses[i] >= 0 && addresses[i] <= 255) {
+                if (held) {
+                    value |= static_cast<uint8_t>((1u << *held) & momentary[i]);
+                }
+                if (tapped && (momentary[i] & (1u << *tapped)) == 0) {
+                    value ^= static_cast<uint8_t>(1u << *tapped);
+                }
+            }
+            changed = states[i].set_switches(value) || changed;
+        }
+        return changed;
     }
 
     constexpr std::optional<uint8_t> due(const uint32_t now_ms) const {
