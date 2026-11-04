@@ -27,8 +27,8 @@ inline void i6s_storage_tests() {
     using st::ModelConfig;
     using st::RadioConfig;
 
-    check(sizeof(RadioConfig) == 148 && sizeof(st::RadioStorage) == 524 && sizeof(ModelConfig) == 376,
-          "i6s storage: model extends the original layout by four optional MultiSwitch addresses");
+    check(sizeof(RadioConfig) == 148 && sizeof(st::RadioStorage) == 716 && sizeof(ModelConfig) == 568,
+          "i6s storage: model appends four MultiSwitch addresses and 32 six-character captions");
     check(offsetof(RadioConfig, aux_pots) == 48 && offsetof(RadioConfig, ext_module_pwr) == 114 &&
               offsetof(RadioConfig, servo_rate_hz) == 116 && offsetof(RadioConfig, ext_switches) == 120 &&
               offsetof(RadioConfig, ext_adc) == 121 && offsetof(RadioConfig, adc_modes) == 122 &&
@@ -81,9 +81,12 @@ inline void i6s_storage_tests() {
           "i6s sanitize: arm/vario switch codes beyond SWMv are cleared");
 
     s.active_model.multiswitch_addresses = {-2, -1, 255, 256};
+    s.active_model.multiswitch_labels[3][7] = {'a', 0xFF, 'Z', '9', '-', '_'};
     st::sanitize(s);
     check(s.active_model.multiswitch_addresses == std::array<int16_t, 4>{-1, -1, 255, -1},
           "i6s sanitize: invalid MultiSwitch addresses become Off");
+    check(s.active_model.multiswitch_labels[3][7] == st::MultiSwitchLabel{' ', ' ', 'Z', '9', '-', '_'},
+          "i6s sanitize: captions retain supported characters and replace invalid bytes with spaces");
     using Dev = test_eeprom::FakeEeprom;
     auto old = st::to_bytes(st::default_model_config(17));
     old[366] = 255;
@@ -94,15 +97,28 @@ inline void i6s_storage_tests() {
     ModelConfig migrated{};
     check(st::load_slot<Dev>(legacy_slot, migrated) == st::Status::Ok &&
               migrated.multiswitch_addresses == std::array<int16_t, 4>{255, -1, -1, -1} &&
+              migrated.multiswitch_labels == st::MultiSwitchLabels{} &&
               migrated.telem_slots == std::array<uint8_t, 4>{12, 13, 2, 3} &&
               test_eeprom::read_header(legacy_slot).len == sizeof(ModelConfig),
           "i6s storage: single-page models keep their address and telemetry while new pages default Off");
     migrated.multiswitch_addresses = {-1, 0, 42, 255};
+    old = st::to_bytes(migrated);
+    test_eeprom::write_slot_raw(legacy_slot, st::kSchemaVersion, 376, old);
+    check(st::peek_model_name<Dev>(17) == migrated.name,
+          "i6s storage: previous four-address model names remain discoverable before migration");
+    check(st::load_slot<Dev>(legacy_slot, migrated) == st::Status::Ok &&
+              migrated.multiswitch_addresses == std::array<int16_t, 4>{-1, 0, 42, 255} &&
+              migrated.multiswitch_labels == st::MultiSwitchLabels{} &&
+              test_eeprom::read_header(legacy_slot).len == sizeof(ModelConfig),
+          "i6s storage: previous four-address models retain all addresses and gain empty captions");
+    migrated.multiswitch_labels[0][0] = {'L', 'I', 'G', 'H', 'T', 'S'};
+    migrated.multiswitch_labels[3][7] = {'H', 'O', 'R', 'N', 0, 0};
     check(st::save_model_to_slot<Dev>(18, migrated), "i6s storage: save all optional MultiSwitch addresses");
     ModelConfig restored{};
     check(st::load_slot<Dev>(*st::model_slot_addr(18), restored) == st::Status::Ok &&
-              restored.multiswitch_addresses == migrated.multiswitch_addresses,
-          "i6s storage: addresses survive reload even when MultiSwitch is compiled out");
+              restored.multiswitch_addresses == migrated.multiswitch_addresses &&
+              restored.multiswitch_labels == migrated.multiswitch_labels,
+          "i6s storage: addresses and captions survive reload even when MultiSwitch is compiled out");
 }
 
 inline void i6s_input_tests() {
@@ -560,6 +576,10 @@ inline void i6s_multiswitch_tests() {
         check(menu.multiswitch.selected == slot, "multiswitch setup: Down selects the next address row");
         auto& address = storage.active_model.multiswitch_addresses[slot];
         address = 0;
+        check(press(mn::kKeyOk).action == mn::Action::None &&
+                  menu.screen == mn::Screen::MultiSwitchPageSetup &&
+                  menu.multiswitch_page.selected == 0 && !menu.editing,
+              "multiswitch setup: each entry opens its own address and caption settings without saving");
         press(mn::kKeyOk);
         press(mn::kKeyDown);
         check(menu.editing && address == -1 && edit_cue == wm::logic::buzzer::Cue::ValueStep,
@@ -580,15 +600,73 @@ inline void i6s_multiswitch_tests() {
         press(mn::kKeyUp | mn::kKeyDown);
         check(address == 254 && edit_cue == wm::logic::buzzer::Cue::None,
               "multiswitch setup: simultaneous Up and Down do not change the address");
-        check(press(mn::kKeyOk).action == mn::Action::SaveActiveModel && !menu.editing,
-              "multiswitch setup: confirming any address requests model persistence");
+        check(press(mn::kKeyOk).action == mn::Action::None && !menu.editing,
+              "multiswitch setup: confirming an address does not write EEPROM");
+        press(mn::kKeyDown);
+        press(mn::kKeyOk);
+        auto& label = storage.active_model.multiswitch_labels[slot][0];
+        if (slot == 0) {
+            constexpr std::string_view alphabet{" ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"};
+            for (std::size_t i = 1; i < alphabet.size(); ++i) {
+                check(press(mn::kKeyUp).action == mn::Action::None && label[0] == alphabet[i],
+                      "multiswitch setup: caption editor cycles the supported alphabet without saving");
+            }
+            press(mn::kKeyUp);
+            check(label[0] == ' ', "multiswitch setup: caption alphabet wraps to space");
+            press(mn::kKeyDown);
+            check(label[0] == '_', "multiswitch setup: reverse caption editing wraps to underscore");
+            press(mn::kKeyUp);
+            press(mn::kKeyUp | mn::kKeyDown);
+            check(label[0] == ' ', "multiswitch setup: simultaneous Up and Down do not edit a caption");
+        }
+        for (std::size_t pos = 0; pos < st::kMultiSwitchLabelLen; ++pos) {
+            for (uint8_t step = 0; step < (pos == 0 ? slot + 1 : 1); ++step) {
+                press(mn::kKeyUp);
+            }
+            check(press(mn::kKeyOk).action == mn::Action::None,
+                  "multiswitch setup: advancing or finishing the caption cursor never saves");
+        }
+        check(!menu.editing && label == st::MultiSwitchLabel{
+                  static_cast<uint8_t>('A' + slot), 'A', 'A', 'A', 'A', 'A'},
+              "multiswitch setup: all six characters are editable independently for each MS entry");
+        check(press(mn::kKeyCancel).action == mn::Action::SaveActiveModel &&
+                  menu.screen == mn::Screen::MultiSwitchSetup && menu.multiswitch.selected == slot,
+              "multiswitch setup: leaving entry settings saves address and captions together and preserves focus");
         press(mn::kKeyDown);
     }
     press(mn::kKeyOk);
-    press(mn::kKeyDown);
-    check(press(mn::kKeyCancel).action == mn::Action::SaveActiveModel && !menu.editing &&
+    check(press(mn::kKeyCancel).action == mn::Action::None &&
               menu.screen == mn::Screen::MultiSwitchSetup,
-          "multiswitch setup: ESC finishes and saves like other model fields");
+          "multiswitch setup: leaving unchanged entry settings does not write EEPROM");
+    storage.active_model.multiswitch_addresses[0] = 0;
+    const auto captions_before = storage.active_model.multiswitch_labels;
+    press(mn::kKeyOk);
+    press(mn::kKeyOk);
+    press(mn::kKeyDown);
+    check(press(mn::kKeyCancel).action == mn::Action::None && !menu.editing &&
+              menu.screen == mn::Screen::MultiSwitchPageSetup &&
+              storage.active_model.multiswitch_addresses[0] == -1 &&
+              storage.active_model.multiswitch_labels == captions_before,
+          "multiswitch setup: ESC ends address editing without saving; disabling a page keeps captions");
+    press(mn::kKeyUp);
+    check(menu.multiswitch_page.selected == 8 && menu.multiswitch_page.scroll > 0,
+          "multiswitch setup: navigation wraps and scrolls to the eighth caption even when Off");
+    press(mn::kKeyOk);
+    press(mn::kKeyDown);
+    for (unsigned i = 0; i < 5; ++i) {
+        press(mn::kKeyOk);
+    }
+    press(mn::kKeyUp);
+    setup_fb.clear();
+    mn::render(setup_fb, menu, names, storage, mn::Live{});
+    check(menu.editing && menu.name_cursor == 5 && lit_pixels(setup_fb) > 0,
+          "multiswitch setup: the final character of a scrolled caption renders with its edit cursor");
+    check(press(mn::kKeyCancel).action == mn::Action::None && !menu.editing &&
+              storage.active_model.multiswitch_labels[0][7] == st::MultiSwitchLabel{'_', ' ', ' ', ' ', ' ', 'A'},
+          "multiswitch setup: ESC finishes caption editing without saving or undoing its text");
+    check(press(mn::kKeyCancel).action == mn::Action::SaveActiveModel &&
+              menu.screen == mn::Screen::MultiSwitchSetup,
+          "multiswitch setup: ESC saves all collected edits only when leaving the entry");
     check(press(mn::kKeyCancel).action == mn::Action::None && menu.screen == mn::Screen::ModelSetup &&
               menu.setup.selected == static_cast<uint8_t>(mn::SetupRow::MultiSwitch) && !menu.editing &&
               menu.setup.scroll <= menu.setup.selected &&
@@ -603,15 +681,25 @@ inline void i6s_multiswitch_tests() {
     check(st::save_storage<Dev>(storage), "multiswitch storage: save model address");
     st::RadioStorage loaded{};
     st::load_storage<Dev>(loaded);
-    check(loaded.active_model.multiswitch_addresses == storage.active_model.multiswitch_addresses,
-          "multiswitch storage: four addresses and Off survive reload");
+    check(loaded.active_model.multiswitch_addresses == storage.active_model.multiswitch_addresses &&
+              loaded.active_model.multiswitch_labels == storage.active_model.multiswitch_labels,
+          "multiswitch storage: all addresses and edited captions survive reload");
     check(wm::logic::model_copy::copy_model<Dev>(
               storage, wm::logic::model_copy::active_slot(storage), wm::logic::model_copy::DstSlot{1}),
           "multiswitch storage: copy model with address");
     st::ModelConfig copy{};
     check(st::load_slot<Dev>(*st::model_slot_addr(1), copy) == st::Status::Ok &&
-              copy.multiswitch_addresses == storage.active_model.multiswitch_addresses,
-          "multiswitch storage: copied model keeps all page addresses");
+              copy.multiswitch_addresses == storage.active_model.multiswitch_addresses &&
+              copy.multiswitch_labels == storage.active_model.multiswitch_labels,
+          "multiswitch storage: copied model keeps all page addresses and captions");
+    auto reset_storage = storage;
+    mn::State reset_menu{};
+    reset_menu.screen = mn::Screen::ModelSetup;
+    reset_menu.setup.selected = static_cast<uint8_t>(mn::SetupRow::Reset);
+    check(mn::update(reset_menu, mn::Input{mn::kKeyOk, mn::kKeyOk, now++}, reset_storage).action ==
+                  mn::Action::ResetActiveModel &&
+              reset_storage.active_model.multiswitch_labels == st::MultiSwitchLabels{},
+          "multiswitch setup: model reset clears configured captions");
     auto old = st::to_bytes(st::default_model_config(2));
     const auto address = *st::model_slot_addr(2);
     test_eeprom::write_slot_raw(address, st::kSchemaVersion, 364, old);
@@ -628,6 +716,25 @@ inline void i6s_multiswitch_tests() {
     view.multiswitch_states[1] = 1;
     wm::logic::dashboard::draw_multiswitch_page(on, view, 1, 5);
     check(off.data() != on.data(), "multiswitch dashboard: ON is visibly distinct from OFF");
+    auto expected = off;
+    constexpr std::array<std::string_view, 8> captions{"BAAAAA", "2", "3", "4", "5", "6", "7", "8"};
+    for (uint8_t i = 0; i < ms::kSwitchCount; ++i) {
+        const auto r = ms::switch_rect(i);
+        expected.fill_rect(r, false);
+        expected.draw_rect(r, true);
+        expected.draw_str_4x6({r.pos.x + (30 - static_cast<int>(captions[i].size()) * 4) / 2, r.pos.y + 5},
+                              captions[i], false);
+    }
+    check(off.data() == expected.data(),
+          "multiswitch dashboard: buttons contain only centered configured captions or fallback digits, no ON/OFF");
+    const auto first_button = ms::switch_rect(0);
+    expected.fill_rect(first_button, true);
+    expected.draw_str_4x6({first_button.pos.x + 3, first_button.pos.y + 5}, "BAAAAA", true);
+    check(on.data() == expected.data(),
+          "multiswitch dashboard: an active button inverts the same centered six-character caption");
+    check(ms::label_text(st::MultiSwitchLabel{' ', ' ', 0, ' ', 0, ' '}, 7).view() == "8" &&
+              ms::label_text(st::MultiSwitchLabel{' ', 'A', 0, 'B', ' ', ' '}, 0).view() == "A B",
+          "multiswitch captions: blank text falls back to its number, surrounding blanks are trimmed");
     view.crsf = false;
     off.clear();
     on.clear();
