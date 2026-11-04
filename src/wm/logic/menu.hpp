@@ -28,6 +28,9 @@
 #include "wm/logic/sysinfo.hpp"
 #include "wm/logic/telemetry.hpp"
 #include "wm/logic/widgets.hpp"
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+#include "wm/logic/multiswitch.hpp"
+#endif
 
 namespace wm::logic::menu {
 
@@ -101,6 +104,7 @@ enum class Screen : uint8_t {
     CrsfSetup,
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
     MultiSwitchSetup,
+    MultiSwitchPageSetup,
 #endif
 };
 
@@ -297,6 +301,8 @@ struct State {
     ListPos telem{};
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
     ListPos multiswitch{};
+    ListPos multiswitch_page{};
+    bool multiswitch_dirty{false};
 #endif
     ListPos protocol{};
     crsf::config::State crsf{};
@@ -915,16 +921,6 @@ constexpr void step_clamped_tone(State& s, T& v, const Range range, const int st
 
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
 constexpr Event update_multiswitch(State& s, const Nav& n, storage::ModelConfig& m) {
-    if (s.editing) {
-        if (n.up != n.down) {
-            step_clamped_tone(s, m.multiswitch_addresses[s.multiswitch.selected], Range{-1, 255}, 1, n);
-        }
-        if (n.ok || n.cancel) {
-            s.editing = false;
-            return {Action::SaveActiveModel, 0};
-        }
-        return {};
-    }
     if (n.cancel) {
         s.screen = Screen::ModelSetup;
         s.cue = buzzer::Cue::Click;
@@ -937,7 +933,72 @@ constexpr Event update_multiswitch(State& s, const Nav& n, storage::ModelConfig&
                                down ? Dir::Down : Dir::Up);
     }
     if (n.ok) {
-        s.editing = true;
+        s.screen = Screen::MultiSwitchPageSetup;
+        s.multiswitch_page = {};
+        s.multiswitch_dirty = false;
+        s.editing = false;
+    }
+    return {};
+}
+
+constexpr Event update_multiswitch_page(State& s, const Nav& n, storage::ModelConfig& m) {
+    const auto slot = s.multiswitch.selected;
+    const auto row = s.multiswitch_page.selected;
+    if (!s.editing) {
+        if (n.cancel) {
+            s.screen = Screen::MultiSwitchSetup;
+            s.cue = buzzer::Cue::Click;
+            return s.multiswitch_dirty ? Event{Action::SaveActiveModel, 0} : Event{};
+        }
+        if (const bool down = n.down || n.bind; n.up != down) {
+            s.nav_tick = step_list(s.multiswitch_page, 1 + m.multiswitch_labels[slot].size(), Rows{kListVisible},
+                                   down ? Dir::Down : Dir::Up);
+        }
+        if (n.ok) {
+            s.editing = true;
+            s.name_cursor = 0;
+            if (s.multiswitch_page.selected > 0) {
+                for (auto& c : m.multiswitch_labels[slot][s.multiswitch_page.selected - 1]) {
+                    if (c == 0) {
+                        c = ' ';
+                    }
+                }
+            }
+        }
+        return {};
+    }
+    if (n.cancel) {
+        s.editing = false;
+        s.name_cursor = 0;
+        return {};
+    }
+    if (row == 0) {
+        auto& address = m.multiswitch_addresses[slot];
+        const auto previous = address;
+        if (n.up != n.down) {
+            step_clamped_tone(s, address, Range{-1, 255}, 1, n);
+        }
+        s.multiswitch_dirty = s.multiswitch_dirty || address != previous;
+        if (n.ok) {
+            s.editing = false;
+        }
+        return {};
+    }
+    if (n.bind) {
+        s.name_cursor = static_cast<uint8_t>((s.name_cursor + 1) % storage::kMultiSwitchLabelLen);
+        s.cue = buzzer::Cue::Click;
+    } else if (n.ok) {
+        if (s.name_cursor + 1u < storage::kMultiSwitchLabelLen) {
+            ++s.name_cursor;
+        } else {
+            s.editing = false;
+            s.name_cursor = 0;
+        }
+    } else if (n.up != n.down) {
+        auto& c = m.multiswitch_labels[slot][row - 1][s.name_cursor];
+        c = static_cast<uint8_t>(n.up ? next_ascii(static_cast<char>(c)) : prev_ascii(static_cast<char>(c)));
+        s.multiswitch_dirty = true;
+        s.cue = buzzer::Cue::ValueStep;
     }
     return {};
 }
@@ -1682,6 +1743,7 @@ constexpr Event update_screen(State& s, const Nav& n, const Input& in, storage::
         case Screen::TelemSetup: return update_telem(s, n, st.active_model);
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
         case Screen::MultiSwitchSetup: return update_multiswitch(s, n, st.active_model);
+        case Screen::MultiSwitchPageSetup: return update_multiswitch_page(s, n, st.active_model);
 #endif
         case Screen::ChannelReverse: return update_channel_reverse(s, n, st.active_model);
         case Screen::ChannelMonitor: return update_monitor(s, n);
@@ -1954,13 +2016,64 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
 constexpr void render_multiswitch(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
     widgets::draw_header(fb, "MULTISWITCH SETUP");
-    constexpr std::array<std::string_view, 4> labels{"MS1 Addr:", "MS2 Addr:", "MS3 Addr:", "MS4 Addr:"};
+    constexpr std::array<std::string_view, 4> labels{"MS1:", "MS2:", "MS3:", "MS4:"};
     for (std::size_t slot = 0; slot < m.multiswitch_addresses.size(); ++slot) {
         const auto address = m.multiswitch_addresses[slot];
         widgets::draw_list_row(fb, {static_cast<int>(slot)}, slot == s.multiswitch.selected, labels[slot],
                                address < 0 ? std::string_view{"Off"} : format::format_int(address).view(), {64});
     }
-    widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Value" : "[OK] Edit   [ESC] Back");
+    widgets::draw_footer(fb, "[OK] Setup  [ESC] Back");
+}
+
+constexpr void render_multiswitch_page(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
+    format::Text<16> title;
+    for (const char c : std::string_view{"MULTISWITCH "}) {
+        title.push(c);
+    }
+    title.push(static_cast<char>('1' + s.multiswitch.selected));
+    widgets::draw_header(fb, title.view());
+    const auto slot = s.multiswitch.selected;
+    for (std::size_t line = 0; line < kListVisible; ++line) {
+        const std::size_t row = s.multiswitch_page.scroll + line;
+        if (row > m.multiswitch_labels[slot].size()) {
+            break;
+        }
+        const bool selected = row == s.multiswitch_page.selected;
+        if (row == 0) {
+            const auto address = m.multiswitch_addresses[slot];
+            widgets::draw_list_row(fb, {static_cast<int>(line)}, selected, "Address:",
+                                   address < 0 ? std::string_view{"Off"} : format::format_int(address).view(), {64});
+            continue;
+        }
+        format::Text<10> caption;
+        for (const char c : std::string_view{"Switch "}) {
+            caption.push(c);
+        }
+        caption.push(static_cast<char>('0' + row));
+        caption.push(':');
+        const auto& label = m.multiswitch_labels[slot][row - 1];
+        auto text = multiswitch::label_text(label, static_cast<uint8_t>(row - 1));
+        const bool editing = selected && s.editing;
+        if (editing) {
+            text = {};
+            for (const auto c : label) {
+                text.push(c == 0 ? ' ' : static_cast<char>(c));
+            }
+        }
+        widgets::draw_list_row(fb, {static_cast<int>(line)}, selected && !editing, caption.view(), text.view(), {64});
+        if (editing) {
+            const int x = 64 + s.name_cursor * 6;
+            const int y = 14 + static_cast<int>(line) * 9;
+            const std::array<char, 1> c{static_cast<char>(label[s.name_cursor])};
+            fb.fill_rect({{x - 1, y}, {8, 9}}, true);
+            fb.draw_str_6x10({x, y}, std::string_view(c.data(), 1), true);
+        }
+    }
+    widgets::draw_scrollbar(fb, {s.multiswitch_page.selected},
+                            {static_cast<int>(1 + m.multiswitch_labels[slot].size())}, {14, 36});
+    widgets::draw_footer(fb, !s.editing ? "[OK] Edit   [ESC] Back"
+                             : s.multiswitch_page.selected == 0 ? "[OK] Done   [UP/DN] Value"
+                                                               : "[OK] Next Char [ESC] Done");
 }
 #endif
 
@@ -2760,6 +2873,7 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::TelemSetup: render_telem(fb, s, st.active_model); break;
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
         case Screen::MultiSwitchSetup: render_multiswitch(fb, s, st.active_model); break;
+        case Screen::MultiSwitchPageSetup: render_multiswitch_page(fb, s, st.active_model); break;
 #endif
         case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;
         case Screen::ChannelMonitor: render_monitor(fb, s, live, st.active_model); break;

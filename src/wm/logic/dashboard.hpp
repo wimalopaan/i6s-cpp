@@ -801,8 +801,9 @@ constexpr void draw_multiswitch_page(Framebuffer& fb, const View& v, const uint8
             const bool on = (v.multiswitch_states[slot] & (1u << i)) != 0;
             fb.fill_rect(r, on);
             fb.draw_rect(r, true);
-            fb.draw_char_4x6({r.pos.x + 3, r.pos.y + 5}, static_cast<char>('1' + i), on);
-            fb.draw_str_4x6({r.pos.x + 12, r.pos.y + 5}, on ? "ON" : "OFF", on);
+            const auto label = multiswitch::label_text(v.storage.active_model.multiswitch_labels[slot][i], i);
+            const int text_x = r.pos.x + (r.size.w - static_cast<int>(label.view().size()) * 4) / 2;
+            fb.draw_str_4x6({text_x, r.pos.y + 5}, label.view(), on);
         }
     }
     format::Text<24> footer;

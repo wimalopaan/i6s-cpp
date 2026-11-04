@@ -6,7 +6,9 @@
 #include <span>
 
 #include "wm/logic/crsf.hpp"
+#include "wm/logic/format.hpp"
 #include "wm/logic/framebuffer.hpp"
+#include "wm/logic/storage.hpp"
 
 namespace wm::logic::multiswitch {
 
@@ -14,6 +16,22 @@ inline constexpr uint32_t kRepeatMs = 100;
 inline constexpr uint8_t kSwitchCount = 8;
 inline constexpr uint8_t kMaxPages = 4;
 using Addresses = std::array<int16_t, kMaxPages>;
+
+constexpr format::Text<storage::kMultiSwitchLabelLen> label_text(const storage::MultiSwitchLabel& label,
+                                                               const uint8_t index) {
+    format::Text<storage::kMultiSwitchLabelLen> raw;
+    for (const auto c : label) {
+        raw.push(c == 0 ? ' ' : static_cast<char>(c));
+    }
+    format::Text<storage::kMultiSwitchLabelLen> text;
+    for (const char c : format::trim_spaces(raw.view())) {
+        text.push(c);
+    }
+    if (text.empty()) {
+        text.push(static_cast<char>('1' + index));
+    }
+    return text;
+}
 
 constexpr uint8_t enabled_count(const Addresses& addresses) {
     uint8_t count = 0;

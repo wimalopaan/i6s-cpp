@@ -36,12 +36,12 @@ inline constexpr std::size_t kModelSlotSize = 768;
 
 // Legacy payload sizes that are migrated on load (ModelConfig v1..v4).
 inline constexpr std::size_t kLegacyModelV1Size = 128;
-inline constexpr std::size_t kMaxLegacyModelSize = board::kIsI6S ? 368 : 364;
+inline constexpr std::size_t kMaxLegacyModelSize = board::kIsI6S ? 376 : 364;
 
 /// Older ModelConfig payload lengths that are upgraded by copying them over the defaults.
 constexpr bool is_legacy_prefix_len(const std::size_t len) {
     if constexpr (board::kIsI6S) {
-        return len == 348 || len == 364 || len == kMaxLegacyModelSize;
+        return len == 348 || len == 364 || len == 368 || len == kMaxLegacyModelSize;
     } else {
         return len == 348 || len == 352 || len == 360 || len == kMaxLegacyModelSize;
     }
@@ -163,6 +163,10 @@ struct MixLine {
 };
 static_assert(sizeof(MixLine) == 8);
 
+inline constexpr std::size_t kMultiSwitchLabelLen = 6;
+using MultiSwitchLabel = std::array<uint8_t, kMultiSwitchLabelLen>;
+using MultiSwitchLabels = std::array<std::array<MultiSwitchLabel, 8>, 4>;
+
 struct ModelConfig {
     std::array<uint8_t, 10> name;
     uint8_t model_type;
@@ -210,6 +214,7 @@ struct ModelConfig {
     std::array<uint8_t, 2> pad_gvar;
     // Kept with MultiSwitch disabled as well, so switching firmware options preserves model settings.
     std::array<int16_t, 4> multiswitch_addresses;  // -1 = Off, 0..255 = module address
+    MultiSwitchLabels multiswitch_labels;
 #else
     uint8_t crsf_arm_mode;
     uint8_t pad_end;
@@ -223,7 +228,8 @@ struct ModelConfig {
     std::array<uint8_t, 4> telem_slots;
 #endif
 };
-static_assert(sizeof(ModelConfig) == (board::kIsI6S ? 376 : 368));
+static_assert(sizeof(ModelConfig) == (board::kIsI6S ? 568 : 368));
+static_assert(kHeaderSize + sizeof(ModelConfig) <= kModelSlotSize);
 static_assert(offsetof(ModelConfig, rx_id) == 12);
 static_assert(offsetof(ModelConfig, timer_secs) == 58);
 static_assert(offsetof(ModelConfig, mixes) == 80);
@@ -233,6 +239,7 @@ static_assert(offsetof(ModelConfig, crsf_arm_mode) == 351);
 static_assert(offsetof(ModelConfig, gvars) == 352);
 static_assert(offsetof(ModelConfig, telem_slots) == 362);
 static_assert(offsetof(ModelConfig, multiswitch_addresses) == 368);
+static_assert(offsetof(ModelConfig, multiswitch_labels) == 376);
 #else
 static_assert(offsetof(ModelConfig, gvars) == 348);
 static_assert(offsetof(ModelConfig, telem_slots) == 364);
@@ -288,7 +295,7 @@ struct RadioStorage {
     RadioConfig radio;
     ModelConfig active_model;
 };
-static_assert(sizeof(RadioStorage) == (board::kIsI6S ? 524 : 508));
+static_assert(sizeof(RadioStorage) == (board::kIsI6S ? 716 : 508));
 
 struct SlotHeader {
     uint16_t magic;
@@ -472,6 +479,7 @@ constexpr ModelConfig default_model_config(const std::size_t index) {
         .telem_slots = {0, 1, 2, 3},
         .pad_gvar = {},
         .multiswitch_addresses = {0, -1, -1, -1},
+        .multiswitch_labels = {},
 #else
         .crsf_arm_mode = 0,
         .pad_end = 0,
@@ -557,6 +565,16 @@ constexpr void sanitize_model(ModelConfig& m, const uint8_t active_model) {
     for (auto& address : m.multiswitch_addresses) {
         if (address < -1 || address > 255) {
             address = -1;
+        }
+    }
+    for (auto& page : m.multiswitch_labels) {
+        for (auto& label : page) {
+            for (auto& c : label) {
+                if (c != 0 && c != ' ' && c != '-' && c != '_' &&
+                    !(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9')) {
+                    c = ' ';
+                }
+            }
         }
     }
 #endif
