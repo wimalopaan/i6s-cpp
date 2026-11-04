@@ -41,19 +41,33 @@ constexpr bool is_armed(const uint8_t arm_switch, const Switches& sw) {
     return arm_switch == 0 || arm_switch > board::kMaxSwitchCond || mixer::eval_arm_switch(arm_switch, sw);
 }
 
-/// Mixer output for one model: 18 channels in µs, ready for the RF output.
-/// Trims are passed in by the caller; the trim key state machine lives in logic/trim.hpp.
+constexpr mixer::StickInputs stick_inputs(const input::InputState& in, const safety::StickMode sm,
+                                          const storage::ModelConfig& model) {
+    const FlightControls c = flight_controls(in.gimbals, sm);
+    const auto thr_in = static_cast<uint16_t>(std::clamp<int32_t>((c.throttle + kMixerMax) / 2, 0, kMixerMax));
+    const uint16_t thr = mixer::is_tank(model) ? thr_in :
+        curve::evaluate(thr_in, model.thr_curve_pts, model.thr_curve_smooth != 0, model.thr_curve);
+    return {c.aileron, c.elevator, thr, c.rudder};
+}
+
+constexpr safety::Preflight tank_preflight(const input::InputState& in, const safety::StickMode sm,
+                                           const storage::ModelConfig& model) {
+    const auto pots = std::span<const int16_t>(in.aux_pots).subspan<4, input::kAuxCount - 4>();
+    const auto prepared = mixer::prepare_channels(stick_inputs(in, sm, model), pots, in.switches, model);
+    return mixer::evaluate_tank_sources(prepared, pots, in.switches, model).centered()
+        ? safety::Preflight::Ok : safety::Preflight::TankNotCentered;
+}
+
+/// Mixer output for one model: 18 channels in us, ready for the RF output.
 constexpr std::array<uint16_t, kNumChannels> rf_channels(const input::InputState& in,
                                                          const safety::StickMode sm,
                                                          const storage::ModelConfig& model,
                                                          const trim::TrimValues& trims,
-                                                         const uint8_t throttle_trim_mode) {
-    const FlightControls c = flight_controls(in.gimbals, sm);
-    const auto thr_in = static_cast<uint16_t>(std::clamp<int32_t>((c.throttle + kMixerMax) / 2, 0, kMixerMax));
-    const uint16_t thr = curve::evaluate(thr_in, model.thr_curve_pts, model.thr_curve_smooth != 0, model.thr_curve);
-    return mixer::compute_channels({c.aileron, c.elevator, thr, c.rudder},
+                                                         const uint8_t throttle_trim_mode,
+                                                         mixer::TankState& tank_state) {
+    return mixer::compute_channels(stick_inputs(in, sm, model),
                                    std::span<const int16_t>(in.aux_pots).subspan<4, input::kAuxCount - 4>(), in.switches, model,
-                                   trims, throttle_trim_mode);
+                                   trims, throttle_trim_mode, tank_state);
 }
 
 }  // namespace wm::logic::flight

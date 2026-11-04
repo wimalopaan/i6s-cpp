@@ -15,19 +15,65 @@ namespace wm::logic::mixer {
 
 enum class ModelType : uint8_t { Airplane = 0, Glider = 1, Heli = 2, Quad = 3, General = 4 };
 
-enum class WingTail : uint8_t { Normal = 0, Elevon = 1, VTail = 2, Flaperon = 3 };
+enum class WingTail : uint8_t { Normal = 0, Elevon = 1, VTail = 2, Flaperon = 3, Tank = 4 };
 
 constexpr WingTail wing_tail_from(const uint8_t val) {
     switch (val) {
         case 1: return WingTail::Elevon;
         case 2: return WingTail::VTail;
         case 3: return WingTail::Flaperon;
+        case 4: return WingTail::Tank;
         default: return WingTail::Normal;
     }
 }
 
 using ChannelValues = std::array<int32_t, kNumChannels>;
 using Sticks = std::array<int16_t, 4>;  // Roll, Pitch, Throttle, Yaw (conditioned)
+
+constexpr bool is_tank(const storage::ModelConfig& model) {
+    return wing_tail_from(model.wing_tail_mix) == WingTail::Tank;
+}
+
+constexpr bool is_tank_motor(const std::size_t channel, const storage::ModelConfig& model) {
+    return is_tank(model) && (channel + 1 == model.tank.left_channel || channel + 1 == model.tank.right_channel);
+}
+
+constexpr void neutralize_tank_motors(std::array<uint16_t, kNumChannels>& channels,
+                                      const storage::ModelConfig& model) {
+    for (std::size_t ch = 0; ch < channels.size(); ++ch) {
+        if (is_tank_motor(ch, model)) {
+            channels[ch] = kChannelCenterUs;
+        }
+    }
+}
+
+struct TankState {
+    static constexpr int32_t kDirectionThreshold = 20;  // 2% of the normalized source range.
+    bool reverse = false;
+
+    constexpr void update(const int32_t drive) {
+        if (drive < -kDirectionThreshold) {
+            reverse = true;
+        } else if (drive > kDirectionThreshold) {
+            reverse = false;
+        }
+    }
+};
+
+struct PreparedChannels {
+    Sticks sticks;
+    ChannelValues channels;
+};
+
+struct TankSources {
+    int32_t drive;
+    int32_t steer;
+
+    constexpr bool centered() const {
+        return drive >= -TankState::kDirectionThreshold && drive <= TankState::kDirectionThreshold &&
+               steer >= -TankState::kDirectionThreshold && steer <= TankState::kDirectionThreshold;
+    }
+};
 
 struct StickInputs {
     int16_t roll = 0;
@@ -142,6 +188,14 @@ constexpr bool eval_arm_switch(const uint8_t arm_switch, const Switches& s) {
     return arm_switch > 0 && arm_switch <= board::kMaxSwitchCond && is_switch_active(arm_switch, s);
 }
 
+constexpr void apply_tank_arming(std::array<uint16_t, kNumChannels>& channels,
+                                 const storage::ModelConfig& model, const Switches& sw) {
+    if (is_tank(model) && model.arm_switch > 0 && model.arm_switch <= board::kMaxSwitchCond &&
+        !eval_arm_switch(model.arm_switch, sw)) {
+        neutralize_tank_motors(channels, model);
+    }
+}
+
 /// True for high rates, false for low rates.
 constexpr bool is_dr_high(const uint8_t dr_switch, const Switches& s) {
     switch (dr_switch) {
@@ -227,11 +281,9 @@ constexpr int32_t evaluate_source(const uint8_t src, const Sticks& sticks, std::
     }
 }
 
-/// Full mixer pipeline: conditioning, wing/tail templates, aux mapping, matrix mixes,
-/// output scaling, trims, safety interlocks and channel reversing.
-constexpr std::array<uint16_t, kNumChannels> compute_channels(
+constexpr PreparedChannels prepare_channels(
     const StickInputs inputs, std::span<const int16_t> pots, const Switches& sw,
-    const storage::ModelConfig& model, const trim::TrimValues& trims, const uint8_t throttle_trim_mode) {
+    const storage::ModelConfig& model) {
     const auto [raw_roll, raw_pitch, curved_throttle, raw_yaw] = inputs;
     // Stage 1 and 2: dual rates and expo.
     const bool high_rate = is_dr_high(model.dr_switch, sw);
@@ -254,6 +306,7 @@ constexpr std::array<uint16_t, kNumChannels> compute_channels(
     const int32_t y = cond_yaw;
     switch (tmpl) {
         case WingTail::Normal:
+        case WingTail::Tank:
             ch[0] = r;
             ch[1] = p;
             ch[2] = cond_thr;
@@ -296,6 +349,34 @@ constexpr std::array<uint16_t, kNumChannels> compute_channels(
         ch[ch_idx] = evaluate_source(model.aux_channels[i], sticks, pots, sw, ch, model.gvars);
     }
 
+    return {sticks, ch};
+}
+
+constexpr TankSources evaluate_tank_sources(const PreparedChannels& prepared, std::span<const int16_t> pots,
+                                             const Switches& sw, const storage::ModelConfig& model) {
+    return {evaluate_source(model.tank.drive_source, prepared.sticks, pots, sw, prepared.channels, model.gvars),
+            evaluate_source(model.tank.steer_source, prepared.sticks, pots, sw, prepared.channels, model.gvars)};
+}
+
+/// Full mixer pipeline: conditioning, templates, aux mapping, matrix mixes, scaling, trims and safety.
+constexpr std::array<uint16_t, kNumChannels> compute_channels(
+    const StickInputs inputs, std::span<const int16_t> pots, const Switches& sw,
+    const storage::ModelConfig& model, const trim::TrimValues& trims, const uint8_t throttle_trim_mode,
+    TankState& tank_state) {
+    auto prepared = prepare_channels(inputs, pots, sw, model);
+    auto& ch = prepared.channels;
+    const auto& sticks = prepared.sticks;
+    if (is_tank(model)) {
+        // Evaluate both sources before overwriting either output, including channel-valued sources.
+        const auto sources = evaluate_tank_sources(prepared, pots, sw, model);
+        tank_state.update(sources.drive);
+        const int32_t steer = sources.steer * model.tank.steer_weight * (tank_state.reverse ? -1 : 1) / 100;
+        ch[model.tank.left_channel - 1] = clamp_mix(sources.drive + steer);
+        ch[model.tank.right_channel - 1] = clamp_mix(sources.drive - steer);
+    } else {
+        tank_state = {};
+    }
+
     // Stage 3b: freeform matrix mixer lines, executed in order.
     for (const auto& mix : model.mixes) {
         if (mix.target_ch == 0 || mix.target_ch > kNumChannels) {
@@ -336,18 +417,22 @@ constexpr std::array<uint16_t, kNumChannels> compute_channels(
         rf[i] = static_cast<uint16_t>(std::clamp<int32_t>(us, kChannelMinUs, kChannelMaxUs));
     }
 
-    rf[0] = trim::apply(rf[0], trims.roll);
-    rf[1] = trim::apply(rf[1], trims.pitch);
-    rf[2] = trim::apply_throttle(rf[2], trims.throttle, throttle_trim_mode);
-    rf[3] = trim::apply(rf[3], trims.yaw);
+    if (!is_tank_motor(0, model)) rf[0] = trim::apply(rf[0], trims.roll);
+    if (!is_tank_motor(1, model)) rf[1] = trim::apply(rf[1], trims.pitch);
+    if (!is_tank_motor(2, model)) rf[2] = trim::apply_throttle(rf[2], trims.throttle, throttle_trim_mode);
+    if (!is_tank_motor(3, model)) rf[3] = trim::apply(rf[3], trims.yaw);
 
     // Safety: heli throttle hold (SA Down) and disarmed models pin the throttle to idle.
-    const bool is_heli_hold = static_cast<ModelType>(model.model_type) == ModelType::Heli &&
+    const bool is_heli_hold = !is_tank(model) && static_cast<ModelType>(model.model_type) == ModelType::Heli &&
                               sw.sa == SwitchPos::Down;
     const bool is_disarmed = model.arm_switch > 0 && model.arm_switch <= board::kMaxSwitchCond &&
                              !eval_arm_switch(model.arm_switch, sw);
     if (is_heli_hold || is_disarmed) {
-        rf[2] = kChannelMinUs;
+        if (is_tank(model)) {
+            neutralize_tank_motors(rf, model);
+        } else {
+            rf[2] = kChannelMinUs;
+        }
     }
 
     for (std::size_t ch_idx = 0; ch_idx < kNumChannels; ++ch_idx) {

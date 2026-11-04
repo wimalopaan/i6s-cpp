@@ -244,6 +244,9 @@ void apply_rf_model() {
     if (!g_rf_ok) {
         return;
     }
+    if (wm::logic::mixer::is_tank(g_storage.active_model)) {
+        wm::hw::rf::publish_channels(wm::logic::safety::safe_idle_channels(g_storage.active_model));
+    }
     wm::hw::rf::set_rx_id(wm::logic::afhds2a::RxId{g_storage.active_model.rx_id});
     apply_rf_link();
 }
@@ -311,7 +314,9 @@ void run_preflight(const wm::logic::storage::ModelConfig& model) {
         cals[i] = safety::ChannelCalibration::from(g_storage.radio.sticks[i]);
     }
     const auto sm = safety::stick_mode_from(g_storage.radio.stick_mode);
-    const auto mt = static_cast<mixer::ModelType>(model.model_type);
+    const auto mt = mixer::is_tank(model) ? mixer::ModelType::General :
+        static_cast<mixer::ModelType>(model.model_type);
+    const auto safe_channels = safety::safe_idle_channels(model);
     buzzer::PreflightTimer preflight{};
     buzzer::PreflightWarning warning{};
     uint32_t buzz_ms = time::millis();
@@ -326,7 +331,8 @@ void run_preflight(const wm::logic::storage::ModelConfig& model) {
         const auto in = sample_inputs();
         const std::array<uint16_t, 4> raw{in.raw[0], in.raw[1], in.raw[2], in.raw[3]};
         const bool hold = in.switches.sa == SwitchPos::Down;
-        const auto thr = safety::check_preflight_throttle(raw, cals, sm, mt, hold);
+        const auto thr = mixer::is_tank(model) ? flight::tank_preflight(in, sm, model) :
+            safety::check_preflight_throttle(raw, cals, sm, mt, hold);
         const auto sw = preflight::unsafe_switches(in.switches, mt);
         g_keys = hw::keys::scan_keys();
         if ((thr == safety::Preflight::Ok && !sw.any()) || (g_keys & safety::kKeyCancel) != 0) {
@@ -337,14 +343,14 @@ void run_preflight(const wm::logic::storage::ModelConfig& model) {
 
         const uint32_t now = time::millis();
 #if WM_USE_USB
-        hw::usb::poll(logic::usb::Millis{now}, safety::kSafeIdleChannels, in.switches, in.battery_mv);
+        hw::usb::poll(logic::usb::Millis{now}, safe_channels, in.switches, in.battery_mv);
 #endif
         if (crsf) {
-            hw::crsf::update_channels(now, safety::kSafeIdleChannels,
+            hw::crsf::update_channels(now, safe_channels,
                                       wm::logic::crsf::ArmModeSwitch{model.crsf_arm_mode != 0},
                                       wm::logic::crsf::ArmedState{false});
         } else if (afhds) {
-            hw::rf::publish_channels(safety::kSafeIdleChannels);
+            hw::rf::publish_channels(safe_channels);
         }
         hw::crsf::poll_telemetry(now);
         if (!rendered || now - last_render_ms >= preflight::kRenderIntervalMs) {
@@ -473,6 +479,7 @@ int main() {
     uint32_t last_draw_ms = 0;
     uint16_t prev_keys = calib_on_boot ? boot_keys : 0;  // the held OK must not step the wizard
     logic::menu::State menu_state{};
+    logic::mixer::TankState tank_state{};
 #if WM_PCB_I6S
     logic::board_idle::State board_idle{};
     logic::touch_nav::SwipeTracker swipe{};
@@ -653,9 +660,10 @@ int main() {
                 case logic::menu::Action::EnterModelSelect: refresh_model_names(); break;
                 case logic::menu::Action::SwitchModel:
                     switch_model(ev.index);
+                    tank_state = {};
                     refresh_model_names();
-                    apply_protocol_link();
                     apply_rf_model();
+                    apply_protocol_link();
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
                     multiswitch = {};
 #endif
@@ -668,6 +676,7 @@ int main() {
                     apply_protocol_link();
                     break;
                 case logic::menu::Action::ResetActiveModel:
+                    tank_state = {};
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
                     multiswitch = {};
 #endif
@@ -807,13 +816,15 @@ int main() {
         play_buzzer_cue(timer_cue);
 
         auto channels =
-            logic::flight::rf_channels(input, stick_mode, model, g_trims.values, g_storage.radio.throttle_trim);
+            logic::flight::rf_channels(input, stick_mode, model, g_trims.values,
+                                       g_storage.radio.throttle_trim, tank_state);
         const bool trainer_in = (g_storage.radio.trainer_config & logic::menu::kTrainerPpmIn) != 0;
         const bool trainer_out = (g_storage.radio.trainer_config & logic::menu::kTrainerPpmOut) != 0;
         hw::trainer::tick(logic::trainer::DeltaMs{dt_ms});
         if (trainer_in) {
             channels = g_handover.process(input.switches.sd == logic::SwitchPos::Down,
                                           hw::trainer::student_channels(), channels);
+            logic::mixer::apply_tank_arming(channels, model, input.switches);
         }
         if (trainer_out && !sim) {
             hw::trainer::publish_out(channels);

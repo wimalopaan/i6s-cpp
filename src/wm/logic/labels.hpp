@@ -67,7 +67,7 @@ inline constexpr std::array<std::string_view, 7> kDrSwitchNames{"None", "SA", "S
 
 inline constexpr std::array<std::string_view, 3> kAxisNames{"Roll", "Pitch", "Yaw"};
 
-inline constexpr std::array<std::string_view, 4> kTemplateNames{"NORMAL", "ELEVON/DELTA", "V-TAIL", "FLAPERON"};
+inline constexpr std::array<std::string_view, 5> kTemplateNames{"NORMAL", "ELEVON/DELTA", "V-TAIL", "FLAPERON", "TANK"};
 
 inline constexpr std::array<std::string_view, 3> kMixModeNames{"ADD (+)", "MULT (*)", "REPL (:=)"};
 
@@ -93,6 +93,9 @@ inline constexpr std::array<std::string_view, board::kSourceCount> kSourceNames{
 
 // Channel function name. Wing/tail mix replaces the stick names on channels 1, 2, 4 and 6.
 constexpr std::string_view channel_source_name(const std::size_t ch, const storage::ModelConfig& m) {
+    if (mixer::is_tank_motor(ch, m)) {
+        return ch + 1 == m.tank.left_channel ? "L.MOT" : "R.MOT";
+    }
     const uint8_t mix = m.wing_tail_mix;
     if (ch == 5 && mix == 3) {
         return "R.AIL";

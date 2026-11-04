@@ -27,8 +27,8 @@ inline void i6s_storage_tests() {
     using st::ModelConfig;
     using st::RadioConfig;
 
-    check(sizeof(RadioConfig) == 148 && sizeof(st::RadioStorage) == 720 && sizeof(ModelConfig) == 572,
-          "i6s storage: model appends MultiSwitch addresses, captions and four mode masks");
+    check(sizeof(RadioConfig) == 148 && sizeof(st::RadioStorage) == 728 && sizeof(ModelConfig) == 580,
+          "i6s storage: model appends MultiSwitch settings and the Tank mixer configuration");
     check(offsetof(RadioConfig, aux_pots) == 48 && offsetof(RadioConfig, ext_module_pwr) == 114 &&
               offsetof(RadioConfig, servo_rate_hz) == 116 && offsetof(RadioConfig, ext_switches) == 120 &&
               offsetof(RadioConfig, ext_adc) == 121 && offsetof(RadioConfig, adc_modes) == 122 &&
@@ -212,7 +212,8 @@ inline void i6s_mixer_tests() {
         auto model = wm::logic::storage::default_model_config(0);
         model.aux_channels[0] = 41;  // CH5 <- VRG
         in.aux_pots[10] = 1000;
-        const auto ch = fl::rf_channels(in, wm::logic::safety::StickMode::Mode2, model, {}, 0);
+        mx::TankState tank{};
+        const auto ch = fl::rf_channels(in, wm::logic::safety::StickMode::Mode2, model, {}, 0, tank);
         check(ch[4] > 1900, "i6s flight: VRG (source 41) reaches the RF channel");
     }
     check(mx::eval_arm_switch(28, sw) && !mx::eval_arm_switch(27, sw) && !mx::eval_arm_switch(29, sw),
