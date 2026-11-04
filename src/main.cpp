@@ -910,7 +910,8 @@ int main() {
         prev_switches = input.switches;
 #endif
         const std::size_t pot_count = g_storage.radio.ext_adc != 0 ? board::kAuxCount - 4 : 2;
-        if (pot_centre.step(std::span<const int16_t>(input.aux_pots).subspan(4, pot_count))) {
+        if (pot_centre.step(std::span<const int16_t>(input.aux_pots).subspan(4, pot_count),
+                            std::span<const uint8_t>(g_storage.radio.adc_modes).subspan(4, pot_count))) {
             play_buzzer_cue(logic::buzzer::Cue::PotCenter);
         }
         if (inactivity.step(user_active, logic::buzzer::Millis{dt_ms})) {

@@ -4755,10 +4755,22 @@ void wiring_cues_test() {
     wm::logic::buzzer_inputs::PotCenterTracker<6> pots{};
     const std::array<int16_t, 2> far{{100, -100}};
     const std::array<int16_t, 2> near{{0, 10}};
-    check(!pots.step(far), "wiring: pots starting away from centre do not click");
-    check(pots.step(near), "wiring: pots leaving the deadband click");
-    check(!pots.step(near), "wiring: no repeat click while inside the deadband");
-    check(!pots.step(std::array<int16_t, 2>{{30, 10}}), "wiring: moving out of the deadband does not click");
+    std::array<uint8_t, 2> modes{};
+    check(!pots.step(far, modes), "wiring: pots starting away from centre do not click");
+    check(pots.step(near, modes), "wiring: default pots entering the centre band click");
+    check(!pots.step(near, modes), "wiring: no repeat click while inside the centre band");
+    check(!pots.step(std::array<int16_t, 2>{{30, 10}}, modes), "wiring: moving out of the centre band does not click");
+    modes = {adc_mode(logic::input::AdcMode::PotDetent), adc_mode(logic::input::AdcMode::Pot)};
+    pots.step(far, modes);
+    check(!pots.step(std::array<int16_t, 2>{{0, -100}}, modes), "wiring: Pot-D centre crossing is silent");
+    modes[0] = adc_mode(logic::input::AdcMode::Pot);
+    check(!pots.step(std::array<int16_t, 2>{{0, -100}}, modes),
+          "wiring: changing Pot-D to Pot at centre does not fabricate a crossing");
+    modes[0] = adc_mode(logic::input::AdcMode::PotDetent);
+    check(pots.step(near, modes), "wiring: normal Pot still clicks when another input uses Pot-D");
+    modes = {adc_mode(logic::input::AdcMode::ThreePos), adc_mode(logic::input::AdcMode::SixPos)};
+    pots.step(far, modes);
+    check(!pots.step(near, modes), "wiring: non-pot modes do not emit centre clicks");
 
     auto st = wm::logic::storage::default_storage();
     mn::State menu{};
