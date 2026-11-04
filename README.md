@@ -17,7 +17,7 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 - Mixer, input, RC output, safety/preflight, calibration, trim, flight timer, vario, bind
 - Dashboard pages P1–P5 (P5: AFHDS 2A or CRSF diagnostics, or the custom 2×2 telemetry slot page)
 - FS-i6S with `USE_MULTISWITCH=ON`: up to four MultiSwitch dashboards P6–P9, each with eight independent touch
-  toggles (OFF/ON), CRSF SET4 (realm `0xa1`, command `0x07`). Model Setup → MS1 Addr … MS4 Addr selects
+  toggles (OFF/ON), CRSF SET4 (realm `0xa1`, command `0x07`). Model Setup → MultiSwitch → MS1 Addr … MS4 Addr selects
   Off or a module address (0–255) per entry; only enabled entries get pages, numbered consecutively from P6.
   Defaults: MS1 address 0, MS2–MS4 Off. All addresses are saved per model and preserved with MultiSwitch compiled
   out; existing models retain their first address, with the three new entries Off. States start OFF at boot,

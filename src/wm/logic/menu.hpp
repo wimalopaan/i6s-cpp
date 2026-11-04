@@ -59,10 +59,10 @@ inline constexpr std::size_t kItemModelSetup = 1;
 enum class SetupRow : uint8_t {
     Name = 0, Type, ArmSwitch, Timer, Trigger, Copy, Vario, Telemetry, Protocol, Reset,
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-    MultiSwitch1, MultiSwitch2, MultiSwitch3, MultiSwitch4,
+    MultiSwitch,
 #endif
 };
-inline constexpr std::size_t kSetupRows = board::kHasMultiSwitch ? 14 : 10;
+inline constexpr std::size_t kSetupRows = board::kHasMultiSwitch ? 11 : 10;
 inline constexpr std::size_t kItemVarioRow = static_cast<std::size_t>(SetupRow::Vario);
 inline constexpr std::size_t kItemTelemRow = static_cast<std::size_t>(SetupRow::Telemetry);
 inline constexpr uint8_t kNameLen = 10;
@@ -99,6 +99,9 @@ enum class Screen : uint8_t {
     VarioSetup,
     TelemSetup,
     CrsfSetup,
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+    MultiSwitchSetup,
+#endif
 };
 
 inline constexpr std::size_t kItemDualRate = 2;
@@ -292,6 +295,9 @@ struct State {
     ListPos input_setup{};
     ListPos vario{};
     ListPos telem{};
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+    ListPos multiswitch{};
+#endif
     ListPos protocol{};
     crsf::config::State crsf{};
     crsf::config::Request crsf_req{};  // pending request for Action::CrsfRequest
@@ -578,12 +584,6 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
                 case SetupRow::ArmSwitch:
                 case SetupRow::Timer:
                 case SetupRow::Trigger:
-#if WM_PCB_I6S && WM_USE_MULTISWITCH
-                case SetupRow::MultiSwitch1:
-                case SetupRow::MultiSwitch2:
-                case SetupRow::MultiSwitch3:
-                case SetupRow::MultiSwitch4:
-#endif
                     s.editing = true;
                     break;
                 case SetupRow::Copy:
@@ -605,6 +605,13 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
                     s.protocol = ListPos{};
                     s.editing = false;
                     break;
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+                case SetupRow::MultiSwitch:
+                    s.screen = Screen::MultiSwitchSetup;
+                    s.multiswitch = ListPos{};
+                    s.editing = false;
+                    break;
+#endif
                 case SetupRow::Reset:
                     m = protocol::reset_model(protocol::ModelSlot{active.value});
                     return {Action::ResetActiveModel, 0};
@@ -618,6 +625,9 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
         case SetupRow::Telemetry:
         case SetupRow::Protocol:
         case SetupRow::Reset:
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+        case SetupRow::MultiSwitch:
+#endif
             break;
         case SetupRow::Name:
             if (n.cancel) {
@@ -690,27 +700,6 @@ constexpr Event update_setup(State& s, const Nav& n, storage::ModelConfig& m, co
             break;
         case SetupRow::Type:
             break;
-#if WM_PCB_I6S && WM_USE_MULTISWITCH
-        case SetupRow::MultiSwitch1:
-        case SetupRow::MultiSwitch2:
-        case SetupRow::MultiSwitch3:
-        case SetupRow::MultiSwitch4: {
-            auto& address = m.multiswitch_addresses[
-                static_cast<uint8_t>(row) - static_cast<uint8_t>(SetupRow::MultiSwitch1)];
-            if (n.up != n.down) {
-                const int16_t previous = address;
-                address = static_cast<int16_t>(std::clamp(static_cast<int>(address) + (n.up ? 1 : -1), -1, 255));
-                if (address != previous) {
-                    s.cue = buzzer::Cue::ValueStep;
-                }
-            }
-            if (n.ok || n.cancel) {
-                s.editing = false;
-                return save;
-            }
-            break;
-        }
-#endif
         case SetupRow::Copy:
             switch (model_copy::update(s.copy, model_copy::Keys{n.up, n.down, n.ok, n.cancel})) {
                 case model_copy::Outcome::Choosing: break;
@@ -923,6 +912,36 @@ constexpr void step_clamped_tone(State& s, T& v, const Range range, const int st
         s.cue = buzzer::Cue::ValueStep;
     }
 }
+
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+constexpr Event update_multiswitch(State& s, const Nav& n, storage::ModelConfig& m) {
+    if (s.editing) {
+        if (n.up != n.down) {
+            step_clamped_tone(s, m.multiswitch_addresses[s.multiswitch.selected], Range{-1, 255}, 1, n);
+        }
+        if (n.ok || n.cancel) {
+            s.editing = false;
+            return {Action::SaveActiveModel, 0};
+        }
+        return {};
+    }
+    if (n.cancel) {
+        s.screen = Screen::ModelSetup;
+        s.cue = buzzer::Cue::Click;
+        s.setup.selected = static_cast<uint8_t>(SetupRow::MultiSwitch);
+        s.setup.scroll = window_scroll({s.setup.selected}, {kListVisible});
+        return {};
+    }
+    if (const bool down = n.down || n.bind; n.up != down) {
+        s.nav_tick = step_list(s.multiswitch, m.multiswitch_addresses.size(), Rows{kListVisible},
+                               down ? Dir::Down : Dir::Up);
+    }
+    if (n.ok) {
+        s.editing = true;
+    }
+    return {};
+}
+#endif
 
 constexpr Event update_dual_rate(State& s, const Nav& n, storage::ModelConfig& m, const storage::RadioConfig& r) {
     if (n.cancel) {
@@ -1661,6 +1680,9 @@ constexpr Event update_screen(State& s, const Nav& n, const Input& in, storage::
         case Screen::CrsfSetup: return update_crsf_setup(s, n, in);
         case Screen::VarioSetup: return update_vario(s, n, st.active_model, st.radio);
         case Screen::TelemSetup: return update_telem(s, n, st.active_model);
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+        case Screen::MultiSwitchSetup: return update_multiswitch(s, n, st.active_model);
+#endif
         case Screen::ChannelReverse: return update_channel_reverse(s, n, st.active_model);
         case Screen::ChannelMonitor: return update_monitor(s, n);
         case Screen::DiagAnalog: return update_diag(s, n);
@@ -1911,17 +1933,9 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
                 widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "Reset: [OK Defaults]", {}, {0});
                 break;
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-            case SetupRow::MultiSwitch1:
-            case SetupRow::MultiSwitch2:
-            case SetupRow::MultiSwitch3:
-            case SetupRow::MultiSwitch4: {
-                const auto index = idx - static_cast<std::size_t>(SetupRow::MultiSwitch1);
-                constexpr std::array<std::string_view, 4> labels{"MS1 Addr:", "MS2 Addr:", "MS3 Addr:", "MS4 Addr:"};
-                const auto address = m.multiswitch_addresses[index];
-                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, labels[index],
-                                       address < 0 ? std::string_view{"Off"} : format::format_int(address).view(), {64});
+            case SetupRow::MultiSwitch:
+                widgets::draw_list_row(fb, {static_cast<int>(slot)}, selected, "MultiSwitch: [SETUP]", {}, {0});
                 break;
-            }
 #endif
         }
     }
@@ -1936,6 +1950,19 @@ constexpr void render_setup(Framebuffer& fb, const State& s, const storage::Mode
         widgets::draw_footer(fb, "[OK] Done   [UP/DN] Value");
     }
 }
+
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+constexpr void render_multiswitch(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
+    widgets::draw_header(fb, "MULTISWITCH SETUP");
+    constexpr std::array<std::string_view, 4> labels{"MS1 Addr:", "MS2 Addr:", "MS3 Addr:", "MS4 Addr:"};
+    for (std::size_t slot = 0; slot < m.multiswitch_addresses.size(); ++slot) {
+        const auto address = m.multiswitch_addresses[slot];
+        widgets::draw_list_row(fb, {static_cast<int>(slot)}, slot == s.multiswitch.selected, labels[slot],
+                               address < 0 ? std::string_view{"Off"} : format::format_int(address).view(), {64});
+    }
+    widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Value" : "[OK] Edit   [ESC] Back");
+}
+#endif
 
 constexpr void render_telem(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
     widgets::draw_header(fb, "TELEM DASH SETUP");
@@ -2731,6 +2758,9 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::CrsfSetup: crsf::config::render(fb, s.crsf, live.crsf_loader, live.crsf_command, live.crsf_devices); break;
         case Screen::VarioSetup: render_vario(fb, s, st.active_model); break;
         case Screen::TelemSetup: render_telem(fb, s, st.active_model); break;
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+        case Screen::MultiSwitchSetup: render_multiswitch(fb, s, st.active_model); break;
+#endif
         case Screen::ChannelReverse: render_channel_reverse(fb, s, st.active_model); break;
         case Screen::ChannelMonitor: render_monitor(fb, s, live, st.active_model); break;
         case Screen::DiagAnalog: render_diag(fb, s, live, st.radio); break;

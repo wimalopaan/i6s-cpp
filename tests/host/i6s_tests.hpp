@@ -533,7 +533,7 @@ inline void i6s_multiswitch_tests() {
     auto storage = st::default_storage();
     mn::State menu{};
     menu.screen = mn::Screen::ModelSetup;
-    menu.setup.selected = static_cast<uint8_t>(mn::SetupRow::MultiSwitch1);
+    menu.setup.selected = static_cast<uint8_t>(mn::SetupRow::MultiSwitch);
     menu.setup.scroll = 7;
     uint32_t now = 3000;
     auto edit_cue = wm::logic::buzzer::Cue::None;
@@ -543,8 +543,21 @@ inline void i6s_multiswitch_tests() {
         mn::update(menu, mn::Input{0, 0, now++}, storage);
         return event;
     };
+    const auto addresses_before = storage.active_model.multiswitch_addresses;
+    check(press(mn::kKeyOk).action == mn::Action::None && menu.screen == mn::Screen::MultiSwitchSetup &&
+              menu.multiswitch.selected == 0 && !menu.editing &&
+              storage.active_model.multiswitch_addresses == addresses_before,
+          "multiswitch setup: model setup opens the address sub-dialog without changing or saving addresses");
+    press(mn::kKeyUp);
+    check(menu.multiswitch.selected == 3, "multiswitch setup: navigation wraps from the first to the fourth address");
+    press(mn::kKeyDown);
+    check(menu.multiswitch.selected == 0, "multiswitch setup: navigation wraps back to the first address");
+    wm::logic::display::Framebuffer setup_fb{};
+    const mn::ModelNames names{};
+    mn::render(setup_fb, menu, names, storage, mn::Live{});
+    check(lit_pixels(setup_fb) > 0, "multiswitch setup: sub-dialog renders through the menu dispatcher");
     for (uint8_t slot = 0; slot < ms::kMaxPages; ++slot) {
-        menu.setup.selected = static_cast<uint8_t>(mn::SetupRow::MultiSwitch1) + slot;
+        check(menu.multiswitch.selected == slot, "multiswitch setup: Down selects the next address row");
         auto& address = storage.active_model.multiswitch_addresses[slot];
         address = 0;
         press(mn::kKeyOk);
@@ -564,13 +577,26 @@ inline void i6s_multiswitch_tests() {
         press(mn::kKeyDown);
         check(address == 254 && edit_cue == wm::logic::buzzer::Cue::ValueStep,
               "multiswitch setup: decrement confirms with value beep");
+        press(mn::kKeyUp | mn::kKeyDown);
+        check(address == 254 && edit_cue == wm::logic::buzzer::Cue::None,
+              "multiswitch setup: simultaneous Up and Down do not change the address");
         check(press(mn::kKeyOk).action == mn::Action::SaveActiveModel && !menu.editing,
               "multiswitch setup: confirming any address requests model persistence");
+        press(mn::kKeyDown);
     }
     press(mn::kKeyOk);
     press(mn::kKeyDown);
-    check(press(mn::kKeyCancel).action == mn::Action::SaveActiveModel && !menu.editing,
+    check(press(mn::kKeyCancel).action == mn::Action::SaveActiveModel && !menu.editing &&
+              menu.screen == mn::Screen::MultiSwitchSetup,
           "multiswitch setup: ESC finishes and saves like other model fields");
+    check(press(mn::kKeyCancel).action == mn::Action::None && menu.screen == mn::Screen::ModelSetup &&
+              menu.setup.selected == static_cast<uint8_t>(mn::SetupRow::MultiSwitch) && !menu.editing &&
+              menu.setup.scroll <= menu.setup.selected &&
+              menu.setup.selected < menu.setup.scroll + mn::kListVisible,
+          "multiswitch setup: ESC returns to the visible MultiSwitch row in model setup");
+    press(mn::kKeyOk);
+    check(menu.screen == mn::Screen::MultiSwitchSetup && menu.multiswitch.selected == 0 && !menu.editing,
+          "multiswitch setup: reopening starts at the first address");
 
     using Dev = test_eeprom::FakeEeprom;
     storage.active_model.multiswitch_addresses = {-1, 0, 42, 255};

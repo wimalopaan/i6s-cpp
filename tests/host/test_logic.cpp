@@ -4663,7 +4663,7 @@ void telem_slots_test() {
     };
 
     check(static_cast<std::size_t>(mn::SetupRow::Telemetry) == mn::kItemTelemRow &&
-              mn::kSetupRows == (wm::board::kHasMultiSwitch ? 14 : 10) &&
+              mn::kSetupRows == (wm::board::kHasMultiSwitch ? 11 : 10) &&
               static_cast<std::size_t>(mn::SetupRow::Protocol) == 8,
           "Telemetry must be the row before Protocol on the model setup screen");
 
