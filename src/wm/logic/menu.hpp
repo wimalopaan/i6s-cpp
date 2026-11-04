@@ -93,6 +93,7 @@ enum class Screen : uint8_t {
     DiagAnalog,
     SystemInfo,
     WingMixer,
+    TankSetup,
     MixerLine,
     GlobalVars,
     AuxChannels,
@@ -291,6 +292,7 @@ struct State {
     ListPos dual_rate{};
     ListPos throttle_curve{};  // 0 Pts, 1 Smooth, 2.. curve points
     ListPos wing{};
+    ListPos tank{};
     ListPos mix_line{};
     ListPos gvars{};
     uint8_t mix_idx{0};  // mix line shown by the line editor, 0..kNumMixLines-1
@@ -1187,6 +1189,9 @@ constexpr bool is_channel_configured(const uint8_t ch, const storage::ModelConfi
     if (ch <= 4) {
         return true;
     }
+    if (mixer::is_tank_motor(ch - 1u, m)) {
+        return true;
+    }
     if (m.wing_tail_mix == 3 && ch == 6) {
         return true;
     }
@@ -1400,7 +1405,7 @@ constexpr bool wing_has_diff(const storage::ModelConfig& m) {
 
 // Row of the "GVars" entry. The 32 mix lines follow it.
 constexpr std::size_t wing_gvars_row(const storage::ModelConfig& m) {
-    return wing_has_diff(m) ? 2 : 1;
+    return wing_has_diff(m) || mixer::is_tank(m) ? 2 : 1;
 }
 
 constexpr std::size_t wing_row_count(const storage::ModelConfig& m) {
@@ -1437,10 +1442,14 @@ constexpr Event update_wing_mixer(State& s, const Nav& n, storage::ModelConfig& 
     const std::size_t sel = s.wing.selected;
     const std::size_t gvars_row = wing_gvars_row(m);
     if (sel == 0) {
-        m.wing_tail_mix = static_cast<uint8_t>((m.wing_tail_mix + 1) % 4);
+        m.wing_tail_mix = static_cast<uint8_t>((m.wing_tail_mix + 1) % labels::kTemplateNames.size());
         return save;
     }
-    if (wing_has_diff(m) && sel == 1) {
+    if (mixer::is_tank(m) && sel == 1) {
+        s.screen = Screen::TankSetup;
+        s.tank = {};
+        s.editing = false;
+    } else if (wing_has_diff(m) && sel == 1) {
         s.editing = true;
     } else if (sel == gvars_row) {
         s.screen = Screen::GlobalVars;
@@ -1451,6 +1460,59 @@ constexpr Event update_wing_mixer(State& s, const Nav& n, storage::ModelConfig& 
         s.mix_line = ListPos{};
         s.editing = false;
         s.screen = Screen::MixerLine;
+    }
+    return {};
+}
+
+inline constexpr std::array<std::string_view, 5> kTankLabels{
+    "Drive Src:", "Steer Src:", "Left Out:", "Right Out:", "Steer Wt:",
+};
+
+constexpr Event update_tank(State& s, const Nav& n, storage::ModelConfig& m, const storage::RadioConfig& r) {
+    if (!s.editing) {
+        if (n.cancel) {
+            s.screen = Screen::WingMixer;
+            s.wing.selected = 1;
+            s.wing.scroll = 0;
+            s.cue = buzzer::Cue::Click;
+            return {};
+        }
+        if (n.up != n.down) {
+            s.nav_tick = step_list(s.tank, kTankLabels.size(), Rows{kListVisible}, nav_dir(n));
+        }
+        if (n.ok) {
+            s.editing = true;
+        }
+        return {};
+    }
+    if (n.cancel) {
+        s.editing = false;
+        return {};
+    }
+    const auto row = s.tank.selected;
+    if (row <= 1) {
+        auto& source = row == 0 ? m.tank.drive_source : m.tank.steer_source;
+        if (const auto pot = pot_change_source(n.changes)) {
+            if (is_source_available(*pot, r, m)) {
+                source = *pot;
+                s.cue = buzzer::Cue::ValueSelect;
+            }
+        } else if (n.up != n.down) {
+            source = step_available(source, labels::kSourceNames.size(), n.down,
+                                     [&](const uint8_t c) { return is_source_available(c, r, m); });
+            s.cue = buzzer::Cue::ValueStep;
+        }
+    } else if (row <= 3 && n.up != n.down) {
+        auto& channel = row == 2 ? m.tank.left_channel : m.tank.right_channel;
+        const auto other = row == 2 ? m.tank.right_channel : m.tank.left_channel;
+        channel = step_available(channel, kNumChannels + 1, n.down,
+                                  [&](const uint8_t c) { return c > 0 && c != other; });
+        s.cue = buzzer::Cue::ValueStep;
+    } else if (row == 4 && n.up != n.down) {
+        step_clamped_tone(s, m.tank.steer_weight, Range{-100, 100}, 1, n);
+    }
+    if (n.ok) {
+        s.editing = false;
     }
     return {};
 }
@@ -1762,7 +1824,9 @@ constexpr Event update_system(State& s, const Nav& n) {
 // Advances the menu state for one tick. `st` is edited in place; the caller persists it when told to.
 // Value picking where a pot movement selects VRA/VRB (Rust `is_source_selection`).
 constexpr bool is_source_selection(const State& s) {
-    return s.editing && (s.screen == Screen::AuxChannels || (s.screen == Screen::MixerLine && s.mix_line.selected == 1));
+    return s.editing && (s.screen == Screen::AuxChannels ||
+                         (s.screen == Screen::MixerLine && s.mix_line.selected == 1) ||
+                         (s.screen == Screen::TankSetup && s.tank.selected <= 1));
 }
 
 // Per-screen handler for one tick of navigation keys.
@@ -1790,6 +1854,7 @@ constexpr Event update_screen(State& s, const Nav& n, const Input& in, storage::
         case Screen::DiagAnalog: return update_diag(s, n);
         case Screen::SystemInfo: return update_system(s, n);
         case Screen::WingMixer: return update_wing_mixer(s, n, st.active_model);
+        case Screen::TankSetup: return update_tank(s, n, st.active_model, st.radio);
         case Screen::MixerLine: return update_mixer_line(s, n, st.active_model, st.radio);
         case Screen::GlobalVars: return update_global_vars(s, n, st.active_model);
         case Screen::Closed: break;
@@ -2860,7 +2925,10 @@ constexpr void render_wing_mixer(Framebuffer& fb, const State& s, const storage:
         const int row = static_cast<int>(slot);
         const int y = 14 + row * 9;
         if (idx == 0) {
-            widgets::draw_list_row(fb, {row}, sel, "Wing:", labels::kTemplateNames[std::min<std::size_t>(m.wing_tail_mix, 3)], {36});
+            widgets::draw_list_row(fb, {row}, sel, "Type:",
+                                   name_at(labels::kTemplateNames, m.wing_tail_mix), {36});
+        } else if (mixer::is_tank(m) && idx == 1) {
+            widgets::draw_list_row(fb, {row}, sel, "Tank Setup: [SETUP]", {}, {0});
         } else if (wing_has_diff(m) && idx == 1) {
             const format::Text<6> diff = signed_percent(m.template_diff);
             widgets::draw_list_row(fb, {row}, sel, "Diff:", diff.view(), {36});
@@ -2881,6 +2949,28 @@ constexpr void render_wing_mixer(Framebuffer& fb, const State& s, const storage:
     }
     widgets::draw_scrollbar(fb, {static_cast<int>(s.wing.selected)}, {static_cast<int>(rows)}, {14, 36});
     widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Diff" : "[OK] Select   [ESC] Back");
+}
+
+constexpr void render_tank(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
+    widgets::draw_header(fb, "TANK SETUP");
+    for (std::size_t line = 0; line < kListVisible; ++line) {
+        const auto row = s.tank.scroll + line;
+        if (row >= kTankLabels.size()) {
+            break;
+        }
+        format::Text<11> value;
+        switch (row) {
+            case 0: value = text_of<11>(name_at(labels::kSourceNames, m.tank.drive_source)); break;
+            case 1: value = text_of<11>(name_at(labels::kSourceNames, m.tank.steer_source)); break;
+            case 2: value = text_of<11>(target_text(m.tank.left_channel).view()); break;
+            case 3: value = text_of<11>(target_text(m.tank.right_channel).view()); break;
+            case 4: value = text_of<11>(signed_percent(m.tank.steer_weight).view()); break;
+        }
+        widgets::draw_list_row(fb, {static_cast<int>(line)}, row == s.tank.selected,
+                               kTankLabels[row], value.view(), {68});
+    }
+    widgets::draw_scrollbar(fb, {s.tank.selected}, {static_cast<int>(kTankLabels.size())}, {14, 36});
+    widgets::draw_footer(fb, s.editing ? "[OK] Done   [UP/DN] Value" : "[OK] Edit   [ESC] Back");
 }
 
 constexpr void render_mixer_line(Framebuffer& fb, const State& s, const storage::ModelConfig& m) {
@@ -2942,6 +3032,7 @@ constexpr void render(Framebuffer& fb, const State& s, const ModelNames& names, 
         case Screen::DiagAnalog: render_diag(fb, s, live, st.radio); break;
         case Screen::SystemInfo: render_system(fb, live); break;
         case Screen::WingMixer: render_wing_mixer(fb, s, st.active_model); break;
+        case Screen::TankSetup: render_tank(fb, s, st.active_model); break;
         case Screen::MixerLine: render_mixer_line(fb, s, st.active_model); break;
         case Screen::GlobalVars: render_global_vars(fb, s, st.active_model); break;
         case Screen::Closed: break;

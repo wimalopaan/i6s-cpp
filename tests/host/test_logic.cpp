@@ -463,7 +463,8 @@ void mixer_test() {
 
     auto run = [&](const int16_t roll, const int16_t pitch, const uint16_t thr, const int16_t yaw,
                    std::span<const int16_t> pots, const Switches& sw, const ModelConfig& m) {
-        return mx::compute_channels({roll, pitch, thr, yaw}, pots, sw, m, no_trim, 0);
+        mx::TankState tank{};
+        return mx::compute_channels({roll, pitch, thr, yaw}, pots, sw, m, no_trim, 0, tank);
     };
 
     // Dual rates and expo.
@@ -622,6 +623,155 @@ void mixer_test() {
     check(mx::is_timer_active(2, -1000, latched, sw_default, {true}), "THt keeps running at idle");
     check(mx::is_timer_active(3, -1000, latched, sw_default, {true}), "timer always on");
     check(!mx::is_timer_active(3, 0, latched, sw_default, {false}), "timer inhibited when disarmed");
+}
+
+void tank_mixer_test() {
+    namespace mx = logic::mixer;
+    auto model = logic::storage::default_model_config(0);
+    model.wing_tail_mix = 4;
+    model.tank.drive_source = 5;
+    model.tank.steer_source = 6;
+    mx::TankState state{};
+    logic::Switches switches{};
+    logic::trim::TrimValues trims{25, -25, 25, -25};
+    auto run = [&](int16_t drive, int16_t steer) {
+        const std::array<int16_t, 2> pots{drive, steer};
+        return mx::compute_channels({0, 0, 500, 0}, pots, switches, model, trims, 2, state);
+    };
+    auto channels = run(500, 250);
+    check(channels[0] == 1884 && channels[1] == 1628,
+          "tank: forward uses the same steering weight on both untrimmed motors");
+    channels = run(-500, 250);
+    check(channels[0] == 1116 && channels[1] == 1372, "tank: reverse inverts steering contribution");
+    channels = run(0, 250);
+    check(channels[0] == 1372 && channels[1] == 1628, "tank: zero retains reverse steering");
+    run(-20, 250);
+    channels = run(20, 250);
+    check(state.reverse && channels[0] == 1383 && channels[1] == 1638,
+          "tank: hysteresis includes both boundaries without a drive deadband");
+    channels = run(21, 250);
+    check(!state.reverse && channels[0] > channels[1], "tank: above +2 percent selects forward");
+    run(-21, 250);
+    check(state.reverse, "tank: below -2 percent selects reverse");
+    state = {};
+    channels = run(0, 250);
+    check(channels[0] == 1628 && channels[1] == 1372, "tank: fresh model starts with forward steering");
+    channels = run(1000, 0);
+    check(channels[0] == 2012 && channels[1] == 2012, "tank: straight drive retains full thrust");
+    channels = run(1000, 1000);
+    check(channels[0] == 2012 && channels[1] == 1500, "tank: mixed output saturates without halving thrust");
+    model.tank.steer_weight = 50;
+    channels = run(500, 250);
+    check(channels[0] == 1820 && channels[1] == 1692, "tank: reduced shared steering weight");
+    model.tank.steer_weight = -50;
+    channels = run(500, 250);
+    check(channels[0] == 1692 && channels[1] == 1820, "tank: negative weight reverses both contributions");
+    model.tank.steer_weight = 0;
+    channels = run(500, 1000);
+    check(channels[0] == 1756 && channels[1] == 1756, "tank: zero weight disables steering");
+
+    model.tank = {.drive_source = 12, .steer_source = 13};
+    channels = mx::compute_channels({500, 250, 500, 0}, {}, switches, model, trims, 2, state);
+    check(channels[0] == 1884 && channels[1] == 1628,
+          "tank: both channel sources are evaluated before either motor is overwritten");
+    model.tank = {.drive_source = board::kSourceGv1,
+                  .steer_source = static_cast<uint8_t>(board::kSourceGv1 + 1),
+                  .left_channel = 3, .right_channel = 18};
+    model.gvars[0] = 500;
+    model.gvars[1] = 250;
+    model.channel_reverse = 1u << 17;
+    channels = run(0, 0);
+    check(channels[2] == 1884 && channels[17] == 1372,
+          "tank: GVar sources, arbitrary outputs, throttle-trim suppression and output reversal");
+    model.mixes[0] = {.target_ch = 3, .source = 11, .weight_src = 0, .weight = 10,
+                      .offset = 0, .switch_sel = 0, .mode = 0, .reserved = 0};
+    channels = run(0, 0);
+    check(channels[2] == 1935, "tank: free mixer lines operate after the Tank stage");
+    model.model_type = static_cast<uint8_t>(mx::ModelType::Heli);
+    switches.sa = logic::SwitchPos::Down;
+    channels = run(0, 0);
+    check(channels[2] == 1935, "tank: an old helicopter model type cannot force a motor to minimum");
+    model.arm_switch = 1;
+    channels = run(0, 0);
+    check(channels[2] == 1500 && channels[17] == 1500,
+          "tank: disarming neutralizes both outputs after free mixes and reversing");
+    switches.sa = logic::SwitchPos::Up;
+    channels = run(0, 0);
+    check(channels[2] == 1935 && channels[17] == 1372, "tank: arming restores both motor commands");
+    switches.sa = logic::SwitchPos::Down;
+    channels.fill(2012);
+    mx::apply_tank_arming(channels, model, switches);
+    check(channels[2] == 1500 && channels[17] == 1500 && channels[0] == 2012,
+          "tank: student replacement cannot bypass motor arming safety");
+    const auto idle = logic::safety::safe_idle_channels(model);
+    check(idle[2] == 1500 && idle[17] == 1500, "tank: preflight frame centers configured motor channels");
+    model.wing_tail_mix = 0;
+    state.reverse = true;
+    run(0, 0);
+    check(!state.reverse, "tank: leaving the template clears direction state");
+
+    model = logic::storage::default_model_config(0);
+    model.wing_tail_mix = 4;
+    model.thr_curve.fill(0);
+    logic::input::InputState input{};
+    input.gimbals.lv = 500;
+    input.gimbals.lh = 250;
+    channels = logic::flight::rf_channels(input, logic::safety::StickMode::Mode2, model, {}, 0, state);
+    check(channels[0] == 1884 && channels[1] == 1628,
+          "tank: default THR/Yaw sources use bipolar throttle without the flight throttle curve");
+    model.tank.drive_source = 5;
+    model.tank.steer_source = 6;
+    input.gimbals.lv = -1000;
+    input.aux_pots[4] = -20;
+    input.aux_pots[5] = 20;
+    check(logic::flight::tank_preflight(input, logic::safety::StickMode::Mode2, model) ==
+              logic::safety::Preflight::Ok,
+          "tank: preflight checks selected sources, not an unused throttle stick");
+    input.aux_pots[5] = 21;
+    check(logic::flight::tank_preflight(input, logic::safety::StickMode::Mode2, model) ==
+              logic::safety::Preflight::TankNotCentered,
+          "tank: preflight rejects off-center steering");
+    input.aux_pots[5] = 0;
+    input.aux_pots[4] = -21;
+    check(logic::flight::tank_preflight(input, logic::safety::StickMode::Mode2, model) ==
+              logic::safety::Preflight::TankNotCentered,
+          "tank: preflight rejects off-center drive");
+}
+
+void tank_storage_test() {
+    namespace st = logic::storage;
+    using Dev = test_eeprom::FakeEeprom;
+    Dev::mem.fill(0xFF);
+    auto previous = st::default_model_config(0);
+    previous.wing_tail_mix = 3;
+    previous.rx_id = 0x12345678;
+    previous.telem_slots = {3, 2, 1, 0};
+    previous.tank = {.drive_source = 6, .steer_source = 5, .left_channel = 18,
+                     .right_channel = 3, .steer_weight = -35};
+    const auto bytes = st::to_bytes(previous);
+    test_eeprom::write_slot_raw(st::kModelBase, st::kSchemaVersion,
+                                offsetof(st::ModelConfig, tank), bytes);
+    check(st::peek_model_name<Dev>(0) == std::optional{previous.name},
+          "tank storage: previous-current model remains visible before migration");
+    st::ModelConfig loaded{};
+    check(st::load_slot<Dev>(st::kModelBase, loaded) == st::Status::Ok &&
+              loaded.wing_tail_mix == 3 && loaded.rx_id == previous.rx_id &&
+              loaded.telem_slots == previous.telem_slots && loaded.tank == st::TankConfig{},
+          "tank storage: old model retains its data and gains default Tank settings");
+    check(test_eeprom::read_header(st::kModelBase).len == sizeof(st::ModelConfig),
+          "tank storage: migration persists the extended model");
+    previous.wing_tail_mix = 4;
+    check(st::save_model_to_slot<Dev>(1, previous) &&
+              st::load_slot<Dev>(st::model_slot_addr(1).value(), loaded) == st::Status::Ok &&
+              loaded.wing_tail_mix == 4 && loaded.tank == previous.tank,
+          "tank storage: custom sources, outputs and signed weight survive reload");
+    loaded.tank = {.drive_source = 255, .steer_source = 255, .left_channel = 2,
+                   .right_channel = 2, .steer_weight = -128};
+    st::sanitize_model(loaded, 0);
+    check(loaded.tank.drive_source == 3 && loaded.tank.steer_source == 4 &&
+              loaded.tank.left_channel == 2 && loaded.tank.right_channel == 1 &&
+              loaded.tank.steer_weight == 100 && loaded.wing_tail_mix == 4,
+          "tank storage: sanitization restores invalid fields and separates duplicate outputs");
 }
 
 void input_test() {
@@ -863,10 +1013,11 @@ void safety_test() {
     const auto model = default_model_config(0);
     const logic::trim::TrimValues no_trim{};
     in.gimbals = Gimbals{};
-    const auto ch = fl::rf_channels(in, sf::StickMode::Mode2, model, no_trim, 0);
+    logic::mixer::TankState tank{};
+    const auto ch = fl::rf_channels(in, sf::StickMode::Mode2, model, no_trim, 0, tank);
     check(ch[0] == 1500 && ch[1] == 1500, "centered sticks give centered channels");
     in.gimbals.lv = 1000;
-    const auto thr_ch = fl::rf_channels(in, sf::StickMode::Mode2, model, no_trim, 0);
+    const auto thr_ch = fl::rf_channels(in, sf::StickMode::Mode2, model, no_trim, 0, tank);
     check(thr_ch[2] > 1500 && thr_ch[2] <= 2012, "throttle stick up raises throttle");
 }
 
@@ -1811,6 +1962,79 @@ void throttle_curve_test() {
     view.throttle_curve.selected = 2;
     mn::render(fb, view, names, st, mn::Live{});
     check(lit_pixels(fb) > 0, "curve: throttle curve screen must draw");
+}
+
+void tank_menu_test() {
+    namespace mn = logic::menu;
+    auto storage = logic::storage::default_storage();
+    storage.active_model.wing_tail_mix = 3;
+    mn::State state{};
+    mn::open(state);
+    state.screen = mn::Screen::WingMixer;
+    mn::update(state, mn::Input{0, 0, 0}, storage);
+    uint32_t now = 0;
+    auto tap = [&](uint16_t key) {
+        now += 10;
+        const auto event = mn::update(state, mn::Input{key, key, now}, storage);
+        mn::update(state, mn::Input{0, 0, ++now}, storage);
+        return event;
+    };
+    check(tap(mn::kKeyOk).action == mn::Action::SaveActiveModel &&
+              storage.active_model.wing_tail_mix == 4,
+          "tank menu: template cycle includes Tank");
+    tap(mn::kKeyDown);
+    tap(mn::kKeyOk);
+    check(state.screen == mn::Screen::TankSetup && mn::wing_gvars_row(storage.active_model) == 2,
+          "tank menu: dedicated setup precedes GVars and free mixer lines");
+    tap(mn::kKeyOk);
+    check(mn::is_source_selection(state), "tank menu: source edit enables moved-pot selection");
+    tap(mn::kKeyUp);
+    check(storage.active_model.tank.drive_source == 4, "tank menu: drive source is selectable");
+    storage.radio.adc_modes[4] = adc_mode(logic::input::AdcMode::SixPos);
+    tap(mn::kKeyUp);
+    check(storage.active_model.tank.drive_source == 6, "tank menu: source stepping skips unavailable pots");
+    mn::update(state, mn::Input{0, 0, ++now, {.vr1 = true}}, storage);
+    check(storage.active_model.tank.drive_source == 6, "tank menu: unavailable moved pot is not selected");
+    storage.radio.adc_modes[4] = adc_mode(logic::input::AdcMode::Pot);
+    mn::update(state, mn::Input{0, 0, ++now, {.vr1 = true}}, storage);
+    check(storage.active_model.tank.drive_source == 5, "tank menu: moved pot selects an available source");
+    check(tap(mn::kKeyOk).action == mn::Action::None && !state.editing,
+          "tank menu: finishing a field defers saving");
+    tap(mn::kKeyDown);
+    tap(mn::kKeyOk);
+    tap(mn::kKeyDown);
+    check(storage.active_model.tank.steer_source == 3, "tank menu: steering source is independent");
+    tap(mn::kKeyCancel);
+    tap(mn::kKeyDown);
+    tap(mn::kKeyOk);
+    tap(mn::kKeyUp);
+    check(storage.active_model.tank.left_channel == 3, "tank menu: output selection skips the other motor");
+    storage.active_model.tank.left_channel = 18;
+    tap(mn::kKeyUp);
+    check(storage.active_model.tank.left_channel == 1, "tank menu: outputs wrap between CH18 and CH1");
+    tap(mn::kKeyOk);
+    tap(mn::kKeyDown);
+    tap(mn::kKeyOk);
+    tap(mn::kKeyDown);
+    check(storage.active_model.tank.right_channel == 18, "tank menu: right output skips occupied CH1");
+    tap(mn::kKeyOk);
+    tap(mn::kKeyDown);
+    tap(mn::kKeyOk);
+    tap(mn::kKeyUp);
+    check(storage.active_model.tank.steer_weight == 100, "tank menu: weight clamps at +100");
+    for (int i = 0; i < 201; ++i) {
+        tap(mn::kKeyDown);
+    }
+    check(storage.active_model.tank.steer_weight == -100, "tank menu: shared weight reaches and clamps at -100");
+    logic::display::Framebuffer fb{};
+    mn::render_tank(fb, state, storage.active_model);
+    check(lit_pixels(fb) > 0, "tank menu: scrolled weight field renders");
+    tap(mn::kKeyOk);
+    check(tap(mn::kKeyCancel).action == mn::Action::None &&
+              state.screen == mn::Screen::WingMixer && state.wing.selected == 1,
+          "tank menu: setup returns to its parent row without an intermediate save");
+    check(tap(mn::kKeyCancel).action == mn::Action::SaveActiveModel,
+          "tank menu: parent exit saves the full configuration");
 }
 
 void mixer_menu_test() {
@@ -4989,6 +5213,8 @@ int main() {
     crsf_menu_test();
     storage_test();
     mixer_test();
+    tank_mixer_test();
+    tank_storage_test();
     input_test();
     safety_test();
     preflight_screen_test();
@@ -5005,6 +5231,7 @@ int main() {
     auto_select_test();
     throttle_curve_test();
     mixer_menu_test();
+    tank_menu_test();
     value_cues_test();
     cancel_click_test();
     ok_click_test();

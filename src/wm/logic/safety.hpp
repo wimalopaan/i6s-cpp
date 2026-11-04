@@ -61,7 +61,7 @@ struct ChannelCalibration {
     }
 };
 
-enum class Preflight : uint8_t { Ok, ThrottleHigh, ThrottleNotCentered, ThrottleHoldDisengaged };
+enum class Preflight : uint8_t { Ok, ThrottleHigh, ThrottleNotCentered, ThrottleHoldDisengaged, TankNotCentered };
 
 /// Throttle rule at startup. Heli needs the throttle hold (SA Down) instead of a position check.
 constexpr Preflight check_preflight_throttle(const std::array<uint16_t, 4>& raw,
@@ -111,5 +111,11 @@ constexpr std::array<uint16_t, kNumChannels> make_safe_idle() {
 }
 
 inline constexpr std::array<uint16_t, kNumChannels> kSafeIdleChannels = make_safe_idle();
+
+constexpr std::array<uint16_t, kNumChannels> safe_idle_channels(const storage::ModelConfig& model) {
+    auto channels = kSafeIdleChannels;
+    mixer::neutralize_tank_motors(channels, model);
+    return channels;
+}
 
 }  // namespace wm::logic::safety

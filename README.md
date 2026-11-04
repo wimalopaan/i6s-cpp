@@ -15,6 +15,19 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 - USB: device stack (HID gamepad, CDC serial with CLI and telemetry), mode switched from Radio Setup
 - USB sim mode (trainer): joystick mode with a host connected mutes the RF link, stops CRSF and PPM out
 - Mixer, input, RC output, safety/preflight, calibration, trim, flight timer, vario, bind
+- Tank mixer (I6S/I6X): select `TANK` in Wing & Mixer and open Tank Setup. Drive and steering sources are
+  independently selectable from the mixer source list (defaults THR and Yaw), as are the two distinct motor
+  outputs CH1–CH18 (defaults CH1/CH2). One shared steering weight ranges from −100% to +100% (default +100%).
+  Outputs are `L = clamp(F + direction × S × weight / 100)` and
+  `R = clamp(F − direction × S × weight / 100)`, without reducing straight-line thrust.
+  Drive below −2% selects reverse steering; above +2% selects forward. Inside that range, including zero,
+  the last direction is retained (initially forward after startup/model change); this is not a drive deadband.
+  THR is bipolar and bypasses the flight throttle curve. Motor neutral is 1500 µs; motor channels ignore
+  stick trims but retain output reversing. Preflight requires both selected sources centered (±2%); disarming
+  neutralizes both motors, including after trainer handover. Channel-valued sources use the channel values
+  before either motor output is replaced. The Tank stage precedes all free mixer lines and consumes none.
+  Settings are saved per model when leaving Wing & Mixer; existing models retain their
+  previous template and gain the default Tank settings.
 - Dashboard pages P1–P5 (P5: AFHDS 2A or CRSF diagnostics, or the custom 2×2 telemetry slot page)
 - FS-i6S with `USE_MULTISWITCH=ON`: up to four MultiSwitch dashboards P6–P9, each with eight independent touch
   functions, CRSF SET4 (realm `0xa1`, command `0x07`). Model Setup → MultiSwitch lists MS1–MS4; OK opens each entry's

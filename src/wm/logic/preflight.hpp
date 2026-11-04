@@ -37,6 +37,7 @@ constexpr std::string_view throttle_message(const safety::Preflight p) {
         case safety::Preflight::ThrottleHigh: return "THROTTLE NOT AT IDLE!";
         case safety::Preflight::ThrottleNotCentered: return "CENTER THROTTLE STICK!";
         case safety::Preflight::ThrottleHoldDisengaged: return "THROTTLE HOLD OFF!";
+        case safety::Preflight::TankNotCentered: return "CENTER DRIVE / STEER!";
         case safety::Preflight::Ok: break;
     }
     return {};
@@ -46,6 +47,7 @@ constexpr std::string_view footer(const safety::Preflight p) {
     switch (p) {
         case safety::Preflight::ThrottleNotCentered: return "Center Thr/Safe SW [ESC]Skip";
         case safety::Preflight::ThrottleHoldDisengaged: return "Hold Thr/Safe SW   [ESC]Skip";
+        case safety::Preflight::TankNotCentered: return "Center Drive/Steer [ESC]Skip";
         default: return "Lower Thr/Safe SW  [ESC]Skip";
     }
 }

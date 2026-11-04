@@ -36,14 +36,14 @@ inline constexpr std::size_t kModelSlotSize = 768;
 
 // Legacy payload sizes that are migrated on load (ModelConfig v1..v4).
 inline constexpr std::size_t kLegacyModelV1Size = 128;
-inline constexpr std::size_t kMaxLegacyModelSize = board::kIsI6S ? 568 : 364;
+inline constexpr std::size_t kMaxLegacyModelSize = board::kIsI6S ? 572 : 368;
 
 /// Older ModelConfig payload lengths that are upgraded by copying them over the defaults.
 constexpr bool is_legacy_prefix_len(const std::size_t len) {
     if constexpr (board::kIsI6S) {
-        return len == 348 || len == 364 || len == 368 || len == 376 || len == kMaxLegacyModelSize;
+        return len == 348 || len == 364 || len == 368 || len == 376 || len == 568 || len == kMaxLegacyModelSize;
     } else {
-        return len == 348 || len == 352 || len == 360 || len == kMaxLegacyModelSize;
+        return len == 348 || len == 352 || len == 360 || len == 364 || len == kMaxLegacyModelSize;
     }
 }
 
@@ -168,6 +168,17 @@ using MultiSwitchLabel = std::array<uint8_t, kMultiSwitchLabelLen>;
 using MultiSwitchLabels = std::array<std::array<MultiSwitchLabel, 8>, 4>;
 using MultiSwitchModes = std::array<uint8_t, 4>;
 
+struct TankConfig {
+    uint8_t drive_source = 3;
+    uint8_t steer_source = 4;
+    uint8_t left_channel = 1;
+    uint8_t right_channel = 2;
+    int8_t steer_weight = 100;
+    std::array<uint8_t, 3> reserved{};
+    friend constexpr bool operator==(const TankConfig&, const TankConfig&) = default;
+};
+static_assert(sizeof(TankConfig) == 8);
+
 struct ModelConfig {
     std::array<uint8_t, 10> name;
     uint8_t model_type;
@@ -229,8 +240,10 @@ struct ModelConfig {
     uint8_t pad_vario;
     std::array<uint8_t, 4> telem_slots;
 #endif
+    TankConfig tank;
 };
-static_assert(sizeof(ModelConfig) == (board::kIsI6S ? 572 : 368));
+static_assert(sizeof(ModelConfig) == (board::kIsI6S ? 580 : 376));
+static_assert(offsetof(ModelConfig, tank) == (board::kIsI6S ? 572 : 368));
 static_assert(kHeaderSize + sizeof(ModelConfig) <= kModelSlotSize);
 static_assert(offsetof(ModelConfig, rx_id) == 12);
 static_assert(offsetof(ModelConfig, timer_secs) == 58);
@@ -298,7 +311,7 @@ struct RadioStorage {
     RadioConfig radio;
     ModelConfig active_model;
 };
-static_assert(sizeof(RadioStorage) == (board::kIsI6S ? 720 : 508));
+static_assert(sizeof(RadioStorage) == (board::kIsI6S ? 728 : 516));
 
 struct SlotHeader {
     uint16_t magic;
@@ -496,6 +509,7 @@ constexpr ModelConfig default_model_config(const std::size_t index) {
         .pad_vario = 0,
         .telem_slots = {0, 1, 2, 3},
 #endif
+        .tank = {},
     };
 }
 
@@ -614,8 +628,24 @@ constexpr void sanitize_model(ModelConfig& m, const uint8_t active_model) {
     if (m.dr_switch > 6) {
         m.dr_switch = 0;
     }
-    if (m.wing_tail_mix > 3) {
+    if (m.wing_tail_mix > 4) {
         m.wing_tail_mix = 0;
+    }
+    if (m.tank.drive_source >= board::kSourceCount) {
+        m.tank.drive_source = 3;
+    }
+    if (m.tank.steer_source >= board::kSourceCount) {
+        m.tank.steer_source = 4;
+    }
+    if (m.tank.left_channel == 0 || m.tank.left_channel > 18) {
+        m.tank.left_channel = 1;
+    }
+    if (m.tank.right_channel == 0 || m.tank.right_channel > 18 ||
+        m.tank.right_channel == m.tank.left_channel) {
+        m.tank.right_channel = m.tank.left_channel == 2 ? 1 : 2;
+    }
+    if (m.tank.steer_weight < -100 || m.tank.steer_weight > 100) {
+        m.tank.steer_weight = 100;
     }
     if (m.template_diff < -100 || m.template_diff > 100) {
         m.template_diff = 0;
