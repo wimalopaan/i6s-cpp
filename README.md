@@ -17,15 +17,20 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
 - Mixer, input, RC output, safety/preflight, calibration, trim, flight timer, vario, bind
 - Dashboard pages P1–P5 (P5: AFHDS 2A or CRSF diagnostics, or the custom 2×2 telemetry slot page)
 - FS-i6S with `USE_MULTISWITCH=ON`: up to four MultiSwitch dashboards P6–P9, each with eight independent touch
-  toggles, CRSF SET4 (realm `0xa1`, command `0x07`). Model Setup → MultiSwitch lists MS1–MS4; OK opens each entry's
-  settings: Address (Off or 0–255) and eight button captions of up to six characters (space, A–Z, 0–9, `-`, `_`).
+  functions, CRSF SET4 (realm `0xa1`, command `0x07`). Model Setup → MultiSwitch lists MS1–MS4; OK opens each entry's
+  settings: Address (Off or 0–255) and eight functions. OK on a function opens Text (up to six characters:
+  space, A–Z, 0–9, `-`, `_`) and Type: Toggle (latching, default) or Momentary (ON only while held).
   Up/Down or the jog wheel changes a character, OK advances the cursor, ESC finishes editing; changes are saved
-  together when leaving the entry's settings. Buttons show centered captions, with inversion indicating ON;
-  empty captions fall back to 1–8. Only enabled entries get pages, numbered consecutively from P6.
-  Defaults: MS1 address 0, MS2–MS4 Off. Addresses and captions are saved per model and preserved with MultiSwitch
-  compiled out. Captions stay with their MS entry across address/Off changes and page renumbering.
-  Existing models retain their addresses and gain empty captions; older single-address models keep that address
-  in MS1 with MS2–MS4 Off. States start OFF at boot,
+  together when leaving the entry's settings, not the function sub-dialog. Buttons show centered captions,
+  with inversion indicating ON; momentary buttons have a double frame, visible in both states.
+  Momentary buttons activate on press and release on lift, leaving the button, missing touch reports
+  (40 ms timeout), opening a menu or leaving the page. A captured touch cannot swipe pages or activate other
+  buttons; sliding back in requires a fresh press. Type changes reset the affected output to OFF.
+  Empty captions fall back to 1–8. Only enabled entries get pages, numbered consecutively from P6.
+  Defaults: MS1 address 0, MS2–MS4 Off. Addresses, captions and types are saved per model and preserved with
+  MultiSwitch compiled out. Captions stay with their MS entry across address/Off changes and page renumbering.
+  Existing models retain addresses/captions and default all functions to Toggle; models without captions gain
+  empty captions. Older single-address models keep that address in MS1 with MS2–MS4 Off. States start OFF at boot,
   model change or a change to that page's address and are not saved. SET4 is sent on changes and repeated for
   every enabled address every 100 ms while CRSF is active, including on other pages and in menus; USB simulator
   mode suppresses transmission. MultiSwitch header taps/swipes change pages;

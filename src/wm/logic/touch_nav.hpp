@@ -117,6 +117,8 @@ struct SwipeTracker {
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
     bool tap_cancelled = false;
     std::optional<uint8_t> tapped_switch{};
+    std::optional<uint8_t> held_switch{};
+    bool momentary_touch = false;
 #endif
     uint32_t last_packet_ms = 0;
     uint32_t last_scroll_ms = 0;
@@ -135,6 +137,8 @@ struct SwipeTracker {
         swiped = false;
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
         tap_cancelled = false;
+        held_switch.reset();
+        momentary_touch = false;
 #endif
         last_scroll_ms = 0;
         last_move_ms = 0;
@@ -146,6 +150,10 @@ struct SwipeTracker {
         scroll_dir = 0;
         last_scroll_ms = 0;
         last_move_ms = 0;
+#if WM_PCB_I6S && WM_USE_MULTISWITCH
+        held_switch.reset();
+        momentary_touch = false;
+#endif
     }
 };
 
@@ -368,12 +376,13 @@ constexpr uint8_t sat_add(const uint8_t a, const uint8_t b) {
 }
 
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-// P6 owns the content area: taps switch only on release, drags navigate, footer holds open the menu.
+// Momentary buttons capture a touch until release; other fields retain tap/swipe navigation.
 [[nodiscard]] constexpr uint16_t multiswitch_touch_keys(const std::optional<TouchSample>& sample,
-                                                       SwipeTracker& tracker, const uint32_t now_ms) {
+                                                       SwipeTracker& tracker, const uint32_t now_ms,
+                                                       const uint8_t momentary = 0) {
     uint16_t keys = 0;
     const auto release = [&] {
-        if (tracker.active && !tracker.swiped && !tracker.tap_cancelled) {
+        if (tracker.active && !tracker.momentary_touch && !tracker.swiped && !tracker.tap_cancelled) {
             tracker.tapped_switch = multiswitch::switch_at(tracker.start_x, tracker.start_y);
             if (tracker.start_y < 14) {
                 keys |= kKeyNavDown;
@@ -389,8 +398,21 @@ constexpr uint8_t sat_add(const uint8_t a, const uint8_t b) {
         return keys;
     }
     tracker.last_packet_ms = now_ms;
-    if (sample->point && sample->point->event == TouchEventKind::PressDown) {
+    if (sample->point && sample->point->event == TouchEventKind::PressDown && !tracker.momentary_touch) {
         tracker.reset_at(sample->point->x, sample->point->y);
+        const auto index = multiswitch::switch_at(sample->point->x, sample->point->y);
+        if (index && (momentary & (1u << *index)) != 0) {
+            tracker.momentary_touch = true;
+            tracker.held_switch = index;
+        }
+    }
+    if (tracker.momentary_touch) {
+        if (!sample->point || sample->point->event == TouchEventKind::LiftUp) {
+            tracker.clear();
+        } else if (tracker.held_switch != multiswitch::switch_at(sample->point->x, sample->point->y)) {
+            tracker.held_switch.reset();
+        }
+        return kKeyTouchActivity;
     }
     if (!tracker.swiped) {
         switch (sample->gesture) {
@@ -512,7 +534,7 @@ inline constexpr uint8_t kRearFuncTrimModifier = 2;
                                                const bool throttle_trim_enabled, const FrontButtons buttons,
                                                SwipeTracker& tracker, const uint32_t now_ms
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-                                               , const bool multiswitch_page = false
+                                               , const bool multiswitch_page = false, const uint8_t momentary = 0
 #endif
                                                ) {
     uint16_t combined = 0;
@@ -540,8 +562,11 @@ inline constexpr uint8_t kRearFuncTrimModifier = 2;
 
     uint16_t touch_keys = 0;
 #if WM_PCB_I6S && WM_USE_MULTISWITCH
-    if (multiswitch_page && !menu_active) {
-        touch_keys = multiswitch_touch_keys(touch_sample, tracker, now_ms);
+    if (tracker.momentary_touch && (!multiswitch_page || menu_active)) {
+        tracker.held_switch.reset();
+    }
+    if ((multiswitch_page && !menu_active) || tracker.momentary_touch) {
+        touch_keys = multiswitch_touch_keys(touch_sample, tracker, now_ms, momentary);
     } else
 #endif
     if (touch_sample) {
