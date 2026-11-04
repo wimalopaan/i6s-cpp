@@ -91,6 +91,7 @@ if(CMAKE_CROSSCOMPILING)
         -Wl,-Map=${CMAKE_BINARY_DIR}/${WM_FW_NAME}.map
         -Wl,--print-memory-usage
     )
+    set_property(TARGET ${WM_FW_NAME} APPEND PROPERTY LINK_DEPENDS ${CMAKE_SOURCE_DIR}/linker/stm32f072xb.ld)
     target_link_libraries(${WM_FW_NAME} PRIVATE -Wl,--start-group c m gcc -Wl,--end-group)
 
     add_custom_command(TARGET ${WM_FW_NAME} POST_BUILD

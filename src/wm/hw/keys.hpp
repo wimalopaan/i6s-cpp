@@ -34,6 +34,21 @@ inline bool take_sram_dfu_flag() {
     return false;
 }
 
+[[noreturn]] inline void reboot_to_dfu() {
+    *reinterpret_cast<volatile uint32_t*>(kDfuFlagAddr) = kDfuMagic;
+    NVIC_SystemReset();
+}
+
+/// Software DFU requests take precedence over warm-reset recovery on both boards.
+inline void check_sram_dfu_entry(const chip::McuProfile& profile) {
+    if (take_sram_dfu_flag()) {
+#if WM_PCB_I6S
+        power::latch_on();
+#endif
+        chip::enter_dfu_bootloader(profile);
+    }
+}
+
 #if WM_PCB_I6S
 
 // FS-i6S: no key matrix. Two rear push buttons PA9 (left) / PA10 (right), active low; the optional J4 header
@@ -91,14 +106,9 @@ inline void init_j4_keys(const bool enabled) {
     return result;
 }
 
-/// Power-on DFU check: flag from a previous request, or both rear buttons held (3 of 5 samples).
+/// Cold-boot DFU check: both rear buttons held (3 of 5 samples).
 /// The power latch is asserted first so the radio stays on in the ROM bootloader.
 inline void check_dfu_entry(const chip::McuProfile& profile) {
-    if (take_sram_dfu_flag()) {
-        power::latch_on();
-        chip::enter_dfu_bootloader(profile);
-    }
-
     init_keys();
     // ~20 ms for power rails and switch contacts to settle
     delay_cycles(40'000);
@@ -165,13 +175,9 @@ inline uint16_t scan_keys() {
     return result;
 }
 
-/// Power-on DFU check: flag from a previous request, or Roll L + Yaw R held (3 of 5 samples).
+/// Cold-boot DFU check: Roll L + Yaw R held (3 of 5 samples).
 inline void check_dfu_entry(const chip::McuProfile& profile) {
     init_keys();
-
-    if (take_sram_dfu_flag()) {
-        chip::enter_dfu_bootloader(profile);
-    }
 
     // ~20 ms for power rails and switch contacts to settle
     delay_cycles(40'000);

@@ -372,8 +372,9 @@ int main() {
 #endif
     chip::watchdog::feed();
 
-    const bool was_watchdog_reset = chip::check_and_clear_reset_flags();
-    if (!was_watchdog_reset) {
+    hw::keys::check_sram_dfu_entry(chip::kProfile);
+    const bool was_warm_reset = chip::check_and_clear_reset_flags();
+    if (!was_warm_reset) {
         hw::keys::check_dfu_entry(chip::kProfile);
     } else {
         hw::keys::init_keys();
@@ -422,9 +423,9 @@ int main() {
     apply_protocol_link();
 
     const uint16_t boot_keys = hw::keys::scan_keys();
-    const bool bind_on_boot = !was_watchdog_reset && (boot_keys & logic::kKeyBind) != 0;
+    const bool bind_on_boot = !was_warm_reset && (boot_keys & logic::kKeyBind) != 0;
     // OK held at power-on starts the calibration wizard directly.
-    const bool calib_on_boot = !was_watchdog_reset && (boot_keys & logic::kKeyOk) != 0;
+    const bool calib_on_boot = !was_warm_reset && (boot_keys & logic::kKeyOk) != 0;
     g_rf_ok = hw::rf::init(tx_id_from_uid());
     apply_rf_model();
     if (bind_on_boot && g_rf_ok && model.rf_protocol == 0) {
@@ -446,8 +447,8 @@ int main() {
     using namespace logic::dashboard;
     PageState page_state{};
     g_buzzer.set_enabled(g_storage.radio.audio_enabled != 0);
-    if (was_watchdog_reset) {
-        // Resume immediately after a watchdog reset: no splash, only the warning chirp.
+    if (was_warm_reset) {
+        // Resume immediately after a warm reset: no splash, only the warning chirp.
         play_buzzer_cue(logic::buzzer::Cue::WatchdogRecover);
     } else {
         g_fb.clear();
@@ -460,7 +461,7 @@ int main() {
         logic::calib::start(g_calib_wizard);
         play_buzzer_cue(g_calib_wizard.cue);
     }
-    if (!was_watchdog_reset && !logic::calib::active(g_calib_wizard)) {
+    if (!was_warm_reset && !logic::calib::active(g_calib_wizard)) {
         const uint32_t splash_start_ms = time::millis();
         while (time::millis() - splash_start_ms < 1200) {
             chip::watchdog::feed();
@@ -716,6 +717,7 @@ int main() {
                     }
                     break;
                 case logic::menu::Action::CrsfRequest: hw::crsf::menu_apply(menu_state.crsf_req, now); break;
+                case logic::menu::Action::RebootDfu: hw::keys::reboot_to_dfu();
                 case logic::menu::Action::None: break;
             }
         }

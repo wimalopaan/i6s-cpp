@@ -242,6 +242,7 @@ enum class Action : uint8_t {
     ResetActiveModel,  // active model already reset to defaults; caller reloads trims and applies the RF link
     CrsfRequest,       // caller performs State::crsf_req on the CRSF link
     StartBind,         // menu closes; caller starts AFHDS 2A binding
+    RebootDfu,
 };
 
 struct Event {
@@ -1636,6 +1637,10 @@ constexpr Event update_system(State& s, const Nav& n) {
     if (n.cancel) {
         s.screen = Screen::Main;
         s.cue = buzzer::Cue::Click;
+        return {};
+    }
+    if (n.ok) {
+        return {Action::RebootDfu, 0};
     }
     return {};
 }
@@ -1674,12 +1679,11 @@ constexpr Event update_screen(State& s, const Nav& n, const Input& in, storage::
 }
 
 // OK confirms with a click as in Rust (`buzzer.click()` in the screen handlers). Configure Module plays its own
-// tones; Channel Monitor and System Info ignore OK.
+// tones; Channel Monitor ignores OK.
 constexpr bool ok_clicks(const Screen screen) {
     switch (screen) {
         case Screen::CrsfSetup:
         case Screen::ChannelMonitor:
-        case Screen::SystemInfo:
         case Screen::Closed: return false;
         default: return true;
     }
@@ -2578,14 +2582,15 @@ constexpr void render_system(Framebuffer& fb, const Live& live) {
     widgets::draw_header(fb, "SYSTEM INFORMATION");
     fb.draw_str_4x6(Point{4, 14}, "MCU:", false);
     fb.draw_str_4x6(Point{48, 14}, live.mcu_name, false);
-    fb.draw_str_4x6(Point{4, 22}, "Firmware:", false);
+    fb.draw_str_4x6(Point{4, 21}, "Firmware:", false);
     const format::Text<sysinfo::kFirmwareLineMax> firmware = sysinfo::firmware_line(live.build);
-    fb.draw_str_4x6(Point{48, 22}, firmware.view(), false);
-    fb.draw_str_4x6(Point{4, 30}, "Flash: 128KB | SRAM: 16KB", false);
+    fb.draw_str_4x6(Point{48, 21}, firmware.view(), false);
+    fb.draw_str_4x6(Point{4, 28}, "Flash: 128KB | SRAM: 16KB", false);
     const format::Text<sysinfo::kStorageLineMax> storage = sysinfo::storage_line(live.eeprom);
-    fb.draw_str_4x6(Point{4, 38}, storage.view(), false);
-    fb.draw_str_4x6(Point{4, 46}, "Profiles: 20 Models (16KB)", false);
-    widgets::draw_footer(fb, "[ESC] Back");
+    fb.draw_str_4x6(Point{4, 35}, storage.view(), false);
+    fb.draw_str_4x6(Point{4, 42}, "Profiles: 20 Models (16KB)", false);
+    fb.draw_str_4x6(Point{4, 49}, "Bootloader: [OK] Reboot DFU", false);
+    widgets::draw_footer(fb, "[OK] DFU      [ESC] Back");
 }
 
 // "+50%" with a forced sign, as the device shows Diff, Weight and Offset.

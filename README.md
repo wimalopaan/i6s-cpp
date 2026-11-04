@@ -30,6 +30,8 @@ Constraints: CMSIS only (no HAL), `constexpr`/`consteval` where possible, static
   trim modifier), J4 buttons PA13/PA14 as SG/SH, ext ADC PC1..PC5 (VRC..VRG / SWI..SWM), CRSF on USART1 PB6/PB7 with
   module power on PF6, EEPROM fallback to I2C1 (PB8/PB9), I6S EEPROM layout
 - Menus: main menu, model setup (incl. copy), model select, dual rate/expo, throttle curve, wing/mixer, aux channels, diagnostics, system info, radio setup, vario setup, telemetry slot setup, protocol setup (CRSF baud, duplex, arm mode, module parameter browser) and reset
+- DFU: System Info → OK reboots into the factory bootloader, also with `USE_USB=OFF`. The USB CDC `dfu` command
+  uses the same path. The DFU request survives software resets in the reserved top 16 bytes of SRAM.
 
 ## Not yet ported
 

@@ -1491,6 +1491,37 @@ void menu_test() {
     check(detected_pixels > 0 && lit_pixels(sysfb) > 0 && detected_pixels != lit_pixels(sysfb),
           "system info must draw the storage row from the EEPROM status");
 
+    logic::display::Framebuffer dfu_row{};
+    dfu_row.draw_str_4x6({4, 49}, "Bootloader: [OK] Reboot DFU", false);
+    bool dfu_visible = true;
+    for (int y = 49; y < 55; ++y) {
+        for (int x = 0; x < 128; ++x) {
+            const auto i = static_cast<std::size_t>((y / 8) * 128 + x);
+            const auto bit = static_cast<uint8_t>(1u << (y % 8));
+            dfu_visible = dfu_visible && (sysfb.data()[i] & bit) == (dfu_row.data()[i] & bit);
+        }
+    }
+    check(dfu_visible, "system info must show the DFU bootloader action without overlapping other rows");
+
+    auto dfu_storage = logic::storage::default_storage();
+    mn::State dfu_menu{};
+    dfu_menu.screen = Screen::Main;
+    dfu_menu.main.selected = mn::kItemSystemInfo;
+    check(mn::update(dfu_menu, mn::Input{mn::kKeyOk, mn::kKeyOk, 1000}, dfu_storage).action == Action::None &&
+              dfu_menu.screen == Screen::SystemInfo,
+          "system info: entering the screen must not reboot");
+    check(mn::update(dfu_menu, mn::Input{0, mn::kKeyOk, 1001}, dfu_storage).action == Action::None,
+          "system info: holding the entry key must not request DFU");
+    mn::update(dfu_menu, mn::Input{0, 0, 1002}, dfu_storage);
+    check(mn::update(dfu_menu, mn::Input{mn::kKeyOk, mn::kKeyOk, 1003}, dfu_storage).action == Action::RebootDfu,
+          "system info: a fresh OK press requests a DFU reboot");
+    check(mn::update(dfu_menu, mn::Input{0, mn::kKeyOk, 1004}, dfu_storage).action == Action::None,
+          "system info: DFU is requested only on the press edge");
+    mn::update(dfu_menu, mn::Input{0, 0, 1005}, dfu_storage);
+    check(mn::update(dfu_menu, mn::Input{mn::kKeyOk | mn::kKeyCancel, mn::kKeyOk | mn::kKeyCancel, 1006},
+                     dfu_storage).action == Action::None && dfu_menu.screen == Screen::Main,
+          "system info: Cancel takes precedence over DFU and returns to the main menu");
+
     // Pages 2-4 must render and differ from each other.
     logic::display::Framebuffer ext{};
     mn::Live el{};
@@ -2114,7 +2145,7 @@ void ok_click_test() {
     check(ok(Screen::DiagAnalog, false, &after) == Cue::None && after.nav_tick,
           "ok click: diag page change keeps the nav tick only");
     check(ok(Screen::ChannelMonitor, false) == Cue::None, "ok click: channel monitor ignores OK");
-    check(ok(Screen::SystemInfo, false) == Cue::None, "ok click: system info ignores OK");
+    check(ok(Screen::SystemInfo, false) == Cue::Click, "ok click: system info confirms the DFU action");
 
     // Keys held when a screen opens are ignored until released, without a click.
     logic::storage::RadioStorage st = logic::storage::default_storage();
