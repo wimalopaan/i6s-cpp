@@ -56,9 +56,6 @@
 
 namespace {
 
-// Latest measurements, updated by the main loop (read by later UI/RF code).
-volatile uint16_t g_battery_mv = 0;
-volatile uint16_t g_keys = 0;
 wm::logic::auto_select::Tracker g_auto_select{};
 
 // Radio and active model settings loaded from the external EEPROM.
@@ -335,8 +332,8 @@ void run_preflight(const wm::logic::storage::ModelConfig& model) {
         const auto thr = mixer::is_tank(model) ? flight::tank_preflight(in, sm, model) :
             safety::check_preflight_throttle(raw, cals, sm, mt, hold);
         const auto sw = preflight::unsafe_switches(in.switches, mt);
-        g_keys = hw::keys::scan_keys();
-        if ((thr == safety::Preflight::Ok && !sw.any()) || (g_keys & safety::kKeyCancel) != 0) {
+        const uint16_t keys = hw::keys::scan_keys();
+        if ((thr == safety::Preflight::Ok && !sw.any()) || (keys & safety::kKeyCancel) != 0) {
             play_buzzer_cue(warning.exit_cue());
             return;
         }
@@ -567,6 +564,7 @@ struct LoopFrame {
     const logic::input::InputState& input;
     logic::safety::StickMode stick_mode;
     logic::auto_select::Changes auto_changes;
+    uint16_t keys;
     uint16_t pressed;
     uint32_t now;
     uint16_t dt_ms;
@@ -651,13 +649,12 @@ LoopFrame sample_frame(RuntimeState& state, const logic::input::InputState& inpu
 #endif
     const auto stick_mode = logic::safety::stick_mode_from(g_storage.radio.stick_mode);
     const auto auto_changes = g_auto_select.step({input.switches, input.pots.vr1, input.pots.vr2});
-    g_battery_mv = input.battery_mv;
 #if WM_PCB_I6S
     const auto rear = hw::keys::read_front_buttons();
     const auto touch = g_storage.radio.touch_disabled == 0 && hw::ft6236::is_touch_int_asserted()
                            ? hw::ft6236::read_touch()
                            : std::nullopt;
-    g_keys = logic::touch_nav::update_inputs(
+    const uint16_t keys = logic::touch_nav::update_inputs(
         touch, input.gimbals, menu_active_pre, g_storage.radio.rear_left_func, g_storage.radio.rear_right_func,
         g_storage.radio.throttle_trim != 0, {rear.left, rear.right}, state.swipe, time::millis()
 #if WM_USE_MULTISWITCH
@@ -666,11 +663,11 @@ LoopFrame sample_frame(RuntimeState& state, const logic::input::InputState& inpu
 #endif
     );
 #else
-    g_keys = hw::keys::scan_keys();
+    const uint16_t keys = hw::keys::scan_keys();
 #endif
 
-    const uint16_t pressed = static_cast<uint16_t>(g_keys & ~state.prev_keys);
-    state.prev_keys = g_keys;
+    const uint16_t pressed = static_cast<uint16_t>(keys & ~state.prev_keys);
+    state.prev_keys = keys;
     const uint32_t now = time::millis();
     // Clamp as in Rust: long iterations (EEPROM writes, LCD flush) still advance the timers.
     const auto dt_ms = static_cast<uint16_t>(std::min<uint32_t>(now - state.last_loop_ms, 100));
@@ -683,6 +680,7 @@ LoopFrame sample_frame(RuntimeState& state, const logic::input::InputState& inpu
         .input = input,
         .stick_mode = stick_mode,
         .auto_changes = auto_changes,
+        .keys = keys,
         .pressed = pressed,
         .now = now,
         .dt_ms = dt_ms,
@@ -709,7 +707,7 @@ BoardControls update_board_controls([[maybe_unused]] RuntimeState& state, const 
 #if WM_PCB_I6S
     const auto idle = state.board_idle.update({.now_ms = now,
                                                .dt_ms = dt_ms,
-                                               .keys = g_keys,
+                                               .keys = frame.keys,
                                                .menu_active = menu_active_pre,
                                                .buttons = {rear.left, rear.right},
                                                .power_pressed = hw::power::is_power_button_pressed(),
@@ -727,10 +725,10 @@ BoardControls update_board_controls([[maybe_unused]] RuntimeState& state, const 
         hw::power::power_off();
     }
     // A swipe in menus and the calibration wizard must not also confirm (Rust take_frame_keys).
-    const uint16_t frame_keys = logic::board_idle::menu_keys(g_keys, menu_active_pre);
+    const uint16_t frame_keys = logic::board_idle::menu_keys(frame.keys, menu_active_pre);
     const uint16_t frame_pressed = logic::board_idle::menu_keys(pressed, menu_active_pre);
 #else
-    const uint16_t frame_keys = g_keys;
+    const uint16_t frame_keys = frame.keys;
     const uint16_t frame_pressed = pressed;
 #endif
 
@@ -901,12 +899,12 @@ std::optional<uint8_t> update_ui(RuntimeState& state, const LoopFrame& frame, co
                 state.board_idle.clear_menu_open_state();
             }
 #else
-            if ((g_keys & logic::kKeyOk) == 0) {
+            if ((frame.keys & logic::kKeyOk) == 0) {
                 state.ok_armed = true;
             } else if ((pressed & logic::kKeyOk) != 0) {
                 state.ok_press_ms = now;
             }
-            if (state.ok_armed && (g_keys & logic::kKeyOk) != 0 && now - state.ok_press_ms >= kMenuHoldMs) {
+            if (state.ok_armed && (frame.keys & logic::kKeyOk) != 0 && now - state.ok_press_ms >= kMenuHoldMs) {
                 logic::menu::open(state.menu);
                 play_buzzer_cue(logic::buzzer::Cue::Click);
                 state.ok_armed = false;
@@ -962,7 +960,7 @@ void process_model_and_bind_events(RuntimeState& state, const LoopFrame& frame, 
     const auto bind_ev = logic::bind::update(g_bind, logic::bind::Input{
                                                          .link = {afhds, hw::rf::is_binding()},
                                                          .menu_active = menu_open,
-                                                         .keys = g_keys,
+                                                         .keys = frame.keys,
                                                          .pressed = pressed,
                                                          .dt = logic::vario::Millis{dt_ms},
                                                      });
@@ -995,7 +993,7 @@ void update_trims_and_timer(RuntimeState& state, const LoopFrame& frame, const B
 #endif
 
     if (!menu_open) {
-        const auto trim_ev = g_trims.update(g_keys, logic::vario::Millis{dt_ms});
+        const auto trim_ev = g_trims.update(frame.keys, logic::vario::Millis{dt_ms});
         switch (trim_ev.kind) {
             case logic::trim::Event::Kind::Step:
                 g_buzzer.play_trim(logic::buzzer::TrimStep{trim_ev.value});
@@ -1041,7 +1039,7 @@ void update_trims_and_timer(RuntimeState& state, const LoopFrame& frame, const B
                             .config = timer_config(model),
                             .was_armed = state.prev_armed,
                             .menu_active = menu_open,
-                            .cancel_held = (g_keys & logic::safety::kKeyCancel) != 0,
+                            .cancel_held = (frame.keys & logic::safety::kKeyCancel) != 0,
 #if WM_PCB_I6S
                             .reset_clicked = idle.timer_reset_clicked,
 #endif
@@ -1206,7 +1204,7 @@ void update_feedback_and_alarms(RuntimeState& state, const LoopFrame& frame, con
     }));
     state.prev_armed = armed;
 
-    const bool user_active = state.activity.step(input.raw, input.switches, g_keys);
+    const bool user_active = state.activity.step(input.raw, input.switches, frame.keys);
     if (const auto level = state.dimmer.step(user_active, g_storage.radio, dt_ms)) {
         hw::lcd::set_backlight_level(*level);
     }
