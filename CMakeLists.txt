@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(i6s_cpp VERSION 0.27.0 LANGUAGES CXX C ASM)
+project(i6s_cpp VERSION 0.9 LANGUAGES CXX C ASM)
 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
