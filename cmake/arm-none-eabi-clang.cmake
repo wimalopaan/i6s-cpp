@@ -1,6 +1,12 @@
 # Cross toolchain: clang (C++26) + arm-none-eabi binutils/newlib for STM32F072 (Cortex-M0).
 # Usage: cmake -S . -B build-fw -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi-clang.cmake
 
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES USE_GCC)
+if(USE_GCC)
+    include("${CMAKE_CURRENT_LIST_DIR}/arm-none-eabi-gcc.cmake")
+    return()
+endif()
+
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 

@@ -60,9 +60,9 @@ inline constinit std::size_t g_rx_tail = 0;
 inline constinit volatile bool g_tx_busy = false;
 inline constinit volatile bool g_rx_idle_pending = false;
 inline constinit volatile uint16_t g_rx_idle_pos = 0;
-inline constinit volatile bool g_active_high = true;
-inline constinit volatile bool g_power_on = false;
-inline constinit volatile bool g_half_duplex = false;
+inline constinit bool g_active_high = true;
+inline constinit bool g_power_on = false;
+inline constinit bool g_half_duplex = false;
 
 /// Write position of the RX DMA (the producer side of the ring).
 inline std::size_t rx_head() {

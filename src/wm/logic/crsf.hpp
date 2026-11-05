@@ -207,7 +207,7 @@ constexpr int16_t decode_packed_vspeed(const int8_t raw) {
 
 /// Metres to decimetres, saturating at the int16 range (Rust `i16::saturating_mul(10)`).
 constexpr int16_t m_to_dm(const int16_t m) {
-    return static_cast<int16_t>(std::clamp(static_cast<int32_t>(m) * 10, -32768, 32767));
+    return static_cast<int16_t>(std::clamp<int32_t>(static_cast<int32_t>(m) * 10, -32768, 32767));
 }
 
 constexpr void mark_alive(Telemetry& t, const uint32_t now_ms) {

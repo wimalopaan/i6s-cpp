@@ -5040,15 +5040,19 @@ void usb_logic_test() {
     check(u::interval_elapsed({5}, {0xFFFFFFF0u}, {20}), "usb: interval survives the millisecond counter wrapping");
 
     for (M m : {M::Joystick, M::Serial, M::Composite}) {
-        const auto d = u::device_descriptor(m).view();
+        const auto descriptor = u::device_descriptor(m);
+        const auto d = descriptor.view();
         check(d.size() == 18 && d[0] == 18 && d[1] == 1 && le16(d, 2) == 0x0200 && d[17] == 1,
               "usb: device descriptor header and single configuration");
         check(d[7] == 64, "usb: control endpoint packet size is 64");
     }
     {
-        const auto joy = u::device_descriptor(M::Joystick).view();
-        const auto ser = u::device_descriptor(M::Serial).view();
-        const auto comp = u::device_descriptor(M::Composite).view();
+        const auto joy_descriptor = u::device_descriptor(M::Joystick);
+        const auto ser_descriptor = u::device_descriptor(M::Serial);
+        const auto comp_descriptor = u::device_descriptor(M::Composite);
+        const auto joy = joy_descriptor.view();
+        const auto ser = ser_descriptor.view();
+        const auto comp = comp_descriptor.view();
         check(le16(joy, 8) == 0x1209 && le16(joy, 10) == 0x4F54, "usb: joystick VID/PID");
         check(le16(ser, 8) == 0x0483 && le16(ser, 10) == 0x5740, "usb: serial VID/PID");
         check(le16(comp, 8) == 0x1209 && le16(comp, 10) == 0x4968, "usb: composite VID/PID");
@@ -5057,7 +5061,8 @@ void usb_logic_test() {
     }
 
     {
-        const auto cfg = u::config_descriptor(M::Joystick).view();
+        const auto descriptor = u::config_descriptor(M::Joystick);
+        const auto cfg = descriptor.view();
         check(cfg.size() == 34 && le16(cfg, 2) == 34 && cfg[4] == 1 && tiles(cfg.subspan(9)),
               "usb: joystick configuration tiles exactly");
         check(contains(cfg, std::to_array<uint8_t>({0x22, 56, 0})), "usb: HID report descriptor length is 56");
@@ -5065,7 +5070,8 @@ void usb_logic_test() {
               "usb: HID IN endpoint is 18 bytes every 10 ms");
     }
     {
-        const auto cfg = u::config_descriptor(M::Serial).view();
+        const auto descriptor = u::config_descriptor(M::Serial);
+        const auto cfg = descriptor.view();
         check(cfg.size() == 75 && le16(cfg, 2) == 75 && cfg[4] == 2 && tiles(cfg.subspan(9)),
               "usb: serial configuration tiles exactly");
         check(contains(cfg, std::to_array<uint8_t>({0x05, 0x24, 0x06, 0, 1})), "usb: CDC union uses interfaces 0 and 1");
@@ -5075,7 +5081,8 @@ void usb_logic_test() {
               "usb: CDC bulk OUT/IN and notify endpoints");
     }
     {
-        const auto cfg = u::config_descriptor(M::Composite).view();
+        const auto descriptor = u::config_descriptor(M::Composite);
+        const auto cfg = descriptor.view();
         check(cfg.size() == 100 && le16(cfg, 2) == 100 && cfg[4] == 3 && tiles(cfg.subspan(9)),
               "usb: composite configuration tiles exactly");
         check(contains(cfg, std::to_array<uint8_t>({8, 0x0B, 1, 2, 0x02, 0x02, 0x00, 0})),
@@ -5085,9 +5092,11 @@ void usb_logic_test() {
     }
 
     {
-        const auto s0 = u::string_descriptor(M::Joystick, 0).view();
+        const auto language_descriptor = u::string_descriptor(M::Joystick, 0);
+        const auto s0 = language_descriptor.view();
         check(s0.size() == 4 && s0[2] == 0x09 && s0[3] == 0x04, "usb: language ID string is en-US");
-        const auto s2 = u::string_descriptor(M::Joystick, 2).view();
+        const auto product_descriptor = u::string_descriptor(M::Joystick, 2);
+        const auto s2 = product_descriptor.view();
         check(s2.size() == 32 && s2[0] == 32 && s2[1] == 3 && s2[2] == 'F' && s2[3] == 0 && s2[30] == 'k',
               "usb: product string is UTF-16LE of the mode name");
         check(u::string_descriptor(M::Serial, 3).size == 22, "usb: serial string length");

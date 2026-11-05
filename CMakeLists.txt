@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 
+option(USE_GCC "Use ARM GCC instead of Clang for firmware builds" OFF)
+if(USE_GCC AND NOT CMAKE_TOOLCHAIN_FILE)
+    set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/arm-none-eabi-gcc.cmake")
+endif()
+
 project(i6s_cpp VERSION 0.9 LANGUAGES CXX C ASM)
+
+if(USE_GCC AND (NOT CMAKE_CROSSCOMPILING OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU"))
+    message(FATAL_ERROR "USE_GCC requires an ARM GCC firmware toolchain and a separate build directory")
+endif()
 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

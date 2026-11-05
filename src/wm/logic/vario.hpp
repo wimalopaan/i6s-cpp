@@ -150,7 +150,7 @@ struct State {
 
         if (v >= climb_threshold) {
             // Lift: 1000 Hz at the threshold up to 2800 Hz at +5 m/s; cadence 550 ms down to 110 ms.
-            const int32_t delta = std::clamp(v - climb_threshold, 0, 500);
+            const int32_t delta = std::clamp<int32_t>(v - climb_threshold, 0, 500);
             const auto freq_hz = static_cast<uint16_t>(1000 + (delta * 1800) / 500);
             const auto period_ms = static_cast<uint16_t>(550 - (delta * 440) / 500);
             const auto pulse_ms = static_cast<uint16_t>(period_ms / 2);
@@ -161,7 +161,7 @@ struct State {
             if (cfg.sink_mode == SinkMode::Mute) {
                 return kSilent;
             }
-            const int32_t sink_mag = std::clamp(-v - sink_threshold, 0, 500);
+            const int32_t sink_mag = std::clamp<int32_t>(-v - sink_threshold, 0, 500);
             const auto freq_hz = static_cast<uint16_t>(450 - (sink_mag * 100) / 500);
             if (cfg.sink_mode == SinkMode::Pulse) {
                 return Tone{freq_hz, 160, 360};

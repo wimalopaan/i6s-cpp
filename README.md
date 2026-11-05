@@ -80,6 +80,15 @@ Firmware (clang + arm-none-eabi-gcc for Cortex-M0, MinSizeRel = -Oz):
     cmake -S . -B build-fw -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi-clang.cmake -DCMAKE_BUILD_TYPE=MinSizeRel
     cmake --build build-fw
 
+`USE_GCC` (default OFF) selects ARM GCC instead of Clang for firmware builds. GCC needs C++26 and `-Oz`
+support; LLD and the same ARM newlib/libgcc libraries are used by both compilers. Use a separate build directory:
+
+    cmake -S . -B build-fw-gcc -DUSE_GCC=ON -DCMAKE_BUILD_TYPE=MinSizeRel
+    cmake --build build-fw-gcc
+
+The option also works with the existing `-DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi-clang.cmake` command.
+Host tests remain native builds; select GCC there with `-DCMAKE_CXX_COMPILER=g++`.
+
 `USE_USB` (default ON) sets `WM_USE_USB`, so USB code can be left out to save flash: `-DUSE_USB=OFF`. Without USB the "USB Mode" row is also removed from Radio Setup.
 
 `USE_MULTISWITCH` (default OFF) enables P6–P9, the model's four "MS Addr" settings and CRSF SET4 transmission only with

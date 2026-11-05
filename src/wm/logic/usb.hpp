@@ -86,9 +86,11 @@ struct Blob {
         }
     }
 
-    constexpr std::span<const uint8_t> view() const {
+    constexpr std::span<const uint8_t> view() const & {
         return {bytes.data(), size};
     }
+
+    std::span<const uint8_t> view() const && = delete;
 };
 
 struct DeviceIdentity {

@@ -40,7 +40,7 @@ constexpr int32_t catmull_rom(const Knots k, const Fraction frac) {
     const int32_t h11 = t3 - t2;
     const int32_t m1 = (p2 - p0) / 2;
     const int32_t m2 = (p3 - p1) / 2;
-    return std::clamp((h00 * p1 + h01 * p2 + h10 * m1 + h11 * m2) / 256, 0, 1000);
+    return std::clamp<int32_t>((h00 * p1 + h01 * p2 + h10 * m1 + h11 * m2) / 256, 0, 1000);
 }
 
 template <std::size_t N>

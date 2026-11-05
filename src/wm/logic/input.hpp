@@ -160,12 +160,12 @@ struct AxisCalib {
             const uint16_t active_center = sat_sub(center, deadband);
             const int32_t span = std::max<int32_t>(sat_sub(active_center, min), 100);
             const int32_t delta = int32_t{s} - active_center;
-            val = std::clamp((delta * 1000) / span, -1000, 0);
+            val = std::clamp<int32_t>((delta * 1000) / span, -1000, 0);
         } else {
             const uint16_t active_center = sat_add(center, deadband);
             const int32_t span = std::max<int32_t>(sat_sub(max, active_center), 100);
             const int32_t delta = int32_t{s} - active_center;
-            val = std::clamp((delta * 1000) / span, 0, 1000);
+            val = std::clamp<int32_t>((delta * 1000) / span, 0, 1000);
         }
         return finish(val);
     }
@@ -180,12 +180,12 @@ struct AxisCalib {
             const uint16_t active_center = sat_sub(center, window.value);
             const int32_t span = std::max<int32_t>(sat_sub(active_center, min), 100);
             const int32_t delta = int32_t{s} - active_center;
-            val = std::clamp((delta * 1000) / span, -1000, 0);
+            val = std::clamp<int32_t>((delta * 1000) / span, -1000, 0);
         } else {
             const uint16_t active_center = sat_add(center, window.value);
             const int32_t span = std::max<int32_t>(sat_sub(max, active_center), 100);
             const int32_t delta = int32_t{s} - active_center;
-            val = std::clamp((delta * 1000) / span, 0, 1000);
+            val = std::clamp<int32_t>((delta * 1000) / span, 0, 1000);
         }
         return finish(val);
     }

@@ -28,9 +28,9 @@ inline constexpr uint32_t kSettleCycles = 72000;
 
 // ISR and main share these. Main writes them only inside CriticalSection.
 inline constinit std::optional<logic::afhds2a::Radio> g_radio{};
-inline constinit volatile bool g_silenced = true;
-inline constinit volatile bool g_published = false;
-inline constinit volatile uint16_t g_heartbeat = 0;
+inline constinit bool g_silenced = true;
+inline constinit bool g_published = false;
+inline constinit uint16_t g_heartbeat = 0;
 // ISR-only state.
 inline constinit logic::afhds2a::Heartbeat g_gate{};
 inline constinit bool g_antenna_state = false;
