@@ -382,6 +382,7 @@ bool init_platform() {
 #endif
     chip::watchdog::feed();
 
+    hw::keys::check_sram_dfu_entry(chip::kProfile);
     const bool was_watchdog_reset = chip::check_and_clear_reset_flags();
     if (!was_watchdog_reset) {
         hw::keys::check_dfu_entry(chip::kProfile);

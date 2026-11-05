@@ -63,6 +63,7 @@ if(CMAKE_CROSSCOMPILING)
     )
 
     add_executable(${WM_FW_NAME} ${WM_SOURCES})
+    set_property(TARGET ${WM_FW_NAME} APPEND PROPERTY LINK_DEPENDS "${CMAKE_SOURCE_DIR}/linker/stm32f072xb.ld")
     # The assembler gets no optimisation or NDEBUG flags from the MinSizeRel defaults; clang warns that they are unused.
     set(CMAKE_ASM_FLAGS_MINSIZEREL "")
     # -Oz instead of the CMake default -Os for MinSizeRel: about 14 % smaller.

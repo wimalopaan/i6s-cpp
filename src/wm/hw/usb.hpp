@@ -581,7 +581,7 @@ inline void request_reset(const Reset kind, const lu::Millis now) {
 
 [[noreturn]] inline void perform_reset() {
     if (g_reset == Reset::Dfu) {
-        *reinterpret_cast<volatile uint32_t*>(keys::kDfuFlagAddr) = keys::kDfuMagic;
+        keys::reboot_to_dfu();
     }
     NVIC_SystemReset();
 }

@@ -116,5 +116,8 @@ Host tests (clang with C++26 support):
 
 ## Notes
 
+- DFU requests survive software resets in a 16-byte `.noinit` block at the start of SRAM (`0x20000000`).
+  Startup neither copies nor clears this block; `.data`/`.bss` follow it, and the stack starts at `0x20004000`.
+  The DFU request is checked before warm-reset recovery and cleared before entering the ROM bootloader.
 - Target is single-core Cortex-M0 (ARMv6-M). `std::atomic` read-modify-write lowers to libatomic calls there, so ISR-shared state uses `volatile` plus compiler fences.
 - Not verified on hardware yet. Pin and timer assignments come from the Rust source and are not checked against the schematic.

@@ -1,4 +1,4 @@
-/* STM32F072xB linker script: 128 KB flash, 16 KB SRAM (same layout as the Rust memory.x). */
+/* STM32F072xB: 128 KB flash, 16 KB SRAM; retained DFU state lives at the start of SRAM. */
 
 ENTRY(Reset_Handler)
 
@@ -73,6 +73,15 @@ SECTIONS
     KEEP(*(.fini_array*))
     PROVIDE_HIDDEN(__fini_array_end = .);
   } > FLASH
+
+  /* Excluded from startup copying/clearing and from the downward-growing stack. */
+  .noinit ORIGIN(RAM) (NOLOAD) :
+  {
+    _snoinit = .;
+    KEEP(*(.dfu_state .noinit .noinit.*))
+    . = ALIGN(4);
+    _enoinit = .;
+  } > RAM
 
   _sidata = LOADADDR(.data);
 
