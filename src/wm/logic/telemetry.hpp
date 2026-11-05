@@ -353,8 +353,8 @@ inline constexpr std::array<std::string_view, kTelemSlotCount> kTelemSlotNames{"
                                                                                "Btm-R:"};
 
 struct TileOrigin {
-    int x;
-    int y;
+    uint8_t x;
+    uint8_t y;
 };
 
 // Default slots keep the AFHDS 2A or CRSF page. Any other mapping draws the custom 2x2 page, as Rust does.
