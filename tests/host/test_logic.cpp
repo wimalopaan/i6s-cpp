@@ -1153,7 +1153,7 @@ void dashboard_test() {
     in.battery_mv = 7400;
     logic::storage::RadioStorage st{};
     logic::trim::Controller trims{};
-    std::array<uint16_t, logic::kNumChannels> chs{};
+    logic::Channels chs{};
     logic::dashboard::View view{in, st, trims, chs, true, {}, false, false, false, 0};
 
     {
@@ -2497,14 +2497,14 @@ void radio_setup_test() {
 void afhds2a_test() {
     namespace af = logic::afhds2a;
 
-    std::array<uint16_t, af::kNumChannels> ch{1500, 988, 2012, 1123, 1456, 1789, 1357, 1642, 1890,
+    logic::Channels ch{1500, 988, 2012, 1123, 1456, 1789, 1357, 1642, 1890,
                                               1050, 1555, 1999, 1001, 1620, 1234, 1987, 1432, 1876};
     const af::Packet sticks = af::build_sticks(af::TxId{0x12345678}, af::RxId{0x9ABCDEF0}, ch);
     check(sticks[0] == af::kPacketSticks, "afhds2a: sticks command byte");
     check(sticks[37] == 0x00, "afhds2a: sticks trailer byte");
 
     // Decode as iBUS does (Betaflight rx/ibus.c): 12-bit slots plus extended nibbles.
-    std::array<uint16_t, af::kNumChannels> dec{};
+    logic::Channels dec{};
     for (std::size_t i = 0; i < 14; ++i) {
         dec[i] = static_cast<uint16_t>(sticks[9 + i * 2] | ((sticks[10 + i * 2] & 0x0F) << 8));
     }
@@ -2520,7 +2520,7 @@ void afhds2a_test() {
     check(sticks_ok, "afhds2a: 18-channel sticks round trip");
 
     // Legacy 14-channel decoder masks the low 12 bits of each slot.
-    std::array<uint16_t, af::kNumChannels> ch14{1500, 1000, 2000, 1200, 1400, 1600, 1800, 1100, 1300, 1500, 1700, 1900, 1050, 1950};
+    logic::Channels ch14{1500, 1000, 2000, 1200, 1400, 1600, 1800, 1100, 1300, 1500, 1700, 1900, 1050, 1950};
     const af::Packet legacy = af::build_sticks(af::TxId{0x11223344}, af::RxId{0x55667788}, [&] {
         auto a = ch;
         for (std::size_t i = 0; i < 14; ++i) a[i] = ch14[i];
@@ -4023,7 +4023,7 @@ void bind_test() {
     logic::input::InputState in{};
     logic::storage::RadioStorage st{};
     logic::trim::Controller trims{};
-    std::array<uint16_t, logic::kNumChannels> chs{};
+    logic::Channels chs{};
     using logic::dashboard::FooterKind;
     {
         logic::dashboard::View v{in, st, trims, chs, false, {}, true, false, false, 0};
@@ -4696,7 +4696,7 @@ void trainer_test() {
     }
     {
         tr::Handover h;
-        const std::array<uint16_t, 18> instr{1500, 1500, 1000, 1500, 1111, 1222, 1333, 1444};
+        const logic::Channels instr{1500, 1500, 1000, 1500, 1111, 1222, 1333, 1444};
         const tr::InChannels student{1100, 1200, 1300, 1400, 1, 1, 1, 1};
 
         auto out = h.process(false, student, instr);
@@ -4849,7 +4849,7 @@ void telem_slots_test() {
         logic::input::InputState in{};
         logic::storage::RadioStorage rs{};
         logic::trim::Controller trims{};
-        std::array<uint16_t, logic::kNumChannels> chs{};
+        logic::Channels chs{};
         rs.active_model.telem_slots = {0, 1, 2, 5};
         logic::dashboard::View v{in, rs, trims, chs, false, {}, false, false, false, 0};
         logic::dashboard::PageState ps{};
@@ -5100,7 +5100,7 @@ void usb_logic_test() {
     }
 
     {
-        std::array<uint16_t, wm::logic::kNumChannels> chs{};
+        wm::logic::Channels chs{};
         chs.fill(1500);
         wm::logic::Switches sw{};
         auto r = u::build_gamepad_report(chs, sw);

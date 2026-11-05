@@ -106,7 +106,7 @@ struct View {
     const input::InputState& in;
     const storage::RadioStorage& storage;
     const trim::Controller& trims;
-    const std::array<uint16_t, kNumChannels>& rf_chs;
+    const Channels& rf_chs;
     bool crsf;
     // Link telemetry of the active protocol; for CRSF mapped by telemetry::from_crsf (rssi = link quality).
     afhds2a::Telemetry telem{};
@@ -382,7 +382,7 @@ struct SwitchSlot {
 struct AdaptiveLayout {
     std::array<SwitchSlot, 16> switches{};
     std::size_t switch_count{0};
-    std::array<int16_t, input::kAuxCount> pots{};
+    input::AuxValues pots{};
     std::size_t pot_count{0};
 };
 

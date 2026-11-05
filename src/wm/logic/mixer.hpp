@@ -38,8 +38,7 @@ constexpr bool is_tank_motor(const std::size_t channel, const storage::ModelConf
     return is_tank(model) && (channel + 1 == model.tank.left_channel || channel + 1 == model.tank.right_channel);
 }
 
-constexpr void neutralize_tank_motors(std::array<uint16_t, kNumChannels>& channels,
-                                      const storage::ModelConfig& model) {
+constexpr void neutralize_tank_motors(Channels& channels, const storage::ModelConfig& model) {
     for (std::size_t ch = 0; ch < channels.size(); ++ch) {
         if (is_tank_motor(ch, model)) {
             channels[ch] = kChannelCenterUs;
@@ -92,7 +91,7 @@ struct TimerArmed {
     bool value = false;
     friend constexpr bool operator==(const TimerArmed&, const TimerArmed&) = default;
 };
-using GVars = std::array<int16_t, 5>;
+using storage::GVars;
 
 constexpr int32_t clamp_mix(const int32_t v) {
     return std::clamp<int32_t>(v, kMixerMin, kMixerMax);
@@ -188,8 +187,8 @@ constexpr bool eval_arm_switch(const uint8_t arm_switch, const Switches& s) {
     return arm_switch > 0 && arm_switch <= board::kMaxSwitchCond && is_switch_active(arm_switch, s);
 }
 
-constexpr void apply_tank_arming(std::array<uint16_t, kNumChannels>& channels,
-                                 const storage::ModelConfig& model, const Switches& sw) {
+constexpr void apply_tank_arming(Channels& channels,
+                                const storage::ModelConfig& model, const Switches& sw) {
     if (is_tank(model) && model.arm_switch > 0 && model.arm_switch <= board::kMaxSwitchCond &&
         !eval_arm_switch(model.arm_switch, sw)) {
         neutralize_tank_motors(channels, model);
@@ -359,7 +358,7 @@ constexpr TankSources evaluate_tank_sources(const PreparedChannels& prepared, st
 }
 
 /// Full mixer pipeline: conditioning, templates, aux mapping, matrix mixes, scaling, trims and safety.
-constexpr std::array<uint16_t, kNumChannels> compute_channels(
+constexpr Channels compute_channels(
     const StickInputs inputs, std::span<const int16_t> pots, const Switches& sw,
     const storage::ModelConfig& model, const trim::TrimValues& trims, const uint8_t throttle_trim_mode,
     TankState& tank_state) {
@@ -411,7 +410,7 @@ constexpr std::array<uint16_t, kNumChannels> compute_channels(
     }
 
     // Stage 4: scale to pulse widths.
-    std::array<uint16_t, kNumChannels> rf{};
+    Channels rf{};
     for (std::size_t i = 0; i < kNumChannels; ++i) {
         const int32_t us = ((ch[i] * kChannelHalfSpanUs) / kMixerMax) + kChannelCenterUs;
         rf[i] = static_cast<uint16_t>(std::clamp<int32_t>(us, kChannelMinUs, kChannelMaxUs));

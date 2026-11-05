@@ -59,12 +59,12 @@ constexpr safety::Preflight tank_preflight(const input::InputState& in, const sa
 }
 
 /// Mixer output for one model: 18 channels in us, ready for the RF output.
-constexpr std::array<uint16_t, kNumChannels> rf_channels(const input::InputState& in,
-                                                         const safety::StickMode sm,
-                                                         const storage::ModelConfig& model,
-                                                         const trim::TrimValues& trims,
-                                                         const uint8_t throttle_trim_mode,
-                                                         mixer::TankState& tank_state) {
+constexpr Channels rf_channels(const input::InputState& in,
+                               const safety::StickMode sm,
+                               const storage::ModelConfig& model,
+                               const trim::TrimValues& trims,
+                               const uint8_t throttle_trim_mode,
+                               mixer::TankState& tank_state) {
     return mixer::compute_channels(stick_inputs(in, sm, model),
                                    std::span<const int16_t>(in.aux_pots).subspan<4, input::kAuxCount - 4>(), in.switches, model,
                                    trims, throttle_trim_mode, tank_state);

@@ -24,6 +24,7 @@
 #include "wm/logic/buzzer.hpp"
 #include "wm/logic/buzzer_inputs.hpp"
 #include "wm/logic/calib.hpp"
+#include "wm/logic/channels.hpp"
 #include "wm/logic/flight.hpp"
 #include "wm/logic/framebuffer.hpp"
 #include "wm/logic/input.hpp"
@@ -593,7 +594,7 @@ struct LinkState {
     bool afhds;
 };
 
-using Channels = std::array<uint16_t, logic::kNumChannels>;
+using logic::Channels;
 
 RuntimeState make_runtime_state(const BootContext& boot) {
     RuntimeState state{};

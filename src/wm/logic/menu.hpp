@@ -228,7 +228,7 @@ inline constexpr std::size_t kAdcFullScale = 4095;
 
 // Live values shown by the diagnostic screens. Filled by the caller each frame.
 struct Live {
-    std::array<uint16_t, kNumChannels> rf{};  // output channels in us
+    Channels rf{};  // output channels in us
     input::Raw adc{};
     Switches switches{};  // digital switches, SE and SF on page 2
     storage::EepromStatus eeprom{};

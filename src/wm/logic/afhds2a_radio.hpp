@@ -10,6 +10,7 @@
 
 #include "wm/logic/a7105.hpp"
 #include "wm/logic/afhds2a.hpp"
+#include "wm/logic/channels.hpp"
 
 namespace wm::logic::afhds2a {
 
@@ -64,7 +65,7 @@ struct Radio {
     uint8_t bind_confirm = 0;
     uint16_t loss = 0;
     uint32_t packets_sent = 0;
-    std::array<uint16_t, kNumChannels> channels{};
+    Channels channels{};
 
     constexpr explicit Radio(const TxId tx) : link(tx), hop(hopping_table(tx)) {}
 
@@ -203,7 +204,7 @@ struct Radio {
         link.set_rx_settings(rate_hz, ppm_out, sbus);
     }
 
-    constexpr void set_channels(const std::array<uint16_t, kNumChannels>& ch) {
+    constexpr void set_channels(const Channels& ch) {
         channels = ch;
     }
 

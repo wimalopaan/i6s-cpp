@@ -20,6 +20,7 @@ inline constexpr uint16_t kHallDeadband = 3;
 inline constexpr uint16_t kBatteryRawIndex = 10;  // PC0
 
 using Raw = std::array<uint16_t, kRawCount>;
+using AuxValues = std::array<int16_t, kAuxCount>;
 
 struct AdcReading {
     uint16_t value;
@@ -55,7 +56,7 @@ struct InputState {
     Pots pots{};
     Switches switches{};
     uint16_t battery_mv = 0;
-    std::array<int16_t, kAuxCount> aux_pots{};
+    AuxValues aux_pots{};
     Raw raw{};
 };
 

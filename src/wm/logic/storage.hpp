@@ -10,6 +10,7 @@
 #include <type_traits>
 
 #include "wm/board.hpp"
+#include "wm/logic/curve.hpp"
 
 namespace wm::logic::storage {
 
@@ -20,6 +21,8 @@ inline constexpr uint32_t kFlashMagic = 0x4653'4B59;  // "FSKY"
 inline constexpr uint32_t kConfigVersion = 5;
 inline constexpr std::size_t kNumModels = 20;
 inline constexpr std::size_t kNumMixLines = 32;
+
+using GVars = std::array<int16_t, 5>;
 
 // Slot framing: 8-byte header followed by the payload.
 inline constexpr uint16_t kSlotMagic = 0x4658;  // "FX" little-endian
@@ -189,7 +192,7 @@ struct ModelConfig {
     uint8_t dr_switch;
     uint8_t thr_curve_pts;
     uint8_t thr_curve_smooth;
-    std::array<uint8_t, 17> thr_curve;
+    curve::Points thr_curve;
     uint8_t pad_crv;
     std::array<uint8_t, 3> dr_high;
     std::array<uint8_t, 3> dr_low;
@@ -221,7 +224,7 @@ struct ModelConfig {
     uint8_t vario_sink_mode;
     uint8_t vario_motor_mute;
     uint8_t crsf_arm_mode;
-    std::array<int16_t, 5> gvars;
+    GVars gvars;
     std::array<uint8_t, 4> telem_slots;
     std::array<uint8_t, 2> pad_gvar;
     // Kept with MultiSwitch disabled as well, so switching firmware options preserves model settings.
@@ -231,7 +234,7 @@ struct ModelConfig {
 #else
     uint8_t crsf_arm_mode;
     uint8_t pad_end;
-    std::array<int16_t, 5> gvars;
+    GVars gvars;
     uint8_t vario_switch;
     uint8_t vario_climb_deadband;
     uint8_t vario_sink_deadband;
@@ -446,8 +449,7 @@ constexpr RadioConfig default_radio_config() {
     };
 }
 
-inline constexpr std::array<uint8_t, 17> kDefaultThrCurve{0, 25, 50, 75, 100, 0, 0, 0, 0,
-                                                          0, 0,  0,  0,  0,   0, 0, 0};
+inline constexpr curve::Points kDefaultThrCurve{0, 25, 50, 75, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 constexpr ModelConfig default_model_config(const std::size_t index) {
     return ModelConfig{

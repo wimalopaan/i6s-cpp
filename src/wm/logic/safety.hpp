@@ -97,8 +97,8 @@ constexpr bool switches_safe(const Switches& sw, const mixer::ModelType mt) {
 }
 
 /// Failsafe pulses during the preflight warning: centered sticks, throttle at minimum, switches safe.
-constexpr std::array<uint16_t, kNumChannels> make_safe_idle() {
-    std::array<uint16_t, kNumChannels> ch{};
+constexpr Channels make_safe_idle() {
+    Channels ch{};
     for (auto& v : ch) {
         v = kChannelCenterUs;
     }
@@ -110,9 +110,9 @@ constexpr std::array<uint16_t, kNumChannels> make_safe_idle() {
     return ch;
 }
 
-inline constexpr std::array<uint16_t, kNumChannels> kSafeIdleChannels = make_safe_idle();
+inline constexpr Channels kSafeIdleChannels = make_safe_idle();
 
-constexpr std::array<uint16_t, kNumChannels> safe_idle_channels(const storage::ModelConfig& model) {
+constexpr Channels safe_idle_channels(const storage::ModelConfig& model) {
     auto channels = kSafeIdleChannels;
     mixer::neutralize_tank_motors(channels, model);
     return channels;

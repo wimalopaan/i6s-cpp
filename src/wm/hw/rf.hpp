@@ -13,6 +13,7 @@
 #include "wm/hw/a7105.hpp"
 #include "wm/logic/afhds2a.hpp"
 #include "wm/logic/afhds2a_radio.hpp"
+#include "wm/logic/channels.hpp"
 #include "wm/time/systick.hpp"
 
 namespace wm::hw::rf {
@@ -106,7 +107,7 @@ inline void set_silenced(const bool silenced) {
 }
 
 /// Publishes one channel frame and advances the main-loop heartbeat.
-inline void publish_channels(const std::array<uint16_t, logic::afhds2a::kNumChannels>& ch) {
+inline void publish_channels(const logic::Channels& ch) {
     arch::CriticalSection cs;
     g_radio->set_channels(ch);
     g_heartbeat = static_cast<uint16_t>(g_heartbeat + 1);

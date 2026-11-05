@@ -9,9 +9,11 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "wm/logic/channels.hpp"
+
 namespace wm::logic::afhds2a {
 
-inline constexpr std::size_t kNumChannels = 18;
+using wm::logic::kNumChannels;
 inline constexpr std::size_t kNumFreq = 16;
 inline constexpr std::size_t kTxPacketSize = 38;
 inline constexpr std::size_t kRxPacketSize = 37;
@@ -150,8 +152,7 @@ constexpr void put_header(Packet& p, const uint8_t cmd, const TxId tx, const RxI
 
 // 14 base channels as 12-bit LE values in slots 0..13, channels 15..18 split
 // across the upper nibbles of slots 0..11 (iBUS-style extension).
-constexpr Packet build_sticks(const TxId tx, const RxId rx,
-                              const std::array<uint16_t, kNumChannels>& ch) {
+constexpr Packet build_sticks(const TxId tx, const RxId rx, const Channels& ch) {
     Packet p{};
     detail::put_header(p, kPacketSticks, tx, rx);
     for (std::size_t i = 0; i < 14; ++i) {

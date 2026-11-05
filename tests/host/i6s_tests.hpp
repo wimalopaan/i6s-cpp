@@ -758,7 +758,7 @@ inline void i6s_multiswitch_tests() {
 
     wm::logic::input::InputState input{};
     wm::logic::trim::Controller trims{};
-    std::array<uint16_t, wm::logic::kNumChannels> channels{};
+    wm::logic::Channels channels{};
     wm::logic::dashboard::View view{input, storage, trims, channels, true};
     wm::logic::display::Framebuffer off{}, on{};
     storage.active_model.multiswitch_momentary.fill(0);
